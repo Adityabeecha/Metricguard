@@ -21,6 +21,8 @@ export type Filter = { column: string; op: FilterOp; value: string };
 
 export type CalculationForm = {
   filters: Filter[];
+  /** How conditions combine. 'any' (OR) needs a dataset with compound filters enabled. */
+  match?: 'all' | 'any';
   /** Relational only: how facts without a matching dimension row are treated. */
   join?: 'left' | 'inner';
 };
@@ -116,6 +118,18 @@ export function guidedFormSupported(contract: FlatContract | RelationalContract)
   return flat.version !== 7;
 }
 
+/** Whether this dataset accepts OR between conditions (flat contracts with the boolean filter policy). */
+export function supportsAnyMatch(contract: FlatContract | RelationalContract): boolean {
+  if ((contract as RelationalContract).mode === 'relational_snapshot') return false;
+  const flat = contract as FlatContract;
+  return flat.version >= 5 || flat.predicate_policy === 'flat-boolean-v1';
+}
+
+function joinConditions(parts: string[], match: CalculationForm['match']): string {
+  if (parts.length < 2 || match !== 'any') return parts.join(' AND ');
+  return `(${parts.join(' OR ')})`;
+}
+
 export function flatMeasureSql(contract: FlatContract): string {
   if (contract.version === 6 && contract.measure_expression) {
     return `${quoteIdent(contract.measure_expression.minuend)} - ${quoteIdent(contract.measure_expression.subtrahend)}`;
@@ -130,7 +144,8 @@ export function buildFlatSql(contract: FlatContract, form: CalculationForm): str
     if (!col) throw new Error('Choose a column for every condition.');
     return predicate(quoteIdent(col.column), f, col.type);
   });
-  return `SELECT SUM(${flatMeasureSql(contract)}) FROM snapshot${where.length ? ` WHERE ${where.join(' AND ')}` : ''}`;
+  if (form.match === 'any' && !supportsAnyMatch(contract)) throw new Error('This dataset only supports conditions that must all be true.');
+  return `SELECT SUM(${flatMeasureSql(contract)}) FROM snapshot${where.length ? ` WHERE ${joinConditions(where, form.match)}` : ''}`;
 }
 
 export function buildRelationalSql(contract: RelationalContract, form: CalculationForm): string {
@@ -159,5 +174,5 @@ export function describeCalculation(form: CalculationForm, columns: FilterColumn
   const scope = relational
     ? form.join === 'inner' ? 'records that have a matching dimension row' : 'all records, including those without a matching dimension row'
     : 'all rows';
-  return `Total of ${amountLabel} over ${scope}${parts.length ? ` where ${parts.join(' and ')}` : ''}.`;
+  return `Total of ${amountLabel} over ${scope}${parts.length ? ` where ${parts.join(form.match === 'any' ? ' or ' : ' and ')}` : ''}.`;
 }

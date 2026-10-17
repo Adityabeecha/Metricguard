@@ -139,7 +139,8 @@ def restore_project(store: Store, archive_path: Path, data_dir: Path) -> dict[st
                 target = (staging / member.name).resolve()
                 if not target.is_relative_to(staging.resolve()):
                     raise DomainError('BACKUP_CORRUPTED', f"Unsafe archive path detected: '{member.name}'.", 422)
-            tar.extractall(staging)
+            # 'data' filter: no links, devices, absolute paths or permission bits from the archive.
+            tar.extractall(staging, filter='data')
 
         manifest_file = staging / 'backup_manifest.json'
         if not manifest_file.is_file():

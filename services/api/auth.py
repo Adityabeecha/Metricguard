@@ -7,6 +7,9 @@ from fastapi import Request
 
 from services.api.store import DomainError, Store
 
+SESSION_COOKIE = 'mg_session'
+SESSION_SECONDS = 8 * 60 * 60
+
 
 def get_auth_context(request: Request, store: Store) -> dict[str, Any]:
     """Extract and validate credentials from Request headers."""
@@ -28,6 +31,18 @@ def get_auth_context(request: Request, store: Store) -> dict[str, Any]:
         if not user:
             raise DomainError('UNAUTHORIZED', 'Invalid or inactive authentication credentials.', 401)
         return {'user': user, 'is_unverified': False}
+
+    # Browser session from "keep me signed in" (HttpOnly, SameSite=Strict cookie).
+    # An expired or revoked session is ignored, exactly as if no cookie were sent.
+    session_token = request.cookies.get(SESSION_COOKIE)
+    if session_token:
+        user = store.get_user_by_session(session_token)
+        if user:
+            # Cross-site request forgery guard: other origins (even another localhost
+            # port) cannot add this header without a CORS approval the API never grants.
+            if request.method not in ('GET', 'HEAD', 'OPTIONS') and request.headers.get('x-metricguard-client') != 'web':
+                raise DomainError('FORBIDDEN', 'Session requests must come from the MetricGuard web app.', 403)
+            return {'user': user, 'is_unverified': False, 'via_session': True}
 
     # Explicit configuration/deployment boundary for unverified local access
     allow_unverified = os.environ.get('METRICGUARD_ALLOW_UNVERIFIED_LOCAL', 'true').lower()

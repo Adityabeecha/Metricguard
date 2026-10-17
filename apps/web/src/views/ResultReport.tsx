@@ -1,45 +1,49 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, type Evidence, type FlatEvidence, type RelationalEvidence, type RelationalRun, type Result, type Run, type Snapshot, type Version } from '../api';
-import { summarizeResult, type RecordDelta } from '../resultSummary';
+import { api, type Evidence, type EvidenceSummary, type FlatEvidence, type RelationalEvidence, type RelationalRun, type Result, type Run, type Snapshot, type Version } from '../api';
+import { groupDigits, summarizeResult, type RecordDelta } from '../resultSummary';
 import { RelationalEvidencePanel } from './RelationalEvidencePanel';
 
 const PAGE = 100;
-const MAX_PAGES = 10;
 
 type AnyEvidence = Evidence & Partial<FlatEvidence> & Partial<RelationalEvidence>;
 const recordKey = (row: AnyEvidence) => row.fact_key ?? row.row_key ?? row.order_id ?? '—';
 
-/** Reads row evidence (up to 1,000 rows) so the summary can count the records behind a change. */
-export function useRecordEvidence(run: Run | RelationalRun | null) {
-  const [rows, setRows] = useState<AnyEvidence[]>([]);
-  const [total, setTotal] = useState(0);
-  const [complete, setComplete] = useState(false);
+/** Server-computed change summary (exact counts across every record) for one run. */
+export function useEvidenceSummary(run: Run | RelationalRun | null) {
+  const [summary, setSummary] = useState<EvidenceSummary | null>(null);
   const [problem, setProblem] = useState('');
   const runId = run?.result ? run.id : '';
-
   useEffect(() => {
-    if (!runId) { setRows([]); setTotal(0); setComplete(false); return; }
+    if (!runId) { setSummary(null); return; }
     let active = true;
     setProblem('');
-    (async () => {
-      const collected: AnyEvidence[] = [];
-      let seen = 0, count = 0;
-      for (let page = 0; page < MAX_PAGES; page++) {
-        const res = await api.flatEvidence(runId, page * PAGE, PAGE);
-        if (!active) return;
-        count = res.total;
-        collected.push(...(res.items as AnyEvidence[]));
-        seen += res.items.length;
-        // Each page read re-verifies the whole artifact, so large datasets load one
-        // page here; the rest is reached through the paged table below.
-        if (seen >= res.total || res.items.length === 0 || res.total > PAGE * MAX_PAGES) break;
-      }
-      setRows(collected); setTotal(count); setComplete(seen >= count);
-    })().catch(e => { if (active) setProblem(e instanceof Error ? e.message : String(e)); });
+    api.evidenceSummary(runId)
+      .then(s => { if (active) setSummary(s); })
+      .catch(e => { if (active) setProblem(e instanceof Error ? e.message : String(e)); });
     return () => { active = false; };
   }, [runId]);
+  return { summary, problem };
+}
 
-  return { rows, total, complete, problem };
+/** One page of a filtered/sorted record view, fetched from the server. */
+function useRecordPage(runId: string, view: { offset: number; changedOnly: boolean; q: string; order: 'file' | 'impact' }) {
+  const [rows, setRows] = useState<AnyEvidence[]>([]);
+  const [total, setTotal] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState('');
+  useEffect(() => {
+    if (!runId) return;
+    let active = true;
+    setBusy(true); setProblem('');
+    const timer = setTimeout(() => {
+      api.evidenceView(runId, { ...view, limit: PAGE })
+        .then(res => { if (active) { setRows(res.items as AnyEvidence[]); setTotal(res.total); } })
+        .catch(e => { if (active) setProblem(e instanceof Error ? e.message : String(e)); })
+        .finally(() => { if (active) setBusy(false); });
+    }, view.q ? 250 : 0);
+    return () => { active = false; clearTimeout(timer); };
+  }, [runId, view.offset, view.changedOnly, view.q, view.order]);
+  return { rows, total, busy, problem };
 }
 
 type Props = {
@@ -70,37 +74,39 @@ function inclusion(row: AnyEvidence, side: 'baseline' | 'target') {
 
 export function ResultReport({ run, unit, relational, baselineLabel, targetLabel, baselineSql, targetSql, baselineDescription, targetDescription, snapshot, versions }: Props) {
   const result = run.result as Result;
-  const evidence = useRecordEvidence(run);
-  const summary = useMemo(() => summarizeResult(result, unit, evidence.total || evidence.rows.length ? {
-    rows: evidence.rows.map<RecordDelta>(r => ({ key: recordKey(r), delta: r.delta })),
-    total: evidence.total,
-    complete: evidence.complete,
-  } : undefined), [result, unit, evidence.rows, evidence.total, evidence.complete]);
+  const evidence = useEvidenceSummary(run);
+  const top = (evidence.summary?.top_changes || []) as AnyEvidence[];
+  const total = evidence.summary?.total ?? 0;
+  const summary = useMemo(() => summarizeResult(result, unit, evidence.summary ? {
+    rows: top.map<RecordDelta>(r => ({ key: recordKey(r), delta: r.delta })),
+    total: evidence.summary.total,
+    complete: true,
+    changedCount: evidence.summary.changed,
+  } : undefined), [result, unit, evidence.summary]);
 
-  const changed = evidence.rows.filter(r => r.delta != null && /[1-9]/.test(r.delta));
-  const total = evidence.total || evidence.rows.length;
-  const [pageStart, setPageStart] = useState(0);
-  const [pageRows, setPageRows] = useState<AnyEvidence[] | null>(null);
-  const [pageBusy, setPageBusy] = useState(false);
-  const [pageProblem, setPageProblem] = useState('');
-  const loadedPage = pageStart + PAGE <= evidence.rows.length || (evidence.complete && pageStart < evidence.rows.length);
-  const visibleRows = loadedPage ? evidence.rows.slice(pageStart, pageStart + PAGE) : pageRows || [];
-  const goTo = async (start: number) => {
-    setPageStart(start); setPageProblem('');
-    if (start + PAGE <= evidence.rows.length || (evidence.complete && start < evidence.rows.length)) { setPageRows(null); return; }
-    setPageBusy(true);
-    try { setPageRows((await api.flatEvidence(run.id, start, PAGE)).items as AnyEvidence[]); }
-    catch (e) { setPageProblem(e instanceof Error ? e.message : String(e)); }
-    finally { setPageBusy(false); }
+  const [offset, setOffset] = useState(0);
+  const [changedOnly, setChangedOnly] = useState(false);
+  const [q, setQ] = useState('');
+  const [order, setOrder] = useState<'file' | 'impact'>('file');
+  const [jump, setJump] = useState('');
+  const [csvProblem, setCsvProblem] = useState('');
+  const records = useRecordPage(run.result ? run.id : '', { offset, changedOnly, q, order });
+  const pages = Math.max(1, Math.ceil(records.total / PAGE));
+  const pageNo = Math.floor(offset / PAGE) + 1;
+  const goPage = (n: number) => setOffset((Math.min(Math.max(1, n), pages) - 1) * PAGE);
+  const show = (v: string | null) => (v == null ? 'Undefined (no values)' : unit ? `${groupDigits(v)} ${unit}` : groupDigits(v));
+  const num = (v: string | null | undefined) => (v == null ? '—' : groupDigits(v));
+  const downloadCsv = () => {
+    setCsvProblem('');
+    api.download(`/comparisons/${encodeURIComponent(run.id)}/evidence.csv`, `metricguard-${run.id}-records.csv`)
+      .catch(e => setCsvProblem(e instanceof Error ? e.message : String(e)));
   };
-  const nullRows = evidence.rows.filter(r => r.baseline_null_term || r.target_null_term);
-  const show = (v: string | null) => (v == null ? 'Undefined (no values)' : unit ? `${v} ${unit}` : v);
 
   return (
     <div className="result-summary">
       <p className="result-headline" aria-live="polite">{summary.headline}</p>
       {summary.recordsSentence && <p style={{ margin: 0 }}>{summary.recordsSentence}</p>}
-      {evidence.problem && <p className="disabled-reason">Supporting records could not be loaded: {evidence.problem}</p>}
+      {evidence.problem && <p className="disabled-reason">The record summary could not be loaded: {evidence.problem}</p>}
 
       <div className="calc-pair">
         <div>
@@ -129,26 +135,25 @@ export function ResultReport({ run, unit, relational, baselineLabel, targetLabel
         </div>
       </div>
 
-      {changed.length > 0 && (
+      {top.length > 0 && (
         <div>
-          <h3 style={{ fontSize: 14, margin: '0 0 6px' }}>Records that explain the difference</h3>
+          <h3 style={{ fontSize: 14, margin: '0 0 6px' }}>Records that explain the difference{top.length > 1 ? ' (largest first)' : ''}</h3>
           <div className="table-scroll">
             <table>
               <thead><tr><th>Record</th><th>Current</th><th>Proposed</th><th>Change</th></tr></thead>
               <tbody>
-                {changed.slice(0, 10).map(r => (
+                {top.slice(0, 10).map(r => (
                   <tr key={recordKey(r)}>
                     <td className="mono-cell">{recordKey(r)}</td>
-                    <td>{inclusion(r, 'baseline')}{r.baseline_contribution != null && ` · ${r.baseline_contribution}`}</td>
-                    <td>{inclusion(r, 'target')}{r.target_contribution != null && ` · ${r.target_contribution}`}</td>
-                    <td className={signedClass(r.delta)}>{r.delta}</td>
+                    <td>{inclusion(r, 'baseline')}{r.baseline_contribution != null && ` · ${num(r.baseline_contribution)}`}</td>
+                    <td>{inclusion(r, 'target')}{r.target_contribution != null && ` · ${num(r.target_contribution)}`}</td>
+                    <td className={signedClass(r.delta)}>{num(r.delta)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {changed.length > 10 && <small>Showing 10 of {changed.length}{evidence.complete ? '' : ' found so far'}. All records are under “Supporting records”.</small>}
-          {!evidence.complete && <small> These are drawn from the first {evidence.rows.length.toLocaleString()} of {total.toLocaleString()} records.</small>}
+          {(evidence.summary?.changed ?? 0) > 10 && <small>Showing the 10 largest of {groupDigits(String(evidence.summary!.changed))} changed records. Use “Supporting records” to see them all.</small>}
         </div>
       )}
 
@@ -161,35 +166,60 @@ export function ResultReport({ run, unit, relational, baselineLabel, targetLabel
 
       <div className="detail-stack">
         <details>
-          <summary>Supporting records ({total.toLocaleString()})</summary>
+          <summary>Supporting records ({groupDigits(String(total))})</summary>
           <div>
             <p>Every record in the dataset, including those excluded by both calculations. Change = proposed contribution − current contribution.</p>
-            <div className="table-scroll">
+            <div className="library-toolbar" role="group" aria-label="Filter records">
+              <label>Find a record
+                <input type="search" value={q} placeholder="Record key" onChange={e => { setQ(e.target.value); setOffset(0); }} />
+              </label>
+              <label>Show
+                <select value={changedOnly ? 'changed' : 'all'} onChange={e => { setChangedOnly(e.target.value === 'changed'); setOffset(0); }}>
+                  <option value="all">All records</option>
+                  <option value="changed">Only records that changed</option>
+                </select>
+              </label>
+              <label>Order
+                <select value={order} onChange={e => { setOrder(e.target.value as 'file' | 'impact'); setOffset(0); }}>
+                  <option value="file">Dataset order</option>
+                  <option value="impact">Largest change first</option>
+                </select>
+              </label>
+              <button type="button" className="button secondary small" onClick={downloadCsv}>Download all records (CSV)</button>
+            </div>
+            {csvProblem && <p className="disabled-reason">The download failed: {csvProblem}</p>}
+            {records.problem && <p className="disabled-reason">Records could not be loaded: {records.problem}</p>}
+            <div className="table-scroll" aria-busy={records.busy}>
               <table>
                 <thead><tr><th>Record</th><th>Current</th><th>Proposed</th><th>Change</th></tr></thead>
                 <tbody>
-                  {visibleRows.map(r => (
+                  {records.rows.map(r => (
                     <tr key={recordKey(r)}>
                       <td className="mono-cell">{recordKey(r)}</td>
-                      <td>{inclusion(r, 'baseline')}{r.baseline_contribution != null && ` · ${r.baseline_contribution}`}</td>
-                      <td>{inclusion(r, 'target')}{r.target_contribution != null && ` · ${r.target_contribution}`}</td>
-                      <td className={signedClass(r.delta)}>{r.delta ?? '—'}</td>
+                      <td>{inclusion(r, 'baseline')}{r.baseline_contribution != null && ` · ${num(r.baseline_contribution)}`}</td>
+                      <td>{inclusion(r, 'target')}{r.target_contribution != null && ` · ${num(r.target_contribution)}`}</td>
+                      <td className={signedClass(r.delta)}>{num(r.delta)}</td>
                     </tr>
                   ))}
+                  {!records.busy && records.rows.length === 0 && <tr><td colSpan={4}>No records match.</td></tr>}
                 </tbody>
               </table>
             </div>
-            {total > PAGE && (
-              <div className="report-actions" role="group" aria-label="Record pages">
-                <button type="button" className="button secondary small" disabled={pageBusy || pageStart === 0} onClick={() => void goTo(Math.max(0, pageStart - PAGE))}>Previous</button>
-                <span role="status">
-                  {pageBusy ? 'Loading…' : `Records ${(pageStart + 1).toLocaleString()}–${Math.min(pageStart + PAGE, total).toLocaleString()} of ${total.toLocaleString()}`}
-                </span>
-                <button type="button" className="button secondary small" disabled={pageBusy || pageStart + PAGE >= total} onClick={() => void goTo(pageStart + PAGE)}>Next</button>
-              </div>
-            )}
-            {pageProblem && <p className="disabled-reason">This page could not be loaded: {pageProblem}</p>}
-            {total > PAGE && <p>Each page is checked against the stored evidence hash before it is shown, so large datasets take a moment per page. Downloaded reports include the first 100 records.</p>}
+            <div className="report-actions" role="group" aria-label="Record pages">
+              <button type="button" className="button secondary small" disabled={records.busy || pageNo <= 1} onClick={() => goPage(pageNo - 1)}>Previous</button>
+              <span role="status">
+                {records.busy ? 'Loading…' : records.total === 0 ? 'No records' : `Records ${groupDigits(String(offset + 1))}–${groupDigits(String(Math.min(offset + PAGE, records.total)))} of ${groupDigits(String(records.total))}`}
+              </span>
+              <button type="button" className="button secondary small" disabled={records.busy || pageNo >= pages} onClick={() => goPage(pageNo + 1)}>Next</button>
+              {pages > 2 && (
+                <form onSubmit={e => { e.preventDefault(); const n = Number(jump); if (Number.isFinite(n)) goPage(n); setJump(''); }} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}>Page
+                    <input type="number" min={1} max={pages} value={jump} onChange={e => setJump(e.target.value)} style={{ width: 80, padding: '4px 6px' }} placeholder={`1–${pages}`} />
+                  </label>
+                  <button className="button secondary small" disabled={!jump}>Go</button>
+                </form>
+              )}
+            </div>
           </div>
         </details>
 
@@ -211,7 +241,7 @@ export function ResultReport({ run, unit, relational, baselineLabel, targetLabel
           <summary>Missing-value handling</summary>
           <div>
             <p>Blank (NULL) amounts are ignored when adding up; they are not treated as zero. A filter compared with a blank value is neither true nor false, so the record is left out.</p>
-            <p>{nullRows.length === 0 ? 'No record in the loaded evidence has a blank amount.' : `${nullRows.length} record(s) have a blank amount in at least one calculation: ${nullRows.slice(0, 8).map(recordKey).join(', ')}${nullRows.length > 8 ? '…' : ''}.`}</p>
+            <p>{!evidence.summary ? '' : evidence.summary.blank_amount_rows === 0 ? 'No record has a blank amount.' : `${groupDigits(String(evidence.summary.blank_amount_rows))} record(s) have a blank amount in at least one calculation.`}</p>
             <p>If a calculation has no non-blank amounts at all, its total is undefined rather than 0, and no change is reported.</p>
           </div>
         </details>
@@ -247,7 +277,7 @@ export function ResultReport({ run, unit, relational, baselineLabel, targetLabel
         <details>
           <summary>Data and calculation history</summary>
           <div>
-            {snapshot && <p>Dataset “{snapshot.name}” · {snapshot.row_count} rows · frozen {snapshot.created_at ? new Date(snapshot.created_at).toLocaleString() : ''}</p>}
+            {snapshot && <p>Dataset “{snapshot.name}” · {groupDigits(String(snapshot.row_count))} rows · frozen {snapshot.created_at ? new Date(snapshot.created_at).toLocaleString() : ''}</p>}
             <p>Run {run.id} · {run.state} · started {new Date(run.created_at).toLocaleString()}</p>
             <pre className="json-view">{JSON.stringify(result.provenance, null, 2)}</pre>
           </div>

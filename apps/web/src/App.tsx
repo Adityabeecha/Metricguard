@@ -11,7 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import { api, ApiError, hasApiCredential, type Bootstrap, type Run } from './api';
-import { GateScreen, WorkspaceChooser } from './AuthScreens';
+import { GateScreen, restoreSession, WorkspaceChooser } from './AuthScreens';
 import { chooseWorkspaceAfterConnect, classifyLoadError, readReloadEnded, type GateState } from './authState';
 import { ConnectionControl, describeAuthError, useIdentityEpoch } from './identity';
 import { Dashboard } from './Dashboard';
@@ -26,13 +26,11 @@ import { CaseReport } from './views/CaseReport';
 import { ChangesView } from './views/ChangesView';
 import { DataSourcesView } from './views/DataSourcesView';
 import { InvestigationLibrary } from './views/InvestigationLibrary';
-import { InvestigationsView } from './views/InvestigationsView';
 import { MetricsView } from './views/MetricsView';
 import { SettingsView } from './views/SettingsView';
 import { StartComparison } from './views/StartComparison';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 
-const RelationalInvestigations = React.lazy(()=>import('./views/RelationalInvestigations').then(module=>({default:module.RelationalInvestigations})));
 
 const NAV_ITEMS: Array<{ id: Page; label: string; icon: React.ReactNode }> = [
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={17} /> },
@@ -56,7 +54,6 @@ export function App() {
   dataRef.current = data;
   const [chooserOpen, setChooserOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [externalRun, setExternalRun] = useState<Run | null>(null);
   const prevWorkspaceRef = useRef(route.workspaceId);
   const identityEpoch = useIdentityEpoch();
 
@@ -107,6 +104,9 @@ export function App() {
       window.removeEventListener('popstate', handlePopState);
     };
   }, [route.workspaceId]);
+
+  // A "keep me signed in" session survives reloads; pick it up once on load.
+  useEffect(() => { void restoreSession(); }, []);
 
   // Initial redirect if path was legacy or missing workspace
   useEffect(() => {
@@ -160,7 +160,6 @@ export function App() {
     api.setActiveWorkspace(route.workspaceId);
     if (prevWorkspaceRef.current !== route.workspaceId) {
       prevWorkspaceRef.current = route.workspaceId;
-      setExternalRun(null);
       setData(null);
       setGate({ kind: 'loading' });
       // If there are stale object IDs in query from previous workspace, reset them
@@ -184,7 +183,6 @@ export function App() {
   useEffect(() => {
     if (firstEpochRef.current === identityEpoch) return;
     firstEpochRef.current = identityEpoch;
-    setExternalRun(null);
     setData(null);
     setError('');
     setGate({ kind: 'loading' });
@@ -198,7 +196,6 @@ export function App() {
 
   const handleSelectWorkspace = (newWorkspaceId: string) => {
     setChooserOpen(false);
-    setExternalRun(null);
     if (newWorkspaceId === route.workspaceId) { setGate({ kind: 'loading' }); void loadWorkspace(newWorkspaceId); return; }
     setData(null);
     setGate({ kind: 'loading' });
@@ -210,20 +207,23 @@ export function App() {
     (route.page === 'settings' ? 'Settings' : 'Dashboard');
 
   const runnerReady = data ? (data.mode === 'demo' ? true : Boolean(data.runner_available)) : true;
-  const requestedInvestigation = data?.investigations.find(c=>c.id===route.query.investigationId)
-    || data?.runs.find(r=>r.id===route.query.investigationId);
-  const relationalRoute = route.query.mode === 'relational'
-    || (requestedInvestigation?.context as unknown as {mode?:string})?.mode === 'relational_snapshot';
-  // Investigations: no id → unified library; saved id → report; 'new' or edit=1 → editor.
+  // Investigations: no id → unified library; saved id → report; 'new' or edit=1 → guided flow.
   const invId = route.query.investigationId;
   const showLibrary = route.page === 'investigations' && !invId;
   const showReport = route.page === 'investigations' && !!invId && invId !== 'new' && route.query.edit !== '1';
   const showEditor = route.page === 'investigations' && !!invId && !showReport;
-  const openRun = (run:Run) => {
-    setExternalRun(run);
-    const mode = (run.context as unknown as {mode?:string}).mode;
-    navigate({page:'investigations',query:{investigationId:run.id,...(mode==='relational_snapshot'?{mode:'relational'}:{})}});
-  };
+  const openRun = (run: Run) => navigate({ page: 'investigations', query: { investigationId: run.id } });
+  const startWith = (query: Record<string, string>) => navigate({ page: 'start', query });
+  const guided = (prefill: { from?: string; left?: string; right?: string }) => (
+    <StartComparison
+      key={`${route.workspaceId}:${prefill.from || ''}:${prefill.left || ''}:${prefill.right || ''}`}
+      data={data!}
+      refresh={refresh}
+      prefill={prefill}
+      onNavigate={(page, tab, query) => navigate({ page, tab, query })}
+      onOpenInvestigation={(id) => navigate({ page: 'investigations', query: { investigationId: id } })}
+    />
+  );
 
   const chooser = (
     <WorkspaceChooser
@@ -378,17 +378,7 @@ export function App() {
                   refresh={refresh}
                   onNavigate={(page, tab, query) => navigate({ page, tab, query })}
                   onOpenRun={openRun}
-                  onSelectCandidate={(c) => {
-                    navigate({
-                      page: 'investigations',
-                      query: {
-                        investigationId: 'new',
-                        left: c.left_version_id,
-                        right: c.right_version_id,
-                        rel: 'candidate_review',
-                      },
-                    });
-                  }}
+                  onSelectCandidate={(c) => startWith({ left: c.left_version_id, right: c.right_version_id })}
                 />
               )}
 
@@ -410,50 +400,12 @@ export function App() {
                       navigate({ page: 'metrics', query: newQuery });
                     }
                   }}
-                  onComparePair={(leftId, rightId, rel) => {
-                    if (data.definitions.some(d=>d.versions.some(v=>[leftId,rightId].includes(v.id) && v.ir?.mode==='relational_snapshot'))) {
-                      navigate({page:'investigations',query:{investigationId:'new',mode:'relational'}});
-                      return;
-                    }
-                    navigate({
-                      page: 'investigations',
-                      query: {
-                        investigationId: 'new',
-                        left: leftId,
-                        right: rightId,
-                        rel,
-                        metricId: route.query.metricId || '',
-                      },
-                    });
-                  }}
-                  onStartReplay={(_defId, verId) => {
-                    if (data.definitions.some(d=>d.versions.some(v=>v.id===verId && v.ir?.mode==='relational_snapshot'))) {
-                      navigate({page:'investigations',query:{investigationId:'new',mode:'relational'}});
-                      return;
-                    }
-                    navigate({
-                      page: 'investigations',
-                      query: {
-                        investigationId: 'new',
-                        left: verId,
-                        right: verId,
-                        rel: 'replay',
-                        metricId: route.query.metricId || '',
-                      },
-                    });
-                  }}
+                  onComparePair={(leftId, rightId) => startWith({ left: leftId, right: rightId })}
+                  onStartReplay={(_defId, verId) => startWith({ left: verId, right: verId })}
                 />
               )}
 
-              {route.page === 'start' && (
-                <StartComparison
-                  key={route.workspaceId}
-                  data={data}
-                  refresh={refresh}
-                  onNavigate={(page, tab, query) => navigate({ page, tab, query })}
-                  onOpenInvestigation={(id) => navigate({ page: 'investigations', query: { investigationId: id } })}
-                />
-              )}
+              {route.page === 'start' && guided({ from: route.query.from, left: route.query.left, right: route.query.right })}
 
               {route.page === 'data' && (
                 <DataSourcesView key={route.workspaceId} data={data} refresh={refresh} openAdd={route.query.add === '1'} />
@@ -485,9 +437,9 @@ export function App() {
                   data={data}
                   workspaceId={route.workspaceId}
                   onStart={() => navigate({ page: 'start' })}
-                  onOpen={(item) => navigate({ page: 'investigations', query: item.source === 'saved'
-                    ? { investigationId: item.id }
-                    : { investigationId: item.id, edit: '1', ...(item.kind === 'relational' ? { mode: 'relational' } : {}) } })}
+                  onOpen={(item) => item.source === 'saved'
+                    ? navigate({ page: 'investigations', query: { investigationId: item.id } })
+                    : startWith({ from: item.id })}
                 />
               )}
               {showReport && (
@@ -497,52 +449,16 @@ export function App() {
                   investigationId={invId!}
                   refresh={refresh}
                   onBack={() => navigate({ page: 'investigations' })}
-                  onEdit={(relational) => navigate({ page: 'investigations', query: { investigationId: invId!, edit: '1', ...(relational ? { mode: 'relational' } : {}) } })}
+                  onEdit={() => startWith({ from: invId! })}
                   onNotSaved={() => {
-                    const url = buildRouteUrl(route.workspaceId, 'investigations', undefined, { ...route.query, edit: '1' });
+                    // Drafts and bare runs open in the guided flow instead of the report.
+                    const url = buildRouteUrl(route.workspaceId, 'start', undefined, { from: invId! });
                     window.history.replaceState(null, '', url);
                     setRoute(parseRoute(window.location.pathname, window.location.search, route.workspaceId));
                   }}
                 />
               )}
-              {showEditor && <div className="section-tabs" aria-label="Investigation mode">
-                <button className="section-tab-button" onClick={()=>navigate({page:'investigations'})}>← All investigations</button>
-                <button className={`section-tab-button ${!relationalRoute ? 'active' : ''}`} aria-pressed={!relationalRoute} onClick={()=>navigate({page:'investigations',query:{investigationId:'new'}})}>Single table editor</button>
-                <button className={`section-tab-button ${relationalRoute ? 'active' : ''}`} aria-pressed={relationalRoute} onClick={()=>navigate({page:'investigations',query:{investigationId:'new',mode:'relational'}})}>Two-table editor</button>
-              </div>}
-              {showEditor && relationalRoute && (
-                <React.Suspense fallback={<p role="status">Opening relational investigation…</p>}><RelationalInvestigations key={`${route.workspaceId}:${route.query.investigationId || 'new'}`} data={data} refresh={refresh} initialId={route.query.investigationId}/></React.Suspense>
-              )}
-              {showEditor && !relationalRoute && (
-                <InvestigationsView
-                  key={route.workspaceId}
-                  data={{...data,
-                    snapshots:data.snapshots.filter(s=>s.execution_policy!=='relational_snapshot_v1'),
-                    definitions:data.definitions.filter(d=>d.versions.every(v=>v.ir?.mode!=='relational_snapshot')),
-                    investigations:data.investigations.filter(c=>(c.context as unknown as {mode?:string}).mode!=='relational_snapshot'),
-                    runs:data.runs.filter(r=>(r.context as unknown as {mode?:string}).mode!=='relational_snapshot')}}
-                  refresh={refresh}
-                  investigationId={route.query.investigationId}
-                  onSelectInvestigation={(invId) => {
-                    if (invId) {
-                      // Stay in the editor: drafts it creates are not saved cases and have no report.
-                      navigate({ page: 'investigations', query: { ...route.query, investigationId: invId, ...(invId !== 'new' ? { edit: '1' } : {}) } });
-                    } else {
-                      const newQuery = { ...route.query };
-                      delete newQuery.investigationId;
-                      delete newQuery.left;
-                      delete newQuery.right;
-                      delete newQuery.rel;
-                      delete newQuery.metricId;
-                      delete newQuery.edit;
-                      navigate({ page: 'investigations', query: newQuery });
-                    }
-                  }}
-                  externalRun={(externalRun?.context as unknown as {mode?:string})?.mode === 'relational_snapshot' ? null : externalRun}
-                  onClearExternalRun={() => setExternalRun(null)}
-                  initialQuery={route.query}
-                />
-              )}
+              {showEditor && guided({ from: invId !== 'new' ? invId : undefined, left: route.query.left, right: route.query.right })}
 
               {route.page === 'settings' && (
                 <SettingsView

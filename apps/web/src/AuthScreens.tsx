@@ -1,22 +1,37 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Check, KeyRound, Layers3, RefreshCw, ServerCrash, ShieldOff, X } from 'lucide-react';
-import { api, hasApiCredential, setApiCredential, type Workspace } from './api';
+import { api, hasApiCredential, setApiCredential, setSessionSignedIn, type Workspace } from './api';
 import { writeConnectedMarker, type GateState } from './authState';
 import { useDialog } from './useDialog';
 
 const sessionStore = () => { try { return window.sessionStorage; } catch { return null; } };
 
-/** Connect (or replace) the in-memory key. The key is never written to storage. */
-export function connectWithKey(raw: string) {
+/**
+ * Connect (or replace) the in-memory key. The key is never written to storage.
+ * With `remember`, the server also issues an 8-hour HttpOnly session cookie so a
+ * reload keeps you signed in; the browser cannot read that cookie.
+ */
+export function connectWithKey(raw: string, remember = false) {
   const value = raw.trim();
   if (!value) return;
   setApiCredential(value);
   writeConnectedMarker(sessionStore(), true);
+  if (remember) api.startSession().catch(() => undefined);
 }
 
-export function disconnectKey() {
+export async function disconnectKey() {
+  try { await api.endSession(); } catch { /* signing out locally still proceeds */ }
+  setSessionSignedIn(false);
   setApiCredential(null);
   writeConnectedMarker(sessionStore(), false);
+}
+
+/** On load: if a valid session cookie exists, treat the browser as signed in. */
+export async function restoreSession() {
+  try {
+    const who = await api.identity();
+    if (who.verified && who.session) setSessionSignedIn(true);
+  } catch { /* no session: stay signed out */ }
 }
 
 function KeyHelp() {
@@ -35,10 +50,11 @@ function KeyHelp() {
 
 export function ConnectForm({ submitLabel = 'Connect to workspace', onSubmitted }: { submitLabel?: string; onSubmitted?: () => void }) {
   const [key, setKey] = useState('');
+  const [remember, setRemember] = useState(true);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!key.trim()) return;
-    connectWithKey(key);
+    connectWithKey(key, remember);
     setKey('');
     onSubmitted?.();
   };
@@ -56,9 +72,14 @@ export function ConnectForm({ submitLabel = 'Connect to workspace', onSubmitted 
           data-autofocus
         />
       </label>
+      <label className="checkbox-field-standard" style={{ fontWeight: 400 }}>
+        <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
+        <span>Keep me signed in on this computer for 8 hours</span>
+      </label>
       <p className="gate-note">
-        The key stays in this browser tab’s memory only. It is not saved, so reloading or closing the tab
-        signs you out and you will need to paste it again.
+        Your key is never saved in the browser. {remember
+          ? 'The server gives this browser a sign-in that expires after 8 hours or when you sign out.'
+          : 'Without “keep me signed in”, reloading or closing the tab signs you out.'}
       </p>
       <button className="button primary" disabled={!key.trim()} title={key.trim() ? undefined : 'Paste your API key first'}>
         <KeyRound size={15} /> {submitLabel}

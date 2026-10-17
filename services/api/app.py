@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date
+from decimal import Decimal
 import hashlib
 import json
 import os
@@ -11,7 +12,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, Header, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -33,10 +34,11 @@ from .reports import html_report
 from .store import DomainError, Store, fingerprint
 from .candidates import rank_candidates
 from .metadata_adapters import AdapterError, import_dbt_manifest, import_tmdl
-from .auth import get_auth_context, verify_project_access, verify_object_access
+from .auth import SESSION_COOKIE, SESSION_SECONDS, get_auth_context, verify_project_access, verify_object_access
 from .monitoring import classify_change, evaluate_materiality, compute_event_hash
 from .relational_routes import verify_shared_access
 from .backup import backup_project, restore_project
+from . import evidence_cache
 from services.supervisor.evidence_artifact import verify_artifact
 from services.supervisor.collector import CollectorError, PostgresCollector, PostgresSourceSelection
 
@@ -1167,6 +1169,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
                         replay_available = False
                 return {
                     **draft,
+                    'record_type': 'draft',
                     'is_draft': True,
                     'run_id': draft.get('comparison_run_id'),
                     'snapshot': snapshot,
@@ -1180,7 +1183,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         verify_shared_access(request, store, auth, item)
         snapshot = store.snapshot(item['snapshot_id'])
         run = store.get_run(item['run_id'])
-        return {**item, 'snapshot': public_snapshot(snapshot), 'run': run,
+        return {**item, 'record_type': 'investigation', 'is_draft': False, 'snapshot': public_snapshot(snapshot), 'run': run,
                 'baseline_version': store.version(item['baseline_version_id']),
                 'target_version': store.version(item['target_version_id']),
                 'replay_available': Path(snapshot['artifact_path']).is_file()}
@@ -1240,12 +1243,13 @@ def create_app(database_url=None, data_dir=None, mode=None):
         return store.cancel(ident)
 
     @app.get('/api/v1/comparisons/{ident}/evidence')
-    def evidence(ident: str, request: Request, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100)):
+    def evidence(ident: str, request: Request, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100),
+                 changed_only: bool = Query(False), q: str = Query('', max_length=256), order: str = Query('file', pattern='^(file|impact)$')):
         auth = get_auth_context(request, store)
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
-        return evidence_page(run, offset, limit)
+        return evidence_page(run, offset, limit, changed_only=changed_only, query=q, order=order)
 
     @app.get('/api/v1/comparisons/{ident}/join-evidence')
     def join_evidence(ident: str, request: Request, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100)):
@@ -1262,43 +1266,136 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 'baseline_version_id': run['baseline_version_id'], 'target_version_id': run['target_version_id'],
                 'offset': offset, 'limit': limit}
 
-    def evidence_page(run, offset, limit, *, include_join_evidence=False):
+    @app.get('/api/v1/comparisons/{ident}/evidence-summary')
+    def evidence_summary(ident: str, request: Request):
+        """How many records changed, how many had blank amounts, and the largest changes."""
+        auth = get_auth_context(request, store)
+        run = store.get_run(ident)
+        verify_shared_access(request, store, auth, run)
+        verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        result = run.get('result') or {}
+        if not result:
+            raise DomainError('RESULT_UNAVAILABLE', 'Complete this comparison before summarising its evidence.')
+        if result.get('evidence_artifact') is None:
+            rows = result.get('evidence', [])
+            changed = [r for r in rows if r.get('delta') not in (None,) and any(ch in '123456789' for ch in str(r.get('delta')))]
+            changed.sort(key=lambda r: -abs(Decimal(str(r['delta']))))
+            return {'total': len(rows), 'changed': len(changed), 'top_changes': changed[:20],
+                    'blank_amount_rows': sum(1 for r in rows if r.get('baseline_null_term') or r.get('target_null_term'))}
+        path, key, verify_all = evidence_access(run)
+        try:
+            return evidence_cache.summary(path, key, verify_all)
+        except (ValueError, KeyError, TypeError, OSError) as error:
+            raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
+
+    @app.get('/api/v1/comparisons/{ident}/evidence.csv')
+    def evidence_csv(ident: str, request: Request):
+        """Every record's contribution to both totals, as CSV (verified before streaming)."""
+        auth = get_auth_context(request, store)
+        run = store.get_run(ident)
+        verify_shared_access(request, store, auth, run)
+        verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        result = run.get('result') or {}
+        if not result:
+            raise DomainError('RESULT_UNAVAILABLE', 'This run does not have completed evidence to export.')
+        if result.get('evidence_artifact') is None:
+            rows_iter = iter(result.get('evidence', []))
+        else:
+            path, key, verify_all = evidence_access(run)
+            try:
+                evidence_cache.summary(path, key, verify_all)  # full verification before any byte is sent
+            except (ValueError, KeyError, TypeError, OSError) as error:
+                raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
+            rows_iter = evidence_cache.iter_rows(path, key, verify_all)
+        columns = ['record', 'current_included', 'proposed_included', 'current_contribution', 'proposed_contribution',
+                   'change', 'current_blank_amount', 'proposed_blank_amount']
+
+        def generate():
+            import csv as _csv
+            import io as _io
+            buffer = _io.StringIO()
+            writer = _csv.writer(buffer, lineterminator='\n')
+            writer.writerow(columns)
+            for row in rows_iter:
+                key_value = evidence_cache.record_key(row)
+                # Neutralise spreadsheet formulas in key values.
+                if key_value[:1] in ('=', '+', '-', '@'):
+                    key_value = "'" + key_value
+                writer.writerow([key_value, row.get('baseline_included'), row.get('target_included'),
+                                 row.get('baseline_contribution'), row.get('target_contribution'), row.get('delta'),
+                                 bool(row.get('baseline_null_term')), bool(row.get('target_null_term'))])
+                if buffer.tell() > 64 * 1024:
+                    yield buffer.getvalue()
+                    buffer.seek(0); buffer.truncate()
+            yield buffer.getvalue()
+
+        return StreamingResponse(generate(), media_type='text/csv',
+                                 headers={'Content-Disposition': f'attachment; filename="metricguard-{ident}-records.csv"'})
+
+    def evidence_access(run):
+        """Artifact path, cache key and a full-verification callback for one run attempt."""
+        result = run.get('result') or {}
+        manifest = result['evidence_artifact']
+        artifact = data_dir / 'evidence' / f"{run['id']}-{run['attempt']}.jsonl"
+
+        def verify_all():
+            evidence_verify(run, manifest, artifact, 0, 0)
+
+        return artifact, (str(artifact), run['id'], run['attempt'], manifest.get('sha256')), verify_all
+
+    def evidence_page(run, offset, limit, *, include_join_evidence=False, changed_only=False, query='', order='file'):
         result = run.get('result') or {}
         manifest = result.get('evidence_artifact')
         if manifest is None:
             if include_join_evidence:
                 raise DomainError('EVIDENCE_UNAVAILABLE', 'This run has no isolated join-evidence artifact. Its stored report remains readable.')
-            rows = result.get('evidence', [])
+            rows = list(result.get('evidence', []))
+            if changed_only:
+                rows = [r for r in rows if evidence_cache._magnitude(r.get('delta'))]
+            if query.strip():
+                rows = [r for r in rows if query.strip().lower() in evidence_cache.record_key(r).lower()]
+            if order == 'impact':
+                rows.sort(key=lambda r: -evidence_cache._magnitude(r.get('delta')))
             return {'items': rows[offset:offset + limit], 'total': len(rows)}
         artifact = data_dir / 'evidence' / f"{run['id']}-{run['attempt']}.jsonl"
+        if not include_join_evidence:
+            path, key, verify_all = evidence_access(run)
+            try:
+                items, total = evidence_cache.page(path, key, verify_all, offset, limit, changed_only, query, order)
+            except (ValueError, KeyError, TypeError, OSError) as error:
+                raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
+            return {'items': items, 'total': total}
         try:
-            # Executable identities come from frozen store records, never from
-            # a manifest supplied alongside the evidence being checked.
-            baseline_ir = store.version(run['baseline_version_id'])['ir']
-            target_ir = store.version(run['target_version_id'])['ir']
-            measure_expr = baseline_ir.get('measure_expression')
-            case_context = None
-            relational_context = None
-            if run.get('execution_policy') == 'relational_snapshot_v1':
-                frozen_snapshot = store.snapshot(run['snapshot_id'])
-                frozen_manifest = frozen_snapshot['manifest']
-                from packages.metricguard_core.relational import context_for
-                if (run['context'] != context_for(frozen_manifest['contract']) or
-                        frozen_snapshot.get('execution_policy') != run['execution_policy']):
-                    raise ValueError('EVIDENCE_INVALID')
-                relational_context = {'contract': frozen_manifest['contract'], 'manifest': frozen_manifest,
-                                      'baseline': baseline_ir, 'target': target_ir}
-                measure_expr = None
-            elif baseline_ir.get('contract_version') == 7 or target_ir.get('contract_version') == 7:
-                contract = store.snapshot(run['snapshot_id'])['manifest']['contract']
-                case_context = {'contract': contract, 'baseline': baseline_ir, 'target': target_ir}
-                measure_expr = None
-            verified = verify_artifact(artifact, manifest, result['delta_target_minus_baseline'], offset, limit,
-                                   measure_expression=measure_expr, case_context=case_context, expected_result=result, relational_context=relational_context,
-                                   include_join_evidence=include_join_evidence)
+            return evidence_verify(run, manifest, artifact, offset, limit, include_join_evidence=True)
         except (ValueError, KeyError, TypeError) as error:
             raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
-        return verified if include_join_evidence else {'items': verified, 'total': manifest['row_count']}
+
+    def evidence_verify(run, manifest, artifact, offset, limit, *, include_join_evidence=False):
+        result = run['result']
+        # Executable identities come from frozen store records, never from
+        # a manifest supplied alongside the evidence being checked.
+        baseline_ir = store.version(run['baseline_version_id'])['ir']
+        target_ir = store.version(run['target_version_id'])['ir']
+        measure_expr = baseline_ir.get('measure_expression')
+        case_context = None
+        relational_context = None
+        if run.get('execution_policy') == 'relational_snapshot_v1':
+            frozen_snapshot = store.snapshot(run['snapshot_id'])
+            frozen_manifest = frozen_snapshot['manifest']
+            from packages.metricguard_core.relational import context_for
+            if (run['context'] != context_for(frozen_manifest['contract']) or
+                    frozen_snapshot.get('execution_policy') != run['execution_policy']):
+                raise ValueError('EVIDENCE_INVALID')
+            relational_context = {'contract': frozen_manifest['contract'], 'manifest': frozen_manifest,
+                                  'baseline': baseline_ir, 'target': target_ir}
+            measure_expr = None
+        elif baseline_ir.get('contract_version') == 7 or target_ir.get('contract_version') == 7:
+            contract = store.snapshot(run['snapshot_id'])['manifest']['contract']
+            case_context = {'contract': contract, 'baseline': baseline_ir, 'target': target_ir}
+            measure_expr = None
+        return verify_artifact(artifact, manifest, result['delta_target_minus_baseline'], offset, limit,
+                               measure_expression=measure_expr, case_context=case_context, expected_result=result, relational_context=relational_context,
+                               include_join_evidence=include_join_evidence)
 
     @app.get('/api/v1/comparisons/{ident}/export')
     def export(ident: str, request: Request, format: str = Query('json', pattern='^(json|html)$')):
@@ -1365,7 +1462,14 @@ def create_app(database_url=None, data_dir=None, mode=None):
     # -----------------------------------------------------------------------
 
     @app.post('/api/v1/users', status_code=201)
-    def create_user_route(body: UserCreateInput):
+    def create_user_route(body: UserCreateInput, request: Request):
+        # Only a verified owner of at least one workspace may issue keys; otherwise
+        # anyone who can reach the server could mint credentials for themselves.
+        auth = get_auth_context(request, store)
+        if auth.get('is_unverified'):
+            raise DomainError('FORBIDDEN', 'Sign in as a workspace owner to issue API keys.', 403)
+        if not any(p.get('role') == 'owner' for p in store.list_projects_for_user(auth['user']['id'])):
+            raise DomainError('FORBIDDEN', 'Only workspace owners can issue API keys.', 403)
         user, raw_key = store.create_user(body.name, body.email)
         return {'user': user, 'api_key': raw_key}
 
@@ -1377,6 +1481,26 @@ def create_app(database_url=None, data_dir=None, mode=None):
         creator_id = auth['user']['id']
         project = store.create_project(body.name, owner_id=creator_id, project_id=body.id)
         return project
+
+    @app.post('/api/v1/auth/session')
+    def create_session_route(request: Request):
+        """Exchange a verified API key (header) for an expiring browser session cookie."""
+        auth = get_auth_context(request, store)
+        if auth.get('is_unverified') or auth.get('via_session'):
+            raise DomainError('UNAUTHORIZED', 'Send your API key to start a session.', 401)
+        token = store.create_session(auth['user']['id'], SESSION_SECONDS)
+        response = JSONResponse({'signed_in': True, 'expires_in_seconds': SESSION_SECONDS})
+        response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_SECONDS, httponly=True, samesite='strict', path='/api')
+        return response
+
+    @app.delete('/api/v1/auth/session')
+    def delete_session_route(request: Request):
+        token = request.cookies.get(SESSION_COOKIE)
+        if token:
+            store.revoke_session(token)
+        response = JSONResponse({'signed_in': False})
+        response.delete_cookie(SESSION_COOKIE, path='/api')
+        return response
 
     @app.get('/api/v1/auth/identity')
     def auth_identity_route(request: Request, project_id: str | None = None):
@@ -1391,13 +1515,13 @@ def create_app(database_url=None, data_dir=None, mode=None):
             role = member.get('role')
         return {
             'verified': True,
+            'session': bool(auth.get('via_session')),
             'user': {'id': user.get('id'), 'name': user.get('name'), 'email': user.get('email')},
             'project_id': project_id,
             'role': role,
         }
 
-    @app.get('/api/v1/projects')
-    def list_projects_route(request: Request):
+    def openable_projects(request: Request):
         auth = get_auth_context(request, store)
         if auth.get('is_unverified'):
             # Mirrors verify_project_access: the default project plus active local-analyst memberships.
@@ -1406,10 +1530,14 @@ def create_app(database_url=None, data_dir=None, mode=None):
             return [default, *local]
         return store.list_projects_for_user(auth['user']['id'])
 
+    @app.get('/api/v1/projects')
+    def list_projects_route(request: Request):
+        return openable_projects(request)
+
     @app.get('/api/v1/workspaces')
     def list_workspaces_route(request: Request):
-        auth = get_auth_context(request, store)
-        return store.list_projects()
+        # Same filtered list: never disclose workspaces the caller cannot open.
+        return openable_projects(request)
 
     @app.post('/api/v1/workspaces', status_code=201)
     def create_workspace_route(body: ProjectCreateInput, request: Request):

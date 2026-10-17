@@ -1,17 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Database, Plus, Save, Trash2, UploadCloud } from 'lucide-react';
-import { api, type Bootstrap, type FlatContract, type RelationalContract, type Run, type Snapshot } from '../api';
+import { api, ApiError, type Bootstrap, type FlatContract, type InvestigationDraft, type RelationalContract, type Run, type Snapshot } from '../api';
 import {
   buildFlatSql, buildRelationalSql, describeCalculation, flatFilterColumns, formProblems, guidedFormSupported,
-  OP_LABEL, operatorsFor, relationalFilterColumns, type CalculationForm, type Filter, type FilterColumn,
+  OP_LABEL, operatorsFor, relationalFilterColumns, supportsAnyMatch, type CalculationForm, type Filter, type FilterColumn,
 } from '../comparisonBuilder';
 import { summarizeDataset } from '../datasetSummary';
 import { classifyInvestigationError, type ClassifiedInvestigationError } from '../investigationUtils';
 import type { Page } from '../router';
 import { ResultReport } from './ResultReport';
+import { TwoTableUpload } from './TwoTableUpload';
 
 type Side = 'baseline' | 'target';
-type SideState = { name: string; mode: 'form' | 'sql'; form: CalculationForm; sql: string; refusal: ClassifiedInvestigationError | null };
+type SideState = { name: string; mode: 'form' | 'sql'; form: CalculationForm; sql: string; refusal: ClassifiedInvestigationError | null;
+  /** A saved calculation this side started from; reused as-is when its SQL is unchanged. */
+  reuse?: { versionId: string; sql: string } };
 type Choice = { snapshot: Snapshot; flat?: FlatContract; relational?: RelationalContract };
 
 const STAGES = [
@@ -28,9 +31,11 @@ type Props = {
   refresh: () => Promise<Bootstrap | null>;
   onNavigate: (page: Page, tab?: string, query?: Record<string, string>) => void;
   onOpenInvestigation: (id: string, relational: boolean) => void;
+  /** Open an existing saved case, draft or run (`from`), or a pair of calculation versions. */
+  prefill?: { from?: string; left?: string; right?: string };
 };
 
-export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation }: Props) {
+export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation, prefill }: Props) {
   const [stage, setStage] = useState(0);
   const [snapshotId, setSnapshotId] = useState('');
   const [sides, setSides] = useState<Record<Side, SideState>>({
@@ -43,6 +48,11 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   const [title, setTitle] = useState('');
   const [decision, setDecision] = useState('');
   const [actor, setActor] = useState('');
+  const [draft, setDraft] = useState<InvestigationDraft | null>(null);
+  const [origin, setOrigin] = useState<string>('');
+  const [showTwoTable, setShowTwoTable] = useState(false);
+  const [loadingPrefill, setLoadingPrefill] = useState(Boolean(prefill?.from || prefill?.left));
+  const skipReset = useRef(false);
 
   const isolated = data.mode === 'isolated';
   const engineReady = isolated && data.runner_available;
@@ -63,9 +73,68 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   const summary = choice ? summarizeDataset(choice.snapshot, data) : null;
   const formAllowed = contract ? guidedFormSupported(contract) : true;
 
+  const allVersions = useMemo(() => data.definitions.flatMap(d => d.versions.map(v => ({ definition: d, version: v }))), [data.definitions]);
+  const savedCalcs = useMemo(() => contract ? allVersions.filter(x => x.version.contract_hash === contract.contract_hash && x.version.support_state === 'executable') : [],
+    [allVersions, contract]);
+
+  // Open an existing case, draft, run or version pair inside the guided flow.
+  useEffect(() => {
+    if (!prefill?.from && !prefill?.left) return;
+    let active = true;
+    const load = async () => {
+      let snapshot = '', baseId = prefill.left || '', targetId = prefill.right || '', existingRun: Run | null = null;
+      let editor = null as null | { baseline_sql?: string; target_sql?: string; baseline_name?: string; target_name?: string };
+      let label = '';
+      if (prefill.from) {
+        try {
+          const found = await api.investigation(prefill.from) as unknown as Record<string, unknown>;
+          if (found.record_type === 'draft' || found.is_draft) {
+            const d = found as unknown as InvestigationDraft & { run?: Run | null };
+            setDraft(d); snapshot = d.snapshot_id || ''; baseId = d.baseline_version_id || ''; targetId = d.target_version_id || '';
+            existingRun = d.run || null; editor = (d as unknown as { editor_state?: typeof editor }).editor_state || null;
+            setTitle(d.title && d.title !== 'Untitled investigation' ? d.title : '');
+            label = `Continuing draft “${d.title || 'Untitled'}”.`;
+          } else {
+            const c = found as unknown as { title: string; decision: string; actor_label: string; snapshot_id: string; baseline_version_id: string; target_version_id: string; run: Run };
+            snapshot = c.snapshot_id; baseId = c.baseline_version_id; targetId = c.target_version_id; existingRun = c.run;
+            setTitle(`${c.title} (edited)`); setDecision(c.decision); setActor(c.actor_label);
+            label = `Editing a copy of “${c.title}”. Saving creates a new investigation; the original stays unchanged and replayable.`;
+          }
+        } catch (e) {
+          if (!(e instanceof ApiError) || !['NOT_FOUND', 'HTTP_404'].includes(e.code)) throw e;
+          existingRun = await api.run(prefill.from);
+          snapshot = existingRun.snapshot_id; baseId = existingRun.baseline_version_id; targetId = existingRun.target_version_id;
+          label = 'Opened a comparison run. Review it, adjust the calculations, or save it as an investigation.';
+        }
+      }
+      if (!active) return;
+      const base = allVersions.find(x => x.version.id === baseId), target = allVersions.find(x => x.version.id === targetId);
+      if (!snapshot) {
+        const hash = base?.version.contract_hash || target?.version.contract_hash;
+        snapshot = choices.find(c => (c.flat || c.relational)!.contract_hash === hash)?.snapshot.id || '';
+      }
+      skipReset.current = true;
+      setSnapshotId(snapshot);
+      const sideFrom = (x: typeof base, sql: string | undefined, name: string | undefined, fallback: string): SideState => ({
+        name: name || x?.definition.name || fallback, mode: 'sql', form: { filters: [], join: 'left' },
+        sql: sql || x?.version.raw_sql || '', refusal: null,
+        reuse: x && (!sql || sql === x.version.raw_sql) ? { versionId: x.version.id, sql: x.version.raw_sql } : undefined,
+      });
+      setSides({
+        baseline: sideFrom(base, editor?.baseline_sql, editor?.baseline_name, 'Current calculation'),
+        target: sideFrom(target, editor?.target_sql, editor?.target_name, 'Proposed calculation'),
+      });
+      if (existingRun) { setRun(existingRun); setStage(2); } else setStage(snapshot ? 1 : 0);
+      setOrigin(label);
+    };
+    load().catch(e => { if (active) setProblem(classifyInvestigationError(e)); }).finally(() => { if (active) setLoadingPrefill(false); });
+    return () => { active = false; };
+  }, [prefill?.from, prefill?.left, prefill?.right]);
+
   // Choosing a dataset resets calculations to sensible starting points.
   useEffect(() => {
     if (!choice) return;
+    if (skipReset.current) { skipReset.current = false; return; }
     const forceSql = !guidedFormSupported(choice.flat || choice.relational!);
     setSides(s => ({
       baseline: { ...s.baseline, mode: forceSql ? 'sql' : 'form', form: { filters: [], join: 'left' }, sql: '', refusal: null },
@@ -107,7 +176,9 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   const sideProblems = (side: Side) => sides[side].mode === 'form' ? formProblems(sides[side].form, columns)
     : sides[side].sql.trim() ? [] : ['Enter the SQL for this calculation.'];
   const calcBlocker = !engineReady ? (isolated ? 'The comparison engine is not running. Start it with scripts\\mg.ps1 start.' : 'New comparisons need the isolated engine. Start MetricGuard with scripts\\mg.ps1 start.')
-    : [...sideProblems('baseline'), ...sideProblems('target')][0] || (safeSql('baseline').trim() && safeSql('baseline').trim() === safeSql('target').trim() ? 'The two calculations are identical; change one of them.' : '');
+    : [...sideProblems('baseline'), ...sideProblems('target')][0] || (safeSql('baseline').trim() && safeSql('baseline').trim() === safeSql('target').trim()
+      && !(sides.baseline.reuse && sides.baseline.reuse.versionId === sides.target.reuse?.versionId)
+      ? 'The two calculations are identical; change one of them.' : '');
 
   async function registerAndCompare() {
     if (!choice || !contract) return;
@@ -118,6 +189,8 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
       for (const side of ['baseline', 'target'] as Side[]) {
         let sql: string;
         try { sql = sqlFor(side); } catch (e) { update(side, {}); throw e; }
+        const reuse = sides[side].reuse;
+        if (reuse && sides[side].mode === 'sql' && reuse.sql.trim() === sql.trim()) { ids[side] = reuse.versionId; continue; }
         try {
           const def = await api.post<{ versions: Array<{ id: string; support_state: string; support_reason?: string | null }> }>(
             endpoint, { name: sides[side].name.trim() || (side === 'baseline' ? 'Current calculation' : 'Proposed calculation'), raw_sql: sql, contract_id: contract.id });
@@ -142,6 +215,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
       }, { 'Idempotency-Key': crypto.randomUUID() });
       setRun(started);
       setStage(2);
+      void rememberDraft(started, ids.baseline!, ids.target!);
       void refresh();
     } catch (e) {
       setProblem(classifyInvestigationError(e));
@@ -150,11 +224,24 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     }
   }
 
+  // Keep unsaved work findable in the investigation list until it is saved.
+  async function rememberDraft(started: Run, baselineId: string, targetId: string) {
+    const editor_state = { mode: 'adhoc' as const, baseline_name: sides.baseline.name, target_name: sides.target.name,
+      baseline_sql: safeSql('baseline'), target_sql: safeSql('target') };
+    const fields = { title: title.trim() || `${sides.baseline.name} vs ${sides.target.name}`, snapshot_id: started.snapshot_id,
+      baseline_version_id: baselineId, target_version_id: targetId, comparison_run_id: started.id, editor_state };
+    try {
+      if (draft) setDraft(await api.updateInvestigationDraft(undefined, draft.id, { ...fields, status: 'needs_decision', version_token: draft.version_token }));
+      else setDraft(await api.createInvestigationDraft(undefined, { ...fields, status: 'needs_decision' }));
+    } catch { /* a draft is a convenience; the run itself is already recorded */ }
+  }
+
   async function save() {
     if (!run?.result) return;
     setBusy(true); setProblem(null);
     try {
       const saved = await api.post<{ id: string }>('/investigations', { title: title.trim(), decision: decision.trim(), actor_label: actor.trim(), run_id: run.id, snapshot_id: run.snapshot_id });
+      if (draft) await api.deleteInvestigationDraft(undefined, draft.id).catch(() => undefined);
       await refresh();
       onOpenInvestigation(saved.id, relational);
     } catch (e) {
@@ -198,6 +285,8 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
           </span>
         </div>
       )}
+      {loadingPrefill && <p role="status">Opening the comparison…</p>}
+      {origin && <div className="guided-explain" role="status">{origin}</div>}
       {problem && (
         <div className="alert error" role="alert">
           <span><strong>{problem.title}:</strong> {problem.message}{problem.guidance && <> — {problem.guidance}</>}</span>
@@ -240,9 +329,14 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
             <b>Need new data?</b> Upload a CSV or Parquet file and answer a few questions: which column identifies each row, which amount to total, its unit, and which columns you want to filter on.
             <div className="report-actions" style={{ marginTop: 8 }}>
               <button className="button secondary small" onClick={() => onNavigate('data', undefined, { add: '1' })}><UploadCloud size={14} /> Upload one table</button>
-              <button className="button secondary small" onClick={() => onNavigate('investigations', undefined, { investigationId: 'new', mode: 'relational' })}><Database size={14} /> Upload two connected tables</button>
+              <button className="button secondary small" aria-expanded={showTwoTable} onClick={() => setShowTwoTable(v => !v)}><Database size={14} /> Upload two connected tables</button>
             </div>
           </div>
+          {showTwoTable && (
+            <TwoTableUpload refresh={refresh} canUpload={engineReady}
+              blocker={isolated ? 'The comparison engine is not running. Start it with scripts\\mg.ps1 start.' : 'Uploads need the isolated engine. Start MetricGuard with scripts\\mg.ps1 start.'}
+              onCreated={id => { setShowTwoTable(false); setSnapshotId(id); }} />
+          )}
           <div className="guided-nav">
             <span />
             <button className="button primary" disabled={!choice} onClick={() => setStage(1)} aria-describedby={!choice ? 'need-data' : undefined}>
@@ -266,6 +360,18 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                 <div className="calc-card" key={side}>
                   <h3>{side === 'baseline' ? 'Current calculation' : 'Proposed calculation'}</h3>
                   <label>Name<input value={s.name} maxLength={160} onChange={e => update(side, { name: e.target.value })} /></label>
+                  {savedCalcs.length > 0 && (
+                    <label>Start from a saved calculation (optional)
+                      <select value={s.reuse?.versionId || ''} onChange={e => {
+                        const pick = savedCalcs.find(x => x.version.id === e.target.value);
+                        if (!pick) { update(side, { reuse: undefined }); return; }
+                        update(side, { mode: 'sql', sql: pick.version.raw_sql, name: pick.definition.name, reuse: { versionId: pick.version.id, sql: pick.version.raw_sql } });
+                      }}>
+                        <option value="">— Write a new calculation —</option>
+                        {savedCalcs.map(x => <option key={x.version.id} value={x.version.id}>{x.definition.name} · v{x.version.version_number}</option>)}
+                      </select>
+                    </label>
+                  )}
                   <div className="mode-switch" role="group" aria-label="Calculation editor">
                     <button type="button" aria-pressed={s.mode === 'form'} disabled={!formAllowed} onClick={() => update(side, { mode: 'form' })}>Guided form</button>
                     <button type="button" aria-pressed={s.mode === 'sql'} onClick={() => update(side, { mode: 'sql', sql: s.sql || sideSql })}>SQL editor</button>
@@ -283,6 +389,15 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                       )}
                       <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 6 }}>
                         <legend style={{ fontSize: 13, fontWeight: 600 }}>Include only records where… <span className="example">(no conditions = every record)</span></legend>
+                        {s.form.filters.length > 1 && supportsAnyMatch(contract) && (
+                          <label>Records must match
+                            <select value={s.form.match || 'all'} onChange={e => updateForm(side, { ...s.form, match: e.target.value as 'all' | 'any' })}>
+                              <option value="all">All conditions (AND)</option>
+                              <option value="any">Any condition (OR)</option>
+                            </select>
+                          </label>
+                        )}
+                        {s.form.filters.length > 1 && !supportsAnyMatch(contract) && <span className="example">All conditions must be true. This dataset was not set up for OR conditions.</span>}
                         {s.form.filters.map((f, i) => {
                           const col = columns.find(c => c.id === f.column);
                           const ops = operatorsFor(col?.type || 'string', relational);

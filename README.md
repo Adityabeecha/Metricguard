@@ -47,7 +47,7 @@ Browser (React)  ──►  API (FastAPI)  ──►  job queue  ──►  supe
 - **Calculations are restricted SQL.** One `SUM` with bounded filters, over one table or one fact table joined to one dimension table. Anything else is refused.
 - **Evidence is exact.** Every record's contribution to each total is stored; the record changes plus any unexplained difference always equal the total change. Decimals are never floating point.
 - **Saved investigations replay.** A case pins the dataset, both calculations and the result; replay must reproduce it bit for bit.
-- **Access** is per workspace with reader / analyst / owner roles. Sign in with an API key issued by an owner (`python -m scripts.issue_api_key`); keys are held in browser memory only.
+- **Access** is per workspace with reader / analyst / owner roles. Sign in with an API key issued by an owner (`python -m scripts.issue_api_key`). The key is never stored in the browser; “keep me signed in” uses an 8-hour server session instead.
 
 ## Limitations
 
@@ -55,7 +55,7 @@ Browser (React)  ──►  API (FastAPI)  ──►  job queue  ──►  supe
 - Up to 100,000 rows per table and 25 MiB per upload. Data preparation (cleaning, wider joins) happens before upload.
 - No currency or unit conversion: a declared unit is a label the analyst confirms.
 - “Explained” means every unit of the difference is traced to records; it does not mean either calculation is correct. A lower total is not automatically a loss.
-- Local, single-machine deployment. Sign-in is API-key based; there is no single sign-on.
+- Local, single-machine deployment. Sign-in is API-key based (with optional 8-hour sessions); there is no single sign-on.
 - External validation with real analyst teams has not been completed (see the release evidence).
 
 ## More detail

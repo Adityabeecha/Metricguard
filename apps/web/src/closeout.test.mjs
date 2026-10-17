@@ -180,3 +180,41 @@ test('library: single-table and two-table cases appear together and are searchab
   assert.equal(filterLibraryItems(items, { query: 'net sales', kind: 'all', status: 'all' }).length, 2);
   assert.equal(filterLibraryItems(items, { query: 'points', kind: 'all', status: 'all' })[0].id, 'i2');
 });
+
+// ---------- improvement pass ----------
+import { groupDigits, plainLimitation } from './resultSummary.ts';
+import { supportsAnyMatch } from './comparisonBuilder.ts';
+
+test('numbers: thousands separators without losing digits', () => {
+  assert.equal(groupDigits('-1000269'), '-1,000,269');
+  assert.equal(groupDigits('16008872.12'), '16,008,872.12');
+  assert.equal(groupDigits('340.00'), '340.00');
+  assert.equal(groupDigits('0.000001'), '0.000001');
+  assert.equal(groupDigits('n/a'), 'n/a');
+});
+
+test('limitations: declared unit is never contradicted', () => {
+  assert.match(plainLimitation('Unknown currency remains unknown; no verified financial loss is claimed.', 'INR'), /declared unit \(INR\)/);
+  assert.match(plainLimitation('Unknown currency remains unknown; no verified financial loss is claimed.', ''), /No unit was declared/);
+  assert.equal(plainLimitation('An endpoint SUM is NULL because no non-NULL terms matched; the gap is undefined.', 'INR'), null);
+  const s = summarizeResult({ baseline_value: '750.75', target_value: '410.75', delta_target_minus_baseline: '-340.00', residual: '0',
+    limitations: ['Unknown currency remains unknown; no verified financial loss is claimed.'] }, 'INR');
+  assert.ok(!s.uncertainties.some(u => /Unknown currency/.test(u)));
+});
+
+test('builder: OR conditions only where the dataset allows them', () => {
+  const v5 = { ...flatContract, version: 5, predicate_policy: 'flat-boolean-v1' };
+  assert.equal(supportsAnyMatch(v5), true);
+  assert.equal(supportsAnyMatch(flatContract), false);
+  assert.equal(supportsAnyMatch(relContract), false);
+  assert.equal(buildFlatSql(v5, { match: 'any', filters: [{ column: 'status', op: 'eq', value: 'pending' }, { column: 'status', op: 'eq', value: 'returned' }] }),
+    "SELECT SUM(sales_amount) FROM snapshot WHERE (status = 'pending' OR status = 'returned')");
+  assert.throws(() => buildFlatSql(flatContract, { match: 'any', filters: [{ column: 'status', op: 'eq', value: 'a' }, { column: 'region', op: 'eq', value: 'b' }] }));
+});
+
+test('result: exact changed count from the server summary on large data', () => {
+  const s = summarizeResult({ baseline_value: '3292679', target_value: '2292410', delta_target_minus_baseline: '-1000269', residual: '0' }, 'rentals',
+    { rows: [{ key: '1', delta: '-16' }], total: 17379, complete: true, changedCount: 5514 });
+  assert.equal(s.headline, 'The proposed calculation is 1,000,269 rentals lower than the current calculation.');
+  assert.equal(s.recordsSentence, '5,514 records account for the difference.');
+});

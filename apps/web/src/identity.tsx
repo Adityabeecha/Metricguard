@@ -84,7 +84,7 @@ export function ConnectionControl({ workspaceId }: Props) {
         <KeyRound size={13} /> {label}
       </span>
       {connected ? (
-        <button type="button" className="button secondary small" onClick={disconnectKey}>
+        <button type="button" className="button secondary small" onClick={() => void disconnectKey()}>
           <LogOut size={13} /> Disconnect
         </button>
       ) : null}

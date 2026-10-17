@@ -1,3 +1,4 @@
+import { groupDigits } from './resultSummary';
 export type Version={id:string;definition_id:string;version_number:number;raw_sql:string;bound_sql?:string|null;time_column:string|null;source_time_column?:string|null;mapping_id?:string|null;contract_hash?:string|null;mapping_hash?:string|null;support_state:string;support_reason:string|null;raw_hash:string;ir_hash:string|null;ir:Record<string,unknown>|null;observed_at:string;source_changed_at?:string|null;effective_from?:string|null;change_kind:string};
 export type Definition={id:string;name:string;source_label:string;owner_label:string;versions:Version[]};
 export type Snapshot={id:string;name:string;row_count:number;manifest_hash:string;source_hash:string;contract_hash?:string|null;mapping_hash?:string|null;currency:string;timezone:string;scope:string;grain:string;cutoff_at:string;schema?:Record<string,string>|null;status:string;created_at:string;preparation_manifest_hash?:string;preparation?:Record<string,unknown>;manifest?:Record<string,unknown>;execution_policy?:string;unit_label?:string|null};
@@ -10,12 +11,13 @@ export type Run={id:string;baseline_version_id:string;target_version_id:string;s
 export type DatasetContract={id:string;version:2;version_number:number;name:string;currency:string;timezone:string;scope:string;grain:string;cutoff_at:string;null_policy:'blank_nullable'|'literal_NULL'|'native_null';row_key:'order_id';entity_key:'customer_id';decimal_scale:2;schema:Record<string,string>;contract_hash:string;created_at:string};
 export type ColumnMapping={id:string;contract_id:string;version_number:number;columns:Record<string,string>;contract_hash:string;mapping_hash:string;created_at:string};
 export type Investigation={id:string;title:string;decision:string;actor_label:string;run_id:string;snapshot_id:string;baseline_version_id:string;target_version_id:string;context:Context;relationship:string;review_status:string;created_at:string};
-export type InvestigationDetail=Investigation&{snapshot:Snapshot;run:Run;baseline_version:Version;target_version:Version;replay_available:boolean};
+export type InvestigationDetail=Investigation&{record_type?:'investigation'|'draft';is_draft?:boolean;snapshot:Snapshot;run:Run;baseline_version:Version;target_version:Version;replay_available:boolean};
 export type DatasetPreview={headers:string[];declared_types:Record<string,string|null>;observed_types:Record<string,string>;sample_rows:Array<Record<string,string|null>>;source_hash:string};
 export type DatasetPreviewRecord={id:string;state:string;preview?:DatasetPreview|null;error?:{code:string;message:string}|null};
 export type DecimalColumn={name:string;precision:number;scale:number;unit_label:string};
 export type MeasureExpression={op:'sub';minuend:string;subtrahend:string};
 export type FlatContract={id:string;version:3|4|5|6|7;predicate_policy?:'flat-boolean-v1';measure_policy?:'flat-subtraction-v1'|'flat-case-v1';decimal_columns?:DecimalColumn[];measure_expression?:MeasureExpression;dimension_types?:Record<string,'string'|'boolean'|'date'|'timestamp'>;nullable_categories?:string[];version_number:number;name:string;row_key:string;measure:string;precision?:number;scale:number;categories:string[];measure_meaning:string;unit_label:string;values_comparable:boolean;scope:'entire_supplied_snapshot';null_policy:'blank_nullable'|'literal_NULL'|'native_null';contract_hash:string};
+export type EvidenceSummary={total:number;changed:number;blank_amount_rows:number;top_changes:Array<Evidence&{row_key?:string;fact_key?:string}>};
 export type FlatEvidence=Evidence&{row_key?:string;measure?:string|null;categories?:Record<string,string|null>;source_payment_ids?:string[]};
 export type RelationalContract = {
   id:string; version:1; version_number:number; mode:'relational_snapshot'; policy:'relational-snapshot-v1';
@@ -415,7 +417,16 @@ export function setApiCredential(key: string | null) {
   identityEpoch += 1;
   identityListeners.forEach(listener => listener());
 }
-export function hasApiCredential() { return apiCredential !== null; }
+// A server-side browser session (HttpOnly cookie) can also identify the user.
+// The key itself is never stored; only this flag is kept, in memory.
+let sessionSignedIn = false;
+export function setSessionSignedIn(value: boolean) {
+  if (sessionSignedIn === value) return;
+  sessionSignedIn = value;
+  identityEpoch += 1;
+  identityListeners.forEach(listener => listener());
+}
+export function hasApiCredential() { return apiCredential !== null || sessionSignedIn; }
 export function getIdentityEpoch() { return identityEpoch; }
 export function onIdentityChange(listener: () => void) {
   identityListeners.add(listener);
@@ -443,6 +454,8 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
   const has = (name: string) => Object.keys(reqHeaders).some(k => k.toLowerCase() === name);
   if (!isGlobal && activeWorkspaceId && !has('x-project-id')) reqHeaders['X-Project-Id'] = activeWorkspaceId;
   if (apiCredential && !has('x-api-key') && !has('authorization')) reqHeaders['X-API-Key'] = apiCredential;
+  // Lets the API tell this app's requests from forged cross-site ones when a session cookie is used.
+  reqHeaders['X-MetricGuard-Client'] = 'web';
   const epoch = identityEpoch;
   const response = await fetch(`/api/v1${path}`, { ...init, headers: reqHeaders });
   if (epoch !== identityEpoch) {
@@ -468,6 +481,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type ConnectedIdentity = {
   verified: boolean;
+  session?: boolean;
   user: { id: string; name: string | null; email: string | null } | null;
   project_id: string | null;
   role: 'owner' | 'analyst' | 'reader' | null;
@@ -484,6 +498,8 @@ export const api = {
     const link = document.createElement('a');link.href=url;link.download=filename;link.click();
     setTimeout(()=>URL.revokeObjectURL(url),1000);
   },
+  startSession: () => request<{ signed_in: boolean; expires_in_seconds: number }>('/auth/session', { method: 'POST' }),
+  endSession: () => request<{ signed_in: boolean }>('/auth/session', { method: 'DELETE' }),
   identity: (projectId?: string) =>
     request<ConnectedIdentity>(projectId ? `/auth/identity?project_id=${encodeURIComponent(projectId)}` : '/auth/identity'),
   setActiveWorkspace,
@@ -689,6 +705,14 @@ export const api = {
     request<{ items: Evidence[]; total: number }>(
       `/comparisons/${encodeURIComponent(id)}/evidence?offset=${offset}&limit=${limit}`
     ),
+  evidenceSummary: (id: string) => request<EvidenceSummary>(`/comparisons/${encodeURIComponent(id)}/evidence-summary`),
+  evidenceView: (id: string, view: { offset: number; limit: number; changedOnly?: boolean; q?: string; order?: 'file' | 'impact' }) => {
+    const params = new URLSearchParams({ offset: String(view.offset), limit: String(view.limit) });
+    if (view.changedOnly) params.set('changed_only', 'true');
+    if (view.q?.trim()) params.set('q', view.q.trim());
+    if (view.order === 'impact') params.set('order', 'impact');
+    return request<{ items: FlatEvidence[]; total: number }>(`/comparisons/${encodeURIComponent(id)}/evidence?${params}`);
+  },
   flatEvidence: (id: string, offset: number, limit: number) =>
     request<{ items: FlatEvidence[]; total: number }>(
       `/comparisons/${encodeURIComponent(id)}/evidence?offset=${offset}&limit=${limit}`
@@ -819,7 +843,7 @@ export const api = {
 export const latest=(definition:Definition)=>definition.versions.at(-1);
 export const versionName=(definitions:Definition[],id:string)=>{const definition=definitions.find(d=>d.versions.some(v=>v.id===id));const version=definition?.versions.find(v=>v.id===id);return definition&&version?`${definition.name} · v${version.version_number}`:id};
 export const exact = (value: string | null | undefined, currency?: string | null) =>
-  value == null ? 'Unavailable' : currency ? `${currency} ${value}` : `${value}`;
+  value == null ? 'Unavailable' : currency ? `${currency} ${groupDigits(value)}` : groupDigits(value);
 export const compact = (value: string | null | undefined, currency?: string | null) => {
   if (value == null) return 'Unavailable';
   const n = Number(value);

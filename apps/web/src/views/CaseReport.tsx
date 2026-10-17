@@ -31,7 +31,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
       .then(d => {
         if (!active) return;
         // The same endpoint also returns drafts; only a saved case (with its pinned run and context) has a report.
-        if (!d || !d.run || !d.context || !d.snapshot || !d.baseline_version || !d.target_version) { onNotSaved(); return; }
+        if (!d || d.record_type === 'draft' || d.is_draft || !d.run || !d.context || !d.snapshot || !d.baseline_version || !d.target_version) { onNotSaved(); return; }
         setDetail(d);
       })
       .catch(e => {

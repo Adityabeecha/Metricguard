@@ -79,6 +79,14 @@ users = Table('users', metadata,
     Column('is_active', Boolean, nullable=False, default=True),
     Column('created_at', String, nullable=False))
 
+# Browser sign-in sessions. Only a SHA-256 of the random token is stored; the token
+# lives in an HttpOnly cookie. Sessions expire and end when the user is deactivated.
+auth_sessions = Table('auth_sessions', metadata,
+    Column('token_hash', String, primary_key=True),
+    Column('user_id', ForeignKey('users.id'), nullable=False),
+    Column('created_at', Float, nullable=False),
+    Column('expires_at', Float, nullable=False))
+
 project_members = Table('project_members', metadata,
     Column('id', String, primary_key=True),
     Column('project_id', ForeignKey('projects.id'), nullable=False),
@@ -835,6 +843,30 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
             if row:
                 return {k: v for k, v in dict(row).items() if k != 'api_key_hash'}
         return None
+
+    def create_session(self, user_id: str, ttl_seconds: int) -> str:
+        import secrets
+        import time as _time
+        token = secrets.token_urlsafe(32)
+        now_ts = _time.time()
+        with self.engine.begin() as conn:
+            conn.execute(delete(auth_sessions).where(auth_sessions.c.expires_at < now_ts))
+            conn.execute(insert(auth_sessions).values(token_hash=hashlib.sha256(token.encode()).hexdigest(), user_id=user_id,
+                                                      created_at=now_ts, expires_at=now_ts + ttl_seconds))
+        return token
+
+    def get_user_by_session(self, token: str) -> dict | None:
+        import time as _time
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        with self.engine.connect() as conn:
+            row = conn.execute(select(users).join(auth_sessions, auth_sessions.c.user_id == users.c.id).where(
+                auth_sessions.c.token_hash == token_hash, auth_sessions.c.expires_at > _time.time(),
+                users.c.is_active == True)).mappings().first()
+            return {k: v for k, v in dict(row).items() if k != 'api_key_hash'} if row else None
+
+    def revoke_session(self, token: str) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(delete(auth_sessions).where(auth_sessions.c.token_hash == hashlib.sha256(token.encode()).hexdigest()))
 
     def get_user(self, user_id: str) -> dict:
         with self.engine.connect() as conn:

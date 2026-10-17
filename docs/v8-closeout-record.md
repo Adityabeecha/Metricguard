@@ -19,7 +19,7 @@
 | Shared key | **Done:** the four V8 final-acceptance keys (`owner/analyst/reader/outsider@metricguard.internal` in `data\v8_final_acceptance`) are deactivated. The scripts that read `.auth_keys.json` there will get 401 until re-provisioned. |
 | README screenshot | **Done:** `docs/images/result-summary.png`, captured from the seeded case. |
 
-Still open: F, G, H, I, J, K, M, P, S, the two-minute recording, a live GitHub pull-request demo and the analyst observation.
+Still open: F, G, H, I, J, K, M, P, S, the two-minute recording and a live GitHub pull-request demo. An observed analyst session is not planned: verification with real public data (below) replaces it.
 
 ## What changed
 
@@ -71,21 +71,6 @@ Run from the repository root in PowerShell. “Expected” is what a pass looks 
 - The guided form covers SUM with AND-joined conditions (and one subtraction contract); OR/NOT trees and CASE contracts use the SQL editor.
 - External analyst/team pilot gates (V2-06, V3-06) remain open.
 
-## Entry-level analyst observation (to run after checks pass)
-
-Give one analyst who has not seen MetricGuard the running demo and this single instruction: *“Find out why the proposed sales total is lower than the current one, and save your explanation.”* Do not coach. Record:
-
-| Moment | Where they hesitated | Label they misread | Help they asked for | Time |
-| --- | --- | --- | --- | --- |
-| Sign-in / first screen | | | | |
-| Choosing data | | | | |
-| Defining calculations | | | | |
-| Reading the difference | | | | |
-| Saving the explanation | | | | |
-| Finding it again later | | | | |
-
-Success: they state, in their own words, that three orders (pending, returned, cancelled) account for the 340.00 INR difference, and they save it without help.
-
 ## Public-data and adversarial verification (2026-10-17, third pass)
 
 Run against the UCI Bike Sharing dataset (Fanaee-T 2013, DOI 10.24432/C5W894, CC BY 4.0) with `scripts/verify_fresh_public_data.py`. Artifacts are in ignored `data/evaluation/fresh-public-20261017/`. This is public-data engineering verification, not analyst validation.
@@ -106,3 +91,25 @@ Run against the UCI Bike Sharing dataset (Fanaee-T 2013, DOI 10.24432/C5W894, CC
 **Fixed from this pass:** the saved report showed only the first 1,000 of 17,379 records, with no next-page control, and pointed to a "full report" export that contains only 100 rows. Supporting records now page through every record (Previous/Next, 100 per page; checked: records 1–100 → 101–200 of 17,379). Large datasets load one page up front instead of ten.
 
 **Known limitation:** each evidence page re-verifies the whole artifact (the V8.3 integrity guarantee), so on 17,379 rows a page takes about 4 seconds. The summary sentence for large datasets counts only the records loaded so far ("At least 10 of the first 100 of 17,379 records…").
+
+## Improvement pass (2026-10-17, fourth pass)
+
+| Area | Change | Verified |
+| --- | --- | --- |
+| Key issuing | `POST /api/v1/users` now requires a verified owner of at least one workspace (it previously accepted anyone who could reach the server). | `tests/test_v8_improvements.py` |
+| Workspace listing | `GET /api/v1/workspaces` returns the same filtered list as `/projects`; workspaces the caller cannot open are never listed. | test |
+| Result wording | “Unknown currency remains unknown” no longer appears for datasets with a declared unit; it is reworded in the report (engine output is unchanged, so saved results and replays are unaffected). | web tests, browser |
+| Drafts vs cases | `GET /api/v1/investigations/{id}` declares `record_type` (`investigation` or `draft`); the report hands drafts to the guided flow. | test, browser |
+| Restore | Backups are unpacked with Python's `data` filter (no links, devices or absolute paths). | backup/restore tests |
+| Runner failure modes | New live check `scripts/verify_runner_failure_modes.py`: a run past its deadline is killed (INGEST_TIMEOUT), out-of-memory and crashes fail cleanly (INGEST_FAILED), the container has no network, and no container is left behind. **Passed live.** Docker stopping during a job is still not exercised. | live Docker |
+| Evidence speed | First read of a run's evidence is fully verified as before; later pages are served from a verified index, re-checking each row's SHA-256, and any change to the file forces full re-verification. | `tests/test_v8_evidence_cache.py` (including tampering that keeps size and timestamp) |
+| Change summary | `GET /comparisons/{id}/evidence-summary`: exact changed-record and blank-amount counts and the 20 largest changes, across all rows. | test, browser |
+| Full export | `GET /comparisons/{id}/evidence.csv` streams every record after verification (spreadsheet formulas in keys are neutralised). | test, browser |
+| Record table | Supporting records: find by key, “only records that changed”, “largest change first”, previous/next and jump to page. Filtering and sorting run on the server across all rows. | browser |
+| Numbers | Exact values show thousands separators (1,000,269) without losing digits; the minus sign stays copy-safe. | web tests |
+| Guided flow replaces the old editors | **Edit comparison**, draft **Continue**, comparison runs opened from the dashboard, Metrics or Changes, and the “new investigation” links all open the guided flow, prefilled. Editing a saved case creates a new case; the original stays unchanged. Running a comparison saves a draft that appears in the list until it is saved. The old single-table and two-table editors (`InvestigationsView.tsx`, `RelationalInvestigations.tsx`) were removed. | browser: edit → change → run (−140.00) → draft listed → continue → save → draft removed |
+| Two-table upload | Built into **Start a comparison** with plain questions, visible confirmations and advanced settings tucked away. | browser: 5-row upload → 65.00 → 10.00 points, “3 records account for the difference” |
+| OR conditions | “Any condition (OR)” in the guided form for datasets set up with compound filters; other datasets explain why only AND is available. | web tests |
+| Saved calculations | Each side can start from a saved calculation; an unchanged one is reused instead of registered again. | browser |
+| Staying signed in | “Keep me signed in on this computer for 8 hours”: the server issues an HttpOnly, SameSite=Strict session cookie. The key is never stored in the browser; sessions expire, end on sign-out, and end when the key is deactivated. Cookie-authenticated changes require the web app's request header, which blocks forged requests from other local pages. | tests; browser: sign in → reload stays signed in → sign out → 401 |
+| Regression | Backend: 556 passed, 45 skipped (PostgreSQL-dependent), 0 failed. Web: 64/64. Frontend build passes. | full suites |

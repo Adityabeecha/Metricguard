@@ -25,6 +25,17 @@ export type ResultSummary = {
   uncertainties: string[];
 };
 
+/**
+ * Thousands separators for an exact decimal string, without parsing it as a float:
+ * "-1000269" → "-1,000,269", "16008872.12" → "16,008,872.12". Non-numeric text is returned unchanged.
+ */
+export function groupDigits(value: string): string {
+  const match = /^([-+]?)(\d+)(\.\d+)?$/.exec(value);
+  if (!match) return value;
+  const [, sign, whole, fraction = ''] = match;
+  return `${sign}${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${fraction}`;
+}
+
 export function isZeroDecimal(value: string | null | undefined): boolean {
   return value != null && !/[1-9]/.test(value);
 }
@@ -34,13 +45,31 @@ export function absDecimal(value: string): string {
 }
 
 function withUnit(value: string, unit: string): string {
-  return unit ? `${value} ${unit}` : value;
+  const shown = groupDigits(value);
+  return unit ? `${shown} ${unit}` : shown;
+}
+
+/**
+ * Engine limitations are fixed strings stored with each result. Reword the generic
+ * ones so they never contradict the dataset's declared unit; others pass through.
+ */
+export function plainLimitation(text: string, unit: string): string | null {
+  if (/^Unknown currency remains unknown/i.test(text)) {
+    return unit
+      ? `Amounts are compared in the declared unit (${unit}). MetricGuard does not convert units, and a difference is not verified as a financial gain or loss.`
+      : 'No unit was declared, so amounts are compared as plain numbers; a difference is not verified as a financial gain or loss.';
+  }
+  if (/^Observed equality applies only to this frozen whole snapshot/i.test(text)) {
+    return 'These totals apply only to this frozen dataset; other data could give different results.';
+  }
+  if (/^An endpoint SUM is NULL/i.test(text)) return null; // already stated in the headline
+  return text;
 }
 
 export function summarizeResult(
   result: SummaryInput,
   unit: string,
-  records?: { rows: RecordDelta[]; total: number; complete: boolean },
+  records?: { rows: RecordDelta[]; total: number; complete: boolean; changedCount?: number },
 ): ResultSummary {
   const uncertainties: string[] = [];
   const delta = result.delta_target_minus_baseline;
@@ -65,13 +94,13 @@ export function summarizeResult(
   const changedRecords = (records?.rows || []).filter(r => r.delta != null && !isZeroDecimal(r.delta));
   let recordsSentence: string | null = null;
   if (defined && records) {
-    const n = changedRecords.length;
+    const n = records.changedCount ?? changedRecords.length;
     const noun = n === 1 ? 'record accounts' : 'records account';
     if (isZeroDecimal(delta)) {
       recordsSentence = n === 0 ? 'No record changes its contribution.'
         : `${n} ${n === 1 ? 'record changes' : 'records change'} contribution, but the changes cancel out.`;
-    } else if (records.complete) {
-      recordsSentence = `${n} ${noun} for the difference.`;
+    } else if (records.complete || records.changedCount != null) {
+      recordsSentence = `${groupDigits(String(n))} ${noun} for the difference.`;
     } else {
       recordsSentence = `At least ${n} of the first ${records.rows.length} of ${records.total} records contribute to the difference.`;
     }
@@ -84,8 +113,9 @@ export function summarizeResult(
     uncertainties.push('The records show where the totals differ; they do not show which calculation is correct.');
     if (direction === 'down') uncertainties.push('A lower total is a measurement difference, not automatically a financial loss.');
   }
-  for (const limitation of result.limitations || []) {
-    if (!uncertainties.includes(limitation)) uncertainties.push(limitation);
+  for (const raw of result.limitations || []) {
+    const limitation = plainLimitation(raw, unit);
+    if (limitation && !uncertainties.includes(limitation)) uncertainties.push(limitation);
   }
 
   return { defined, direction, magnitude: defined && delta ? absDecimal(delta) : null, headline, recordsSentence, changedRecords, uncertainties };
