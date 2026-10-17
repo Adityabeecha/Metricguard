@@ -28,7 +28,12 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
     let active = true;
     setDetail(null); setProblem('');
     api.investigation(investigationId)
-      .then(d => { if (active) setDetail(d); })
+      .then(d => {
+        if (!active) return;
+        // The same endpoint also returns drafts; only a saved case (with its pinned run and context) has a report.
+        if (!d || !d.run || !d.context || !d.snapshot || !d.baseline_version || !d.target_version) { onNotSaved(); return; }
+        setDetail(d);
+      })
       .catch(e => {
         if (!active) return;
         if (e instanceof ApiError && ['NOT_FOUND', 'HTTP_404'].includes(e.code)) { onNotSaved(); return; }

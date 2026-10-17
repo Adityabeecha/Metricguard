@@ -15,6 +15,7 @@ import { GateScreen, WorkspaceChooser } from './AuthScreens';
 import { chooseWorkspaceAfterConnect, classifyLoadError, readReloadEnded, type GateState } from './authState';
 import { ConnectionControl, describeAuthError, useIdentityEpoch } from './identity';
 import { Dashboard } from './Dashboard';
+import { ErrorBoundary } from './ErrorBoundary';
 import {
   buildRouteUrl,
   parseRoute,
@@ -360,6 +361,7 @@ export function App() {
             </div>
           )}
 
+          <ErrorBoundary resetKey={window.location.pathname + window.location.search} onHome={() => navigate({ page: 'investigations' })}>
           {!data ? (
             <GateScreen
               state={gate.kind === 'ready' ? { kind: 'loading' } : gate}
@@ -523,7 +525,8 @@ export function App() {
                   investigationId={route.query.investigationId}
                   onSelectInvestigation={(invId) => {
                     if (invId) {
-                      navigate({ page: 'investigations', query: { ...route.query, investigationId: invId } });
+                      // Stay in the editor: drafts it creates are not saved cases and have no report.
+                      navigate({ page: 'investigations', query: { ...route.query, investigationId: invId, ...(invId !== 'new' ? { edit: '1' } : {}) } });
                     } else {
                       const newQuery = { ...route.query };
                       delete newQuery.investigationId;
@@ -552,6 +555,7 @@ export function App() {
               )}
             </>
           )}
+          </ErrorBoundary>
         </div>
       </main>
     </div>
