@@ -30,7 +30,9 @@ export function useRecordEvidence(run: Run | RelationalRun | null) {
         count = res.total;
         collected.push(...(res.items as AnyEvidence[]));
         seen += res.items.length;
-        if (seen >= res.total || res.items.length === 0) break;
+        // Each page read re-verifies the whole artifact, so large datasets load one
+        // page here; the rest is reached through the paged table below.
+        if (seen >= res.total || res.items.length === 0 || res.total > PAGE * MAX_PAGES) break;
       }
       setRows(collected); setTotal(count); setComplete(seen >= count);
     })().catch(e => { if (active) setProblem(e instanceof Error ? e.message : String(e)); });
@@ -76,6 +78,21 @@ export function ResultReport({ run, unit, relational, baselineLabel, targetLabel
   } : undefined), [result, unit, evidence.rows, evidence.total, evidence.complete]);
 
   const changed = evidence.rows.filter(r => r.delta != null && /[1-9]/.test(r.delta));
+  const total = evidence.total || evidence.rows.length;
+  const [pageStart, setPageStart] = useState(0);
+  const [pageRows, setPageRows] = useState<AnyEvidence[] | null>(null);
+  const [pageBusy, setPageBusy] = useState(false);
+  const [pageProblem, setPageProblem] = useState('');
+  const loadedPage = pageStart + PAGE <= evidence.rows.length || (evidence.complete && pageStart < evidence.rows.length);
+  const visibleRows = loadedPage ? evidence.rows.slice(pageStart, pageStart + PAGE) : pageRows || [];
+  const goTo = async (start: number) => {
+    setPageStart(start); setPageProblem('');
+    if (start + PAGE <= evidence.rows.length || (evidence.complete && start < evidence.rows.length)) { setPageRows(null); return; }
+    setPageBusy(true);
+    try { setPageRows((await api.flatEvidence(run.id, start, PAGE)).items as AnyEvidence[]); }
+    catch (e) { setPageProblem(e instanceof Error ? e.message : String(e)); }
+    finally { setPageBusy(false); }
+  };
   const nullRows = evidence.rows.filter(r => r.baseline_null_term || r.target_null_term);
   const show = (v: string | null) => (v == null ? 'Undefined (no values)' : unit ? `${v} ${unit}` : v);
 
@@ -130,7 +147,8 @@ export function ResultReport({ run, unit, relational, baselineLabel, targetLabel
               </tbody>
             </table>
           </div>
-          {changed.length > 10 && <small>Showing 10 of {changed.length}. All records are under “Supporting records”.</small>}
+          {changed.length > 10 && <small>Showing 10 of {changed.length}{evidence.complete ? '' : ' found so far'}. All records are under “Supporting records”.</small>}
+          {!evidence.complete && <small> These are drawn from the first {evidence.rows.length.toLocaleString()} of {total.toLocaleString()} records.</small>}
         </div>
       )}
 
@@ -143,14 +161,14 @@ export function ResultReport({ run, unit, relational, baselineLabel, targetLabel
 
       <div className="detail-stack">
         <details>
-          <summary>Supporting records ({evidence.total || evidence.rows.length})</summary>
+          <summary>Supporting records ({total.toLocaleString()})</summary>
           <div>
             <p>Every record in the dataset, including those excluded by both calculations. Change = proposed contribution − current contribution.</p>
             <div className="table-scroll">
               <table>
                 <thead><tr><th>Record</th><th>Current</th><th>Proposed</th><th>Change</th></tr></thead>
                 <tbody>
-                  {evidence.rows.map(r => (
+                  {visibleRows.map(r => (
                     <tr key={recordKey(r)}>
                       <td className="mono-cell">{recordKey(r)}</td>
                       <td>{inclusion(r, 'baseline')}{r.baseline_contribution != null && ` · ${r.baseline_contribution}`}</td>
@@ -161,9 +179,17 @@ export function ResultReport({ run, unit, relational, baselineLabel, targetLabel
                 </tbody>
               </table>
             </div>
-            {!evidence.complete && evidence.total > evidence.rows.length && (
-              <p>Showing the first {evidence.rows.length} of {evidence.total}. Download the full report for the rest.</p>
+            {total > PAGE && (
+              <div className="report-actions" role="group" aria-label="Record pages">
+                <button type="button" className="button secondary small" disabled={pageBusy || pageStart === 0} onClick={() => void goTo(Math.max(0, pageStart - PAGE))}>Previous</button>
+                <span role="status">
+                  {pageBusy ? 'Loading…' : `Records ${(pageStart + 1).toLocaleString()}–${Math.min(pageStart + PAGE, total).toLocaleString()} of ${total.toLocaleString()}`}
+                </span>
+                <button type="button" className="button secondary small" disabled={pageBusy || pageStart + PAGE >= total} onClick={() => void goTo(pageStart + PAGE)}>Next</button>
+              </div>
             )}
+            {pageProblem && <p className="disabled-reason">This page could not be loaded: {pageProblem}</p>}
+            {total > PAGE && <p>Each page is checked against the stored evidence hash before it is shown, so large datasets take a moment per page. Downloaded reports include the first 100 records.</p>}
           </div>
         </details>
 

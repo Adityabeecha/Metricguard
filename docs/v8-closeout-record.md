@@ -85,3 +85,24 @@ Give one analyst who has not seen MetricGuard the running demo and this single i
 | Finding it again later | | | | |
 
 Success: they state, in their own words, that three orders (pending, returned, cancelled) account for the 340.00 INR difference, and they save it without help.
+
+## Public-data and adversarial verification (2026-10-17, third pass)
+
+Run against the UCI Bike Sharing dataset (Fanaee-T 2013, DOI 10.24432/C5W894, CC BY 4.0) with `scripts/verify_fresh_public_data.py`. Artifacts are in ignored `data/evaluation/fresh-public-20261017/`. This is public-data engineering verification, not analyst validation.
+
+| Area | Result |
+| --- | --- |
+| Source check | 17,379 hourly records reconcile exactly to all 731 daily totals before import. |
+| Single-table comparison | 3,292,679 → 2,292,410 workday rentals (−1,000,269); all 17,379 row contributions match an independent calculation; saved-case replay reproduces the evidence hash. |
+| Two-table comparison | Same workday result through fact + calendar dimension; a duplicate dimension key is rejected. Synthetic NULL/unmatched joins: 11.21 → 2.37 (−8.84), replay hash identical. |
+| Subtraction and conditional SUM | Daily subtraction 620,017 → 303,285 (−316,732) and CASE WHEN 2,292,410 → 1,542,338 (−750,072) pass, each with replay. |
+| Date boundary, empty and all-NULL SUM | Pass once the harness used explicit `DATE` literals; empty or all-NULL totals are undefined, not 0. |
+| Exact decimals | Large positive and negative values that nearly cancel reconcile exactly. |
+| Refusals and malformed input | AVG, unregistered column, GROUP BY, arithmetic and multiple statements are refused; duplicate key, NULL key, over-scale decimal, NaN and missing measure are rejected at import. |
+| Browser | Guided flow completes on the real dataset (choose data → workday filter → run → review → save); invalid-key recovery and Add-data-source dialog keyboard behaviour pass. |
+| Backend regression | 548 passed, 45 skipped. Web: 60/60. |
+| Live Docker runner (`scripts.verify_live_runner`) | **Passed:** CSV, Parquet and mapped imports (−6,000,000.00, residual 0), mapped-case replay, invalid Parquet refused. Isolation observed: no network, read-only root, no capabilities, UID 10001, 1 GiB memory, 64 PIDs. Not covered live: run-deadline timeout, out-of-memory kill, container crash mid-run, Docker stopping during a job. |
+
+**Fixed from this pass:** the saved report showed only the first 1,000 of 17,379 records, with no next-page control, and pointed to a "full report" export that contains only 100 rows. Supporting records now page through every record (Previous/Next, 100 per page; checked: records 1–100 → 101–200 of 17,379). Large datasets load one page up front instead of ten.
+
+**Known limitation:** each evidence page re-verifies the whole artifact (the V8.3 integrity guarantee), so on 17,379 rows a page takes about 4 seconds. The summary sentence for large datasets counts only the records loaded so far ("At least 10 of the first 100 of 17,379 records…").
