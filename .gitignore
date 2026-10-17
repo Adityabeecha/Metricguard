@@ -35,3 +35,6 @@ playwright-report/
 /.vscode/
 /.claude/settings.local.json
 apps/web/tsconfig.tsbuildinfo
+
+# Graphify extraction cache: kept locally for refreshes, not published.
+graphify-out/cache/

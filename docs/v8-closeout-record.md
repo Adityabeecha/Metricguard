@@ -2,7 +2,24 @@
 
 **Date:** 2026-10-17. **Scope:** finishing work before pausing at V8. No new analytical capability; the comparison engine, contracts, evidence formats and authorization rules are unchanged.
 
-**Verification status: implemented, not yet verified.** Per the current testing preference (AGENTS.md, 2026-09-28), the implementer did not run the test suites, the app or Docker. Only the web production build (`npm run build`, which includes the TypeScript check) and Python/PowerShell syntax checks were run, and they passed. Every behavioural check below is **open** until you run it. Nothing here should be reported as passed until it has been.
+**Verification status (updated 2026-10-17, second pass, run at the user's request):** partially verified. Results below; every check not listed as passed is still open.
+
+| Check | Result |
+| --- | --- |
+| A Backend tests | **Passed:** 547 passed, 45 skipped (PostgreSQL-dependent), 0 failed. Later: the 14 backup/restore/access tests, including the new restore regression test, pass after the restore fix. |
+| B Web unit tests | **Passed:** 60/60, including 17 new closeout tests. |
+| C Web build | **Passed.** |
+| D Compose config | **Passed** (exit 0). |
+| E Startup + seed | **Passed with Docker running:** API and supervisor started from `data\demo-app`; both demo cases seeded and matched the independent `Decimal` totals (750.75 → 410.75 INR, −340.00, unexplained 0; 65.00 → 10.00 points, −55.00, unexplained 0). Note: when `mg.ps1 start` is run with its output captured by another process (piped), the call does not return because the started API/supervisor inherit the output handle; interactive use in a terminal was not separately checked. |
+| L Guided totals (engine) | Engine totals verified through the seeder; the guided form itself was not clicked through. |
+| N Refusal | **Passed:** `SELECT AVG(sales_amount) FROM snapshot` was refused and no definition was stored. Editor retention after refusal was not clicked through. |
+| O Discovery and replay | **Passed in the browser:** both case types listed together with type/status filters; the saved case opened on results (“…340.00 INR lower… 3 records account for the difference”, R003/R004/R007); **Replay saved inputs** reported an exact reproduction. |
+| Q 375px overflow | **Passed after fixes:** dashboard, start, investigations, saved report, data, metrics, changes and settings all measured `scrollWidth = 375` at a 375×812 viewport. Fixes: mobile containment rules and a positioned table scroller in `closeout.css` (an absolutely positioned screen-reader label was escaping its scroller). |
+| R Restored-case replay through Docker | **Passed after a fix:** restoring the default workspace into a fresh installation failed with a duplicate owner-membership error (`services/api/backup.py`); fixed and covered by `tests/test_v8_restore_default_workspace.py`. `scripts/verify_restored_replay.py` then backed up the demo workspace, restored it into an empty `data\restore-check`, started a separate API + supervisor on that copy and replayed both cases: identical totals and identical evidence SHA-256 (`761d2b86…a7`, `36c87d23…65`). Report: `data/evaluation/restored_replay_report.json`. |
+| Shared key | **Done:** the four V8 final-acceptance keys (`owner/analyst/reader/outsider@metricguard.internal` in `data\v8_final_acceptance`) are deactivated. The scripts that read `.auth_keys.json` there will get 401 until re-provisioned. |
+| README screenshot | **Done:** `docs/images/result-summary.png`, captured from the seeded case. |
+
+Still open: F, G, H, I, J, K, M, P, S, the two-minute recording, a live GitHub pull-request demo and the analyst observation.
 
 ## What changed
 
@@ -45,11 +62,10 @@ Run from the repository root in PowerShell. “Expected” is what a pass looks 
 
 ## Known limitations and remaining gaps
 
-- **Not verified:** everything in the table above. In particular, the global dialog manager and the gate screens have only been type-checked.
-- **Screenshot:** the README has a placeholder comment; capture `docs/images/result-summary.png` after check O.
+- **Not verified:** the checks still marked open above. In particular, the global dialog manager and the sign-in/access screens have only been type-checked and unit-tested.
 - **Two-minute recording:** not produced. The [demo script](demo-script.md) is ready for recording.
 - **GitHub Action on a pull request:** not demonstrated (needs repository access and a token with `pull-requests: write`).
-- **Leaked test key:** the key shared in an earlier chat lives in an existing data directory. Deactivate it with `python -m scripts.issue_api_key --data-dir <that dir> --deactivate <its email>` and issue a new one before distributing anything. The new `data\demo-app` directory starts with no keys.
+- **Leaked test key:** deactivated (see the table above). The new `data\demo-app` directory starts with no keys.
 - **Persistent sign-in** and a **visual calculation builder** beyond SUM/filter were intentionally not built (optional per scope).
 - Draft investigations still open in the previous editor; the plain-language summary is on the guided flow and saved-case reports, not inside that editor.
 - The guided form covers SUM with AND-joined conditions (and one subtraction contract); OR/NOT trees and CASE contracts use the SQL editor.
