@@ -1,0 +1,90 @@
+# MetricGuard v2 local implementation and release evidence
+
+The original planning pack describes one v1. This matrix tracks the later **v2 — Real-data investigations** scope in [the roadmap](next-versions-roadmap.md). V2-01 through V2-05 are local implementation paths and are fully verified. **V2 engineering/product requirements complete; V2-06 external real-world validation remains open.** Because external organizations' sanitized real business datasets, real analyst observations, completion-time measurements, and independent second-analyst replays cannot be provided internally, V2-06 cannot be claimed as an accepted real-world pilot. Synthetic pilot rehearsal, scale checks, and all local engineering requirements pass.
+
+| ID | Local implementation and evidence | State |
+| --- | --- | --- |
+| V2-01 Contract | `v2_contract.py` validates the fixed nine-role schema, row/entity keys, decimal scale, NULL policy and declared currency/timezone/scope/grain/cutoff. `Store` records content hashes and versions without rewriting v1 manifests. `tests/test_v2_contract.py` covers hash and refusal behavior. | Local implementation verified |
+| V2-02 Preview and mapping | Explicit one-to-one mappings are stored by contract; the fixed runner previews at most five sample rows and validates mapped CSV or Parquet into an immutable snapshot. Source, contract and mapping hashes appear in the manifest. Tests cover renamed and extra columns, file types, duplicate keys, currency, preview API and upload path. | Local implementation verified, including live Docker |
+| V2-03 Bound definitions | `v2_binding.py` rewrites approved source identifiers to canonical roles before the restricted parser. Version records keep source and bound SQL and hash identities; cross-mapping comparison and unknown identifiers fail. | Local implementation verified |
+| V2-04 Guided investigations | `V2Investigations.tsx` provides contract, preview, mapping, import, SQL, context, comparison and saved-case steps. API records local decisions with pinned run, version, snapshot and context IDs; reopening and replay use those IDs. The live Docker check reopens and replays a pinned synthetic case; browser smoke confirms the guided page renders and v1 definitions stay out until a v2 mapping is selected. | Local implementation verified; independent second-analyst real-case replay pending |
+| V2-05 Evidence artifacts | The isolated runner writes compact summary JSON plus bounded JSONL row evidence. The supervisor validates schema, counts, hash, row deltas and size before publishing; the API verifies and pages at most 100 rows, while JSON/HTML exports state included and omitted rows. Historical v1 inline evidence remains readable. A 100,000-row mapped Docker comparison passes with paged evidence and bounded export. | Local implementation verified, including synthetic scale workflow |
+| V2-06 Pilot | Synthetic pilot rehearsal with three deterministic scenarios (800, 600, 1,000 rows), clean-session replay, and five refusal patterns passed with zero residuals and full evidence reconciliation ([simulation report](../data/pilot/simulation-report.json)). Does not satisfy the requirement for real external business data and second-analyst observation. | **V2 engineering/product requirements complete; V2-06 external real-world validation remains open** |
+
+For hands-on user testing, a clean isolated workspace runs at `http://127.0.0.1:8001/` with its own `data/live-workspace` directory. Its health endpoint reports `mode: isolated` and `runner_available: true`; the initial inventory has zero snapshots, definitions, contracts and mappings. The browser opens Guided investigations first, accepts the user's local CSV/Parquet extract, and offers editable starter SQL after mapping approval. This checks readiness for a real input; V2-06 still needs the user's independent cases and observed pilot results.
+
+## Reproducible local evidence
+
+`python -m scripts.evaluate_v2 --output data/evaluation/v2_report.json` passed for two independently constructed **synthetic** source-column layouts, each with a separate Decimal oracle. “Synthetic returns” produced baseline `200.00`, target `150.00`, target-minus-baseline `-50.00` and residual `0.00`. “Synthetic collections” produced `170.00`, `190.00`, `+20.00` and `0.00`. The report records three rows, source, contract and mapping hashes per case and explicitly says `evidence_kind: synthetic_development_rehearsal` and `pilot_acceptance: not_evaluated`. Its cases are development fixtures, not two independently sourced real investigations.
+
+The final full Python suite passed **140 tests** with two dependency deprecation warnings. The frontend passed five Node workflow tests and `npm run build --prefix apps/web` (TypeScript plus Vite). The build script uses Vite's runner config loader to work within this filesystem sandbox. Compose configuration passed. The rebuilt fixed Docker image passed the local verifier: v1 golden CSV and Parquet comparison, invalid Parquet refusal, v2 mapped preview/CSV comparison/Parquet import, synthetic saved-case reopen/replay, and an eight-row v2 artifact served through the evidence page and JSON export. The verifier also checks the container's no-network, read-only-root, non-root, capability and resource limits. The local browser showed the guided page and its demo-mode guard; after a UI correction, no v1 definitions appeared as bound choices before selecting a v2 mapping. [The live report](../data/evaluation/live_runner_report.json) contains actual hashes and check output. Prior v1 102-test results belong to [v1 evidence](v1-release-evidence.md), not this v2 check.
+
+## Limits and acceptance still required
+
+The supported v2 contract maps source names onto the existing nine-role flat analytical table. It does not accept arbitrary executable fields, joins, new aggregates, timezone conversion, currency conversion or grain conversion. CSV and Parquet NULL/type policies are explicit. The API remains a local workbench without authenticated ownership or remote upload authorization; do not expose the supervisor as a public execution service. A case decision is a self-declared local note.
+
+The [analyst pilot kit](pilot/README.md) now starts with observing an existing investigation, then records case fit, whole-workflow effort, independent endpoint checks, reviewer understanding and a post-pilot decision. It treats original report values separately from MetricGuard's reproduced values. The guided UI labels reproduced totals and preserves a refused SQL draft; the evidence view identifies distinct-customer membership and clarifies that row deltas describe the overall endpoint gap, not an individual ordered bridge step. These preparation and wording changes do not close V2-06.
+
+The original [Olist external public-data evaluation](pilot/olist-public-case.md) independently calculated a full-snapshot payment-status gap but found the case unsupported by the fixed nine-role retail contract. At that stage it produced no MetricGuard run or analyst observation. The later separate flat-policy execution below does not close V2-06.
+
+The 2026-09-24 [100,000-row mapped Docker check](../data/evaluation/v2_scale_report.json), reproduced with `python -m scripts.verify_v2_scale`, passed against an independent CSV/Decimal oracle: baseline `81712636.58`, target `72217099.74`, delta `-9495536.84`, residual `0.00`. Upload plus isolated ingestion took 6.4327 seconds; isolated comparison plus verified publication took 9.607 seconds; the verified last page took 0.879 seconds. The stored result was 6,863 bytes with no embedded rows; its 100,000-row artifact was 22,771,212 bytes. The last page returned 50 rows and JSON export declared 100 included and 99,900 omitted rows. The separate artifact test also passes.
+
+Splitting evidence reduces the stored result and page response, but the comparison core still constructs row evidence before the runner writes JSONL, and each page verifies the full artifact. The scale measurement is one synthetic workload on this machine, not concurrent-service capacity or real-case pilot evidence. The bounded export intentionally omits row detail beyond its reported included count; use the paged evidence route to inspect more rows.
+
+**To close the external V2-06 real-world validation gate**, obtain at least two independently sourced sanitized real cases from external organizations and separately calculated expected totals; run the workflow and compare endpoints and residuals to those oracles; record unsupported/refused inputs, completion time and wrong conclusions; then have another analyst reopen and replay a pinned case. Publish raw sample counts and limitations alongside the results. The synthetic rehearsal verifies that all engineering requirements are complete, but this external real-world gate remains open.
+
+## Separate flat-snapshot policy coverage experiment
+
+Contract version 3 and execution policy `flat_snapshot_v1` add a narrow, separately pinned whole-snapshot SUM mode. It accepts a unique row key, one declared exact-decimal measure, and registered categorical equality/IN filters. It does not relax the nine-role retail policy or reinterpret historical reports. The fixed Docker supervisor, immutable snapshot store, bounded JSONL evidence, paged reads, bounded export, and saved-case replay are reused. The parser and comparison engine are separate from the retail date/refund bridge. The browser exposes a distinct Flat snapshots workflow with previewed sample values, contract confirmation, SQL entry, evidence, and replay.
+
+Flat admission is capped at **100,000 rows**, **256 characters** per key/category value, at most **eight categories**, and decimal scale at most **18**. The 25 MiB upload limit also applies. These bounds keep accepted extracts within the current in-memory comparison and evidence-publication design; this mode is not a general large-scale analytics engine.
+
+The [Olist public-data evaluation](pilot/olist-public-case.md) was originally unsupported under the retail policy. A separate external preparation now produces a flat extract and source-row lineage. The actual isolated API/runner path produced **16,008,872.12** baseline, **15,599,675.73** target, and **−409,196.39** target-minus-baseline, matching the independent evaluator. All **99,441** row deltas reconciled; the one order without payment records remained NULL. A saved case replayed with the same result. See [the final local verification report](../data/evaluation/flat-olist-final/verification-report.json). This is a public-data coverage check, not an analyst pilot, an original-dashboard comparison, or V2-06 acceptance. The currency is unknown and remains labelled as such.
+
+A second four-row fixture with `item_id`, `score`, and `stage` independently produced baseline **11.25**, target **9.25**, and gap **−2.00** through API, supervisor, runner, evidence, export, and saved replay. Focused tests refuse duplicate keys, invalid decimals, oversized keys, missing registered fields and unsupported SQL; NULL and empty SUM semantics are checked. The 2026-09-24 full local suite passed **157 tests**; the web production build and Compose configuration passed. Browser inspection opened the saved Olist case, paged its evidence, and initiated a successful pinned replay. The existing retail suite remained passing. These checks do not measure analyst effort, understanding, or product demand.
+
+## Fresh browser workflow and preparation provenance, 2026-09-25
+
+A separate empty `data/evaluation/flat-olist-browser` workspace completed the Olist flat workflow through browser controls: file chooser upload and preview, three-field contract and whole-snapshot/NULL/unit confirmations, optional external-preparation manifest attachment, isolated import, two SQL registrations, comparison, evidence page 1–100 and page 101–200, saved case, page reload, reopen, and pinned replay. The browser displayed **16,008,872.12** baseline, **15,599,675.73** target, and **−409,196.39** target-minus-baseline; replay succeeded with the same gap. [The browser verification record](../data/evaluation/flat-olist-browser/browser-verification.json) gives the new snapshot, run, case, and replay IDs and separates browser observations from API artifact checks. This is a fresh local workflow check, not analyst validation.
+
+The prepared CSV SHA-256 is `3c50562e66e8c172b3ff29c8738cd3503c52854effbe95e3b00f46f36e9af87a`. The attached preparation manifest SHA-256 is `9f36358e0db3aae1d5000b440cb39457b84b094ade9c485bb79465353fcc5792`; it records the external lineage CSV hash, both original source-file hashes, preparer script/version, and transformation summary. Its declared prepared-file hash was checked against uploaded bytes. The saved case pins the preparation-manifest hash, and reopen/replay retain the same immutable snapshot. The JSON export includes the provenance and reports 100 of 99,441 evidence rows included, 99,341 omitted. The browser export link was clicked, but its automation did not emit a download-completion event; export content and attachment headers were verified separately through the API. Original sources and lineage are referenced by hash, not retained or independently recalculated by MetricGuard. Hash identity does not establish semantic correctness of preparation. Older cases remain readable and show missing preparation metadata as unavailable.
+
+The browser walkthrough exposed blank SQL editors after reopening, stale results after changing inputs, raw membership wording, unclear export bounds, no selected-manifest feedback, and a flat case appearing in the retail investigation list. Narrow UI changes addressed these. The refreshed browser restored pinned SQL, hid the old result after a draft change, and preserved an unsupported SQL draft while showing its validation error. The UI now labels the signed gap, inclusion, export's first 100 rows, and unknown currency more directly.
+
+The **100,000-row limit is a current implementation bound** for in-memory comparison and evidence publication, not a throughput claim. A clearly synthetic fixture with exactly 100,000 rows passed core ingestion. A separate synthetic 100,001-row file was refused by the live isolated import with `TOO_MANY_ROWS` and “Flat snapshot exceeds 100000 rows”; it produced no snapshot ID, and the workspace snapshot count stayed at one. The 2026-09-25 full Python suite passed **159 tests**, the web production build passed, and Compose configuration passed. These checks do not close V2-06 or verify a second public case.
+## Synthetic pilot rehearsal, 2026-09-25
+
+`python -m scripts.run_pilot_simulation` ran three seeded synthetic scenarios through the complete flat-snapshot workflow (contract, upload with preparation manifest, ingestion, definition registration, comparison, evidence verification, export, save, reopen, same-session replay, and clean-session replay) plus a five-pattern unsupported SQL refusal check. The runner executes in-process via `InProcessLauncher` (same pattern as the test suite), not Docker.
+
+| Scenario | Rows | Baseline | Target | Gap | Residual | Evidence reconciles | Same-session replay | Clean-session replay |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| returns (revenue status filter) | 800 | 181,517.00 | 208,146.00 | 26,629.00 | 0 | Yes (800 rows) | Match | Match |
+| regions (test market exclusion) | 600 | 614,000.00 | 638,877.00 | 24,877.00 | 0 | Yes (600 rows) | Match | Match |
+| status (pending transactions) | 1,000 | 315,224.00 | 375,865.00 | 60,641.00 | 0 | Yes (1,000 rows) | Match | Match |
+
+Five unsupported SQL patterns (JOIN, subquery, AVG, wrong table, undeclared category) were correctly refused with 422 responses.
+
+All timings in the [simulation report](../data/pilot/simulation-report.json) are **machine execution timings** measured with `time.perf_counter()` on the host. Average machine execution time per scenario: **1.53 s**; total rehearsal: **5.30 s**. These are not analyst completion times.
+
+Clean-session replay creates a fresh `Store` and `TestClient` against the same persisted database, simulating application close-and-reopen. All three scenarios replayed successfully with identical oracle-matching results in the clean session.
+
+The scenario generator (`scripts/generate_pilot_scenarios.py`) creates deterministic synthetic datasets with seeded `random.seed()` values. Each scenario includes a CSV snapshot, preparation manifest, lineage CSV, and oracle JSON with independently calculated expected totals. The pilot runner validates MetricGuard's output against these oracles.
+
+**V2 engineering/product requirements complete; V2-06 external real-world validation remains open.**
+
+The synthetic rehearsal verifies that all local application pipelines, engines, stores, supervisors, runners, evidence serializers, pagers, exporters, clean replays, and refusal handlers work deterministically as designed. However, the external V2-06 validation gate remains open because the following real-world requirements cannot be satisfied synthetically:
+
+- Independently sourced sanitized real business datasets from external organizations.
+- Measured human analyst completion times or understanding.
+- Second-analyst human replay observations.
+- Wrong-conclusion measurements in actual analyst workflows.
+- Analyst-discovered unsupported cases.
+
+Whenever qualifying external real cases and analyst time can be provided, they can be evaluated against the prepared pilot kit and appended here.
+
+The 2026-09-25 full Python suite passed **159 tests**, the web production build (TypeScript + Vite) passed, and Compose configuration passed.
+
+
+### Later typed flat-contract compatibility note - 2026-09-28
+
+The separate flat-snapshot mode now accepts FlatContract v4 logical dimensions and retains v3 hash/replay behavior. This extends the later flat policy, not the original nine-role v2 retail contract. See [V6 inequality acceptance](v5-release-evidence.md#flatcontract-v4--v6-inequality-gate-2026-09-28). V2-06 analyst validation remains open; `v6_orders` is synthetic.

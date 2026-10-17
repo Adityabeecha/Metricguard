@@ -1,0 +1,12 @@
+flowchart TD
+    U["Analyst in React interface"] --> A["FastAPI application"]
+    A --> P["PostgreSQL records and jobs"]
+    A --> I["Validated snapshot ingestion"]
+    I --> F["Immutable snapshot files"]
+    P --> W["Trusted local supervisor"]
+    W --> R["Isolated DuckDB runner"]
+    F --> R
+    R --> E["Evidence bundle"]
+    E --> W
+    W --> P
+    A --> V["Results and review"]

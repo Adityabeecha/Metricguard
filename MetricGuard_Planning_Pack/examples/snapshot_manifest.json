@@ -1,0 +1,33 @@
+{
+  "specification_example": true,
+  "snapshot_id": "orders_golden_20260902",
+  "logical_table": "orders",
+  "source_file": "orders_golden.csv",
+  "source_bytes_sha256": "4c84ad20e449c8a4c15163b4cf4ef67707499446792cbf853171e6a8c26c088e",
+  "row_count": 8,
+  "primary_key": [
+    "order_id"
+  ],
+  "grain": "one_row_per_order_id",
+  "currency": "INR",
+  "business_timezone": "Asia/Kolkata",
+  "date_semantics": "business_date",
+  "extraction_cutoff": "2026-09-02",
+  "csv_null_policy": {
+    "payment_date": "empty_field_is_null",
+    "status": "empty_field_is_null",
+    "refund_amount": "empty_field_is_null"
+  },
+  "schema": {
+    "order_id": "VARCHAR NOT NULL",
+    "customer_id": "VARCHAR",
+    "order_date": "DATE",
+    "payment_date": "DATE NULL",
+    "status": "VARCHAR NULL",
+    "payment_status": "VARCHAR",
+    "order_amount": "DECIMAL(18,2)",
+    "refund_amount": "DECIMAL(18,2) NULL",
+    "currency": "VARCHAR"
+  },
+  "note": "This manifest identifies the CSV specification fixture. A materialized DuckDB snapshot and its hash will be created and verified by the future implementation."
+}

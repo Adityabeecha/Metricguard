@@ -1,0 +1,561 @@
+{
+  "id": "a1c5eaab-1b34-4843-9b49-46cda4a72fd6",
+  "project_id": "local-retail",
+  "baseline_version_id": "91ac221f-d773-489f-b1bd-756fafe2298f",
+  "target_version_id": "49a99987-bcc7-49a6-a185-3833c60e75dd",
+  "snapshot_id": "06e5fb7a-3b4b-4009-83f3-0edf5c865447",
+  "state": "succeeded",
+  "execution_mode": "isolated",
+  "attempt": 1,
+  "lease_owner": "local-8196",
+  "lease_expires_at": null,
+  "heartbeat_at": 1790653026.5468073,
+  "cancel_requested": false,
+  "created_at": "2026-09-29T03:37:02.127130+00:00",
+  "started_at": "2026-09-29T03:37:03.356045+00:00",
+  "completed_at": "2026-09-29T03:37:07.643257+00:00",
+  "result": {
+    "baseline_value": "150.00",
+    "target_value": "30.00",
+    "delta_target_minus_baseline": "-120.00",
+    "absolute_gap": "120.00",
+    "relative_change_percent_display": null,
+    "residual": "0",
+    "currency": null,
+    "unit_label": "points",
+    "measure_meaning": "Row amount",
+    "numeric_tolerance": "0",
+    "method": "flat_filter_change",
+    "definition_status": "different",
+    "value_status": "defined",
+    "explanation_status": "complete_eligibility_change",
+    "steps": [
+      {
+        "rule": "eligibility_predicate",
+        "baseline": null,
+        "target": {
+          "op": "and",
+          "children": [
+            {
+              "op": "or",
+              "children": [
+                {
+                  "op": "predicate",
+                  "predicate": {
+                    "field": "status",
+                    "op": "eq",
+                    "values": [
+                      "completed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                {
+                  "op": "predicate",
+                  "predicate": {
+                    "field": "status",
+                    "op": "eq",
+                    "values": [
+                      "settled"
+                    ],
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            {
+              "op": "predicate",
+              "predicate": {
+                "field": "region",
+                "op": "neq",
+                "values": [
+                  "test"
+                ],
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "changed": true,
+        "position": 1,
+        "previous_value": "150.00",
+        "next_value": "30.00",
+        "value_before": "150.00",
+        "value_after": "30.00",
+        "contribution": "-120.00"
+      }
+    ],
+    "shapley": null,
+    "evidence": [
+      {
+        "order_id": "BR1",
+        "baseline_included": true,
+        "target_included": true,
+        "baseline_contribution": "10.00",
+        "target_contribution": "10.00",
+        "delta": "0.00",
+        "baseline_null_term": false,
+        "target_null_term": false,
+        "membership": "included_in_both"
+      },
+      {
+        "order_id": "BR2",
+        "baseline_included": true,
+        "target_included": true,
+        "baseline_contribution": "20.00",
+        "target_contribution": "20.00",
+        "delta": "0.00",
+        "baseline_null_term": false,
+        "target_null_term": false,
+        "membership": "included_in_both"
+      },
+      {
+        "order_id": "BR3",
+        "baseline_included": true,
+        "target_included": false,
+        "baseline_contribution": "30.00",
+        "target_contribution": "0",
+        "delta": "-30.00",
+        "baseline_null_term": false,
+        "target_null_term": false,
+        "membership": "baseline_only"
+      },
+      {
+        "order_id": "BR4",
+        "baseline_included": true,
+        "target_included": false,
+        "baseline_contribution": "40.00",
+        "target_contribution": "0",
+        "delta": "-40.00",
+        "baseline_null_term": false,
+        "target_null_term": false,
+        "membership": "baseline_only"
+      },
+      {
+        "order_id": "BR5",
+        "baseline_included": true,
+        "target_included": false,
+        "baseline_contribution": "50.00",
+        "target_contribution": "0",
+        "delta": "-50.00",
+        "baseline_null_term": false,
+        "target_null_term": false,
+        "membership": "baseline_only"
+      }
+    ],
+    "definition_differences": [
+      {
+        "rule": "eligibility_predicate",
+        "baseline": null,
+        "target": {
+          "op": "and",
+          "children": [
+            {
+              "op": "or",
+              "children": [
+                {
+                  "op": "predicate",
+                  "predicate": {
+                    "field": "status",
+                    "op": "eq",
+                    "values": [
+                      "completed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                {
+                  "op": "predicate",
+                  "predicate": {
+                    "field": "status",
+                    "op": "eq",
+                    "values": [
+                      "settled"
+                    ],
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            {
+              "op": "predicate",
+              "predicate": {
+                "field": "region",
+                "op": "neq",
+                "values": [
+                  "test"
+                ],
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "changed": true,
+        "position": 1,
+        "previous_value": "150.00",
+        "next_value": "30.00",
+        "value_before": "150.00",
+        "value_after": "30.00",
+        "contribution": "-120.00"
+      }
+    ],
+    "provenance": {
+      "execution_policy": "flat-snapshot-v1",
+      "baseline_ir_hash": "16a0f20ce4fc2e06014d43a9269fb3434cced46f966865ea41ba41ff978e5193",
+      "target_ir_hash": "a60ac2889cecfc1cfc965be0a6af008ac9925a6993453ea23fc47a6e69ea8e4d",
+      "snapshot_manifest_hash": "bbb9f7290fe2c7ae752122e5fa9860ec0f22c872c53377eb4d95d68515628d19",
+      "database_hash": "a081484ee73827ffc947ec640e0e517e21da16caec8424c3c3e4af7fc507e037",
+      "source_hash": "9ed91c64b1467058d05331d1ab2891979b1ddca9ca11ecee45c8754b4d1c07e9",
+      "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+      "parser_version": "30.19.0",
+      "duckdb_version": "1.5.5",
+      "engine_version": "flat-snapshot-v1",
+      "predicate_policy": "flat-boolean-v1",
+      "contract_version": 5,
+      "context": {
+        "mode": "flat_snapshot",
+        "scope": "entire_supplied_snapshot",
+        "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+        "unit_label": "points",
+        "values_comparable": true
+      },
+      "baseline_query_hash": "1c8ede7e7029474a11ea40b154ae61889d9b63dd7f4ac94e5cff533154aefd6d",
+      "target_query_hash": "517d0331633bc0b2fe956e91ca5fad0fb0015c7fef80884f26b1fa65c2840c1e",
+      "query_count": 2,
+      "elapsed_ms": 91,
+      "evidence_unit": "row_key"
+    },
+    "limitations": [
+      "Observed equality applies only to this frozen whole snapshot.",
+      "Unknown currency remains unknown; no verified financial loss is claimed."
+    ],
+    "evidence_artifact": {
+      "sha256": "35ec41486b1d66a506aaee45daa7186391312ef03971badc0f929c18ee66a4ff",
+      "row_count": 5,
+      "byte_count": 1128,
+      "delta_sum": "-120.00"
+    }
+  },
+  "error": null,
+  "context": {
+    "mode": "flat_snapshot",
+    "scope": "entire_supplied_snapshot",
+    "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+    "unit_label": "points",
+    "values_comparable": true
+  },
+  "relationship": "candidate",
+  "purpose": "flat_comparison",
+  "execution_policy": "flat_snapshot_v1",
+  "evidence_coverage": {
+    "total_rows": 5,
+    "included_rows": 5,
+    "omitted_rows": 0,
+    "detail": "first_rows"
+  },
+  "baseline": {
+    "name": "Baseline calculation",
+    "version": {
+      "id": "91ac221f-d773-489f-b1bd-756fafe2298f",
+      "definition_id": "a732445b-3840-450c-92f2-e2cfd358728a",
+      "version_number": 1,
+      "raw_sql": "SELECT SUM(amount)\nFROM snapshot",
+      "bound_sql": null,
+      "mapping_id": null,
+      "contract_id": "ef829674-c380-41ab-9f22-b1fd39e2c5d7",
+      "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+      "mapping_hash": null,
+      "execution_policy": "flat_snapshot_v1",
+      "support_state": "executable",
+      "support_reason": null,
+      "raw_hash": "2089772e297a192e065122d35521f8c0caf5399d7406456ade9c4a53fde6f52a",
+      "ir_hash": "16a0f20ce4fc2e06014d43a9269fb3434cced46f966865ea41ba41ff978e5193",
+      "ir": {
+        "mode": "flat_snapshot",
+        "policy": "flat-snapshot-v1",
+        "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+        "table": "snapshot",
+        "aggregate": "sum",
+        "measure": "amount",
+        "predicate_policy": "flat-boolean-v1",
+        "predicate_tree": null,
+        "ir_hash": "16a0f20ce4fc2e06014d43a9269fb3434cced46f966865ea41ba41ff978e5193"
+      },
+      "observed_at": "2026-09-29T03:37:02.048807+00:00",
+      "source_changed_at": null,
+      "effective_from": null,
+      "change_kind": "initial",
+      "project_id": "local-retail"
+    }
+  },
+  "target": {
+    "name": "Target calculation",
+    "version": {
+      "id": "49a99987-bcc7-49a6-a185-3833c60e75dd",
+      "definition_id": "c50f71b1-a0fb-4258-a5fb-1b4917229254",
+      "version_number": 1,
+      "raw_sql": "SELECT SUM(amount)\nFROM snapshot\nWHERE (status = 'completed' OR status = 'settled') AND region != 'test'",
+      "bound_sql": null,
+      "mapping_id": null,
+      "contract_id": "ef829674-c380-41ab-9f22-b1fd39e2c5d7",
+      "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+      "mapping_hash": null,
+      "execution_policy": "flat_snapshot_v1",
+      "support_state": "executable",
+      "support_reason": null,
+      "raw_hash": "90063415e9ab15849d3ce9d89f7c07dc893d3b0e155ff62367056205cde4dd5b",
+      "ir_hash": "a60ac2889cecfc1cfc965be0a6af008ac9925a6993453ea23fc47a6e69ea8e4d",
+      "ir": {
+        "mode": "flat_snapshot",
+        "policy": "flat-snapshot-v1",
+        "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+        "table": "snapshot",
+        "aggregate": "sum",
+        "measure": "amount",
+        "predicate_policy": "flat-boolean-v1",
+        "predicate_tree": {
+          "op": "and",
+          "children": [
+            {
+              "op": "or",
+              "children": [
+                {
+                  "op": "predicate",
+                  "predicate": {
+                    "field": "status",
+                    "op": "eq",
+                    "values": [
+                      "completed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                {
+                  "op": "predicate",
+                  "predicate": {
+                    "field": "status",
+                    "op": "eq",
+                    "values": [
+                      "settled"
+                    ],
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            {
+              "op": "predicate",
+              "predicate": {
+                "field": "region",
+                "op": "neq",
+                "values": [
+                  "test"
+                ],
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "ir_hash": "a60ac2889cecfc1cfc965be0a6af008ac9925a6993453ea23fc47a6e69ea8e4d"
+      },
+      "observed_at": "2026-09-29T03:37:02.070739+00:00",
+      "source_changed_at": null,
+      "effective_from": null,
+      "change_kind": "initial",
+      "project_id": "local-retail"
+    }
+  },
+  "snapshot": {
+    "id": "06e5fb7a-3b4b-4009-83f3-0edf5c865447",
+    "name": "v7_browser_orders",
+    "row_count": 5,
+    "manifest_hash": "bbb9f7290fe2c7ae752122e5fa9860ec0f22c872c53377eb4d95d68515628d19",
+    "source_hash": "9ed91c64b1467058d05331d1ab2891979b1ddca9ca11ecee45c8754b4d1c07e9",
+    "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+    "mapping_hash": null,
+    "execution_policy": "flat_snapshot_v1",
+    "currency": null,
+    "timezone": null,
+    "scope": "entire_supplied_snapshot",
+    "grain": null,
+    "cutoff_at": null,
+    "schema": {
+      "id": "VARCHAR",
+      "amount": "DECIMAL(18,2)",
+      "status": "VARCHAR",
+      "region": "VARCHAR",
+      "flag": "BOOLEAN"
+    },
+    "status": "validated",
+    "created_at": "2026-09-29T03:32:00.656085+00:00",
+    "project_id": "local-retail",
+    "unit_label": "points"
+  },
+  "reproducibility": {
+    "baseline_version": {
+      "id": "91ac221f-d773-489f-b1bd-756fafe2298f",
+      "definition_id": "a732445b-3840-450c-92f2-e2cfd358728a",
+      "version_number": 1,
+      "raw_sql": "SELECT SUM(amount)\nFROM snapshot",
+      "bound_sql": null,
+      "mapping_id": null,
+      "contract_id": "ef829674-c380-41ab-9f22-b1fd39e2c5d7",
+      "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+      "mapping_hash": null,
+      "execution_policy": "flat_snapshot_v1",
+      "support_state": "executable",
+      "support_reason": null,
+      "raw_hash": "2089772e297a192e065122d35521f8c0caf5399d7406456ade9c4a53fde6f52a",
+      "ir_hash": "16a0f20ce4fc2e06014d43a9269fb3434cced46f966865ea41ba41ff978e5193",
+      "ir": {
+        "mode": "flat_snapshot",
+        "policy": "flat-snapshot-v1",
+        "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+        "table": "snapshot",
+        "aggregate": "sum",
+        "measure": "amount",
+        "predicate_policy": "flat-boolean-v1",
+        "predicate_tree": null,
+        "ir_hash": "16a0f20ce4fc2e06014d43a9269fb3434cced46f966865ea41ba41ff978e5193"
+      },
+      "observed_at": "2026-09-29T03:37:02.048807+00:00",
+      "source_changed_at": null,
+      "effective_from": null,
+      "change_kind": "initial",
+      "project_id": "local-retail"
+    },
+    "target_version": {
+      "id": "49a99987-bcc7-49a6-a185-3833c60e75dd",
+      "definition_id": "c50f71b1-a0fb-4258-a5fb-1b4917229254",
+      "version_number": 1,
+      "raw_sql": "SELECT SUM(amount)\nFROM snapshot\nWHERE (status = 'completed' OR status = 'settled') AND region != 'test'",
+      "bound_sql": null,
+      "mapping_id": null,
+      "contract_id": "ef829674-c380-41ab-9f22-b1fd39e2c5d7",
+      "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+      "mapping_hash": null,
+      "execution_policy": "flat_snapshot_v1",
+      "support_state": "executable",
+      "support_reason": null,
+      "raw_hash": "90063415e9ab15849d3ce9d89f7c07dc893d3b0e155ff62367056205cde4dd5b",
+      "ir_hash": "a60ac2889cecfc1cfc965be0a6af008ac9925a6993453ea23fc47a6e69ea8e4d",
+      "ir": {
+        "mode": "flat_snapshot",
+        "policy": "flat-snapshot-v1",
+        "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+        "table": "snapshot",
+        "aggregate": "sum",
+        "measure": "amount",
+        "predicate_policy": "flat-boolean-v1",
+        "predicate_tree": {
+          "op": "and",
+          "children": [
+            {
+              "op": "or",
+              "children": [
+                {
+                  "op": "predicate",
+                  "predicate": {
+                    "field": "status",
+                    "op": "eq",
+                    "values": [
+                      "completed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                {
+                  "op": "predicate",
+                  "predicate": {
+                    "field": "status",
+                    "op": "eq",
+                    "values": [
+                      "settled"
+                    ],
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            {
+              "op": "predicate",
+              "predicate": {
+                "field": "region",
+                "op": "neq",
+                "values": [
+                  "test"
+                ],
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "ir_hash": "a60ac2889cecfc1cfc965be0a6af008ac9925a6993453ea23fc47a6e69ea8e4d"
+      },
+      "observed_at": "2026-09-29T03:37:02.070739+00:00",
+      "source_changed_at": null,
+      "effective_from": null,
+      "change_kind": "initial",
+      "project_id": "local-retail"
+    },
+    "snapshot": {
+      "id": "06e5fb7a-3b4b-4009-83f3-0edf5c865447",
+      "name": "v7_browser_orders",
+      "row_count": 5,
+      "manifest_hash": "bbb9f7290fe2c7ae752122e5fa9860ec0f22c872c53377eb4d95d68515628d19",
+      "source_hash": "9ed91c64b1467058d05331d1ab2891979b1ddca9ca11ecee45c8754b4d1c07e9",
+      "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+      "mapping_hash": null,
+      "execution_policy": "flat_snapshot_v1",
+      "currency": null,
+      "timezone": null,
+      "scope": "entire_supplied_snapshot",
+      "grain": null,
+      "cutoff_at": null,
+      "schema": {
+        "id": "VARCHAR",
+        "amount": "DECIMAL(18,2)",
+        "status": "VARCHAR",
+        "region": "VARCHAR",
+        "flag": "BOOLEAN"
+      },
+      "status": "validated",
+      "created_at": "2026-09-29T03:32:00.656085+00:00",
+      "project_id": "local-retail",
+      "unit_label": "points"
+    },
+    "context": {
+      "mode": "flat_snapshot",
+      "scope": "entire_supplied_snapshot",
+      "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+      "unit_label": "points",
+      "values_comparable": true
+    },
+    "provenance": {
+      "execution_policy": "flat-snapshot-v1",
+      "baseline_ir_hash": "16a0f20ce4fc2e06014d43a9269fb3434cced46f966865ea41ba41ff978e5193",
+      "target_ir_hash": "a60ac2889cecfc1cfc965be0a6af008ac9925a6993453ea23fc47a6e69ea8e4d",
+      "snapshot_manifest_hash": "bbb9f7290fe2c7ae752122e5fa9860ec0f22c872c53377eb4d95d68515628d19",
+      "database_hash": "a081484ee73827ffc947ec640e0e517e21da16caec8424c3c3e4af7fc507e037",
+      "source_hash": "9ed91c64b1467058d05331d1ab2891979b1ddca9ca11ecee45c8754b4d1c07e9",
+      "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+      "parser_version": "30.19.0",
+      "duckdb_version": "1.5.5",
+      "engine_version": "flat-snapshot-v1",
+      "predicate_policy": "flat-boolean-v1",
+      "contract_version": 5,
+      "context": {
+        "mode": "flat_snapshot",
+        "scope": "entire_supplied_snapshot",
+        "contract_hash": "f35be6ac11284e1f1976c89d401fe98393b0c7334ec469f614f41fb0c3a21939",
+        "unit_label": "points",
+        "values_comparable": true
+      },
+      "baseline_query_hash": "1c8ede7e7029474a11ea40b154ae61889d9b63dd7f4ac94e5cff533154aefd6d",
+      "target_query_hash": "517d0331633bc0b2fe956e91ca5fad0fb0015c7fef80884f26b1fa65c2840c1e",
+      "query_count": 2,
+      "elapsed_ms": 91,
+      "evidence_unit": "row_key"
+    }
+  }
+}

@@ -1,0 +1,37 @@
+.venv/
+node_modules/
+__pycache__/
+.pytest_cache/
+.test-tmp/
+*.pyc
+data/
+apps/web/dist/
+.env
+test-results/
+playwright-report/
+
+# --- Public-release hygiene (V8 closeout): local runtime state and machine-specific files ---
+# Keys are never stored by the app, but acceptance scripts write them under data/ (ignored above).
+.auth_keys.json
+*.key
+.env.*
+.metricguard/
+*.log
+*.db
+*.sqlite
+/orders.duckdb
+/orders.duckdb.manifest.json
+/snapshots/
+/evidence/
+/uploads/
+/.test-tmp-old/
+/scratch/
+/scratch_prompt*.txt
+/__agent__/
+/=
+/.omnirush/
+/.codex/
+/.agents/
+/.vscode/
+/.claude/settings.local.json
+apps/web/tsconfig.tsbuildinfo

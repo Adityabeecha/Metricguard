@@ -1,0 +1,11 @@
+flowchart TD
+    I["Import definitions and data"] --> S{"Supported and context complete"}
+    S -->|No| U["Explain missing context or support"]
+    S -->|Yes| H["Review metric relationship"]
+    H --> V{"Expected agreement"}
+    V -->|No| T["Record intentional variant or unrelated"]
+    V -->|Yes| C["Run same snapshot comparison"]
+    C --> D["Inspect rule and value differences"]
+    D --> E{"Evidence sufficient"}
+    E -->|No| P["Keep partial or unknown result"]
+    E -->|Yes| R["Review and export evidence"]

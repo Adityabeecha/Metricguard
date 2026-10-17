@@ -1,0 +1,38 @@
+{
+  "specification_example": true,
+  "definition_id": "dashboard_a",
+  "version_id": "dashboard_a_v1",
+  "display_name": "Revenue",
+  "family_id": "sales_reporting",
+  "source": {
+    "kind": "sql_file",
+    "label": "Dashboard A exported SQL",
+    "fixture_file": "dashboard_a.sql"
+  },
+  "dialect": "duckdb",
+  "business_context": {
+    "purpose": "Completed order sales by order date",
+    "grain": "one_row_per_order_id",
+    "unit": "currency",
+    "currency": "INR",
+    "timezone": "Asia/Kolkata",
+    "date_semantics": "business_date",
+    "scope": "synthetic_retail_all_orders",
+    "tax_treatment": "order_amount_excludes_tax_and_shipping"
+  },
+  "derived_ir_example": {
+    "schema_version": "1.0-proposed",
+    "table": "orders",
+    "aggregate": "SUM",
+    "expression": {"type": "column", "name": "order_amount", "data_type": "DECIMAL(18,2)"},
+    "eligibility": {
+      "type": "comparison",
+      "operator": "eq",
+      "left": {"type": "column", "name": "status", "data_type": "VARCHAR"},
+      "right": {"type": "literal", "value": "Completed", "data_type": "VARCHAR"}
+    },
+    "time": {"column": "order_date", "data_type": "DATE", "interval": "start_inclusive_end_exclusive"},
+    "sum_null_semantics": "ignore_null_terms_return_null_if_no_nonnull_terms"
+  },
+  "note": "The server derives and validates this IR from the original SQL. Real hashes and engine versions are generated during implementation."
+}

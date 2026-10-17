@@ -1,0 +1,37 @@
+{
+  "specification_example": true,
+  "run_id": "golden_comparison_example",
+  "state": "succeeded",
+  "relationship_status": "expected_agreement",
+  "comparability_status": "comparable",
+  "definition_status": "different",
+  "value_status": "different",
+  "explanation_status": "complete_ordered_bridge",
+  "baseline_value": "104000000.00",
+  "target_value": "98000000.00",
+  "delta_target_minus_baseline": "-6000000.00",
+  "absolute_gap": "6000000.00",
+  "relative_change_percent_display": "-5.769230769",
+  "currency": "INR",
+  "numeric_tolerance": "0.01",
+  "method": "ordered_bridge_v1",
+  "steps": [
+    {"position": 1, "rule": "amount_expression", "previous_value": "104000000.00", "next_value": "99680000.00", "contribution": "-4320000.00"},
+    {"position": 2, "rule": "eligibility_predicate", "previous_value": "99680000.00", "next_value": "99260000.00", "contribution": "-420000.00"},
+    {"position": 3, "rule": "time_attribution", "previous_value": "99260000.00", "next_value": "98000000.00", "contribution": "-1260000.00"}
+  ],
+  "residual": "0.00",
+  "nonzero_row_contributions": [
+    {"order_id": "O01", "delta": "-2400000.00"},
+    {"order_id": "O02", "delta": "-1920000.00"},
+    {"order_id": "O04", "delta": "-420000.00"},
+    {"order_id": "O05", "delta": "-1260000.00"}
+  ],
+  "limitations": [
+    "Synthetic fixture with analyst-confirmed comparison intent.",
+    "Ordered contributions depend on the displayed rule order.",
+    "Results establish an observed gap on this snapshot, not universal query equivalence or an accounting policy.",
+    "This is a specification example rather than an application-generated result."
+  ],
+  "provenance_note": "Real run output must include verified source, IR, snapshot and context hashes plus exact engine and application versions."
+}

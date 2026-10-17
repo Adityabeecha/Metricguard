@@ -1,0 +1,22 @@
+{
+  "specification_example": true,
+  "project_id": "retail_demo",
+  "baseline_version_id": "dashboard_a_v1",
+  "target_version_id": "finance_v1",
+  "snapshot_id": "orders_golden_20260902",
+  "context": {
+    "start": "2026-08-01",
+    "end_exclusive": "2026-09-01",
+    "timezone": "Asia/Kolkata",
+    "unit": "currency",
+    "currency": "INR",
+    "grain": "one_row_per_order_id",
+    "scope": "synthetic_retail_all_orders",
+    "numeric_tolerance": "0.01"
+  },
+  "decomposition": {
+    "method": "ordered_bridge_v1",
+    "rule_order": ["amount_expression", "eligibility_predicate", "time_attribution"]
+  },
+  "note": "Send Idempotency-Key as an HTTP header. Labels in this fixture stand in for implementation IDs."
+}

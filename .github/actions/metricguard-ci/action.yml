@@ -1,0 +1,99 @@
+name: 'MetricGuard Turnkey CI Gate'
+description: 'Evaluate pull request dbt model changes against trusted MetricGuard governed baselines'
+author: 'MetricGuard'
+
+inputs:
+  config:
+    description: 'Path to candidate metricguard.yml'
+    required: false
+    default: 'metricguard.yml'
+  base-config:
+    description: 'Path to trusted base branch metricguard.yml'
+    required: false
+    default: ''
+  base-manifest:
+    description: 'Path to base dbt manifest.json'
+    required: true
+  target-manifest:
+    description: 'Path to target candidate dbt manifest.json'
+    required: true
+  database-url:
+    description: 'MetricGuard Store database URL'
+    required: false
+    default: ''
+  output-dir:
+    description: 'Directory for generated CI artifacts'
+    required: false
+    default: '.metricguard-ci'
+  github-token:
+    description: 'GitHub token with pull-requests:write permission for posting comments'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  outcome:
+    description: 'Overall reconciliation outcome'
+    value: ${{ steps.adapter.outputs.outcome }}
+  exit_code:
+    description: 'Deterministic exit code (0, 1, 2, 3)'
+    value: ${{ steps.adapter.outputs.exit_code }}
+  has_material_drift:
+    description: 'Whether any metric exceeded materiality policy'
+    value: ${{ steps.adapter.outputs.has_material_drift }}
+  has_refusals:
+    description: 'Whether any metric was refused due to unsupported constructs'
+    value: ${{ steps.adapter.outputs.has_refusals }}
+  markdown_path:
+    description: 'Path to generated Markdown report'
+    value: ${{ steps.adapter.outputs.markdown_path }}
+  json_path:
+    description: 'Path to generated JSON report'
+    value: ${{ steps.adapter.outputs.json_report_path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Prepare Artifact Directory
+      shell: bash
+      run: |
+        mkdir -p "${{ inputs.output-dir }}"
+
+    - name: Run MetricGuard diff-ci
+      shell: bash
+      env:
+        METRICGUARD_DATABASE_URL: ${{ inputs.database-url }}
+      run: |
+        BASE_CFG_ARG=""
+        if [ -n "${{ inputs.base-config }}" ]; then
+          BASE_CFG_ARG="--base-config ${{ inputs.base-config }}"
+        fi
+
+        python -m services.cli diff-ci \
+          --config "${{ inputs.config }}" \
+          $BASE_CFG_ARG \
+          --base-manifest "${{ inputs.base-manifest }}" \
+          --target-manifest "${{ inputs.target-manifest }}" \
+          --output-json "${{ inputs.output-dir }}/metricguard_report.json" \
+          --output-markdown "${{ inputs.output-dir }}/metricguard_summary.md" \
+          --format summary
+      continue-on-error: true
+      id: diff_ci_step
+
+    - name: Publish Idempotent PR Comment
+      id: adapter
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        python -m scripts.github_ci_adapter \
+          --markdown "${{ inputs.output-dir }}/metricguard_summary.md" \
+          --json-report "${{ inputs.output-dir }}/metricguard_report.json"
+
+    - name: Propagate Change Gate Exit Code
+      shell: bash
+      run: |
+        EXIT_CODE="${{ steps.adapter.outputs.exit_code }}"
+        if [ "$EXIT_CODE" -ne "0" ]; then
+          echo "MetricGuard Change Gate failed with exit code $EXIT_CODE"
+          exit $EXIT_CODE
+        fi

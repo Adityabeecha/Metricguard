@@ -1,0 +1,12 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+COPY packages /app/packages
+COPY services /app/services
+COPY scripts /app/scripts
+COPY MetricGuard_Planning_Pack/examples /app/MetricGuard_Planning_Pack/examples
+COPY apps/web/dist /app/apps/web/dist
+ENV PYTHONPATH=/app
+EXPOSE 8000
+CMD ["sh", "-c", "python -m scripts.seed_demo && exec uvicorn services.api.app:app --host 0.0.0.0 --port 8000"]

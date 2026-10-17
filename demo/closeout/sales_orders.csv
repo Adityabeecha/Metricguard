@@ -1,0 +1,9 @@
+row_id,sales_amount,status,region,channel,is_active,order_day
+R001,120.00,completed,north,web,true,2026-09-01
+R002,80.50,completed,south,store,true,2026-09-02
+R003,200.00,pending,north,web,false,2026-09-03
+R004,50.00,returned,west,store,false,2026-09-04
+R005,150.25,completed,north,web,true,2026-09-05
+R006,,completed,south,web,true,2026-09-06
+R007,90.00,cancelled,east,store,false,2026-09-07
+R008,60.00,completed,,web,,2026-09-08

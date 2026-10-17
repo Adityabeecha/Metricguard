@@ -1,0 +1,9 @@
+erDiagram
+    PROJECT ||--o{ METRIC_DEFINITION : contains
+    PROJECT ||--o{ DATASET_SNAPSHOT : owns
+    METRIC_DEFINITION ||--|{ DEFINITION_VERSION : versions
+    DEFINITION_VERSION ||--o{ COMPARISON_RUN : baseline_or_target
+    DATASET_SNAPSHOT ||--o{ COMPARISON_RUN : supplies
+    COMPARISON_RUN ||--o| RUN_RESULT : produces
+    RUN_RESULT ||--o{ BRIDGE_STEP : explains
+    DEFINITION_VERSION ||--o{ BASELINE_APPROVAL : approved_as
