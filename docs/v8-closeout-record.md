@@ -10,7 +10,7 @@
 | B Web unit tests | **Passed:** 60/60, including 17 new closeout tests. |
 | C Web build | **Passed.** |
 | D Compose config | **Passed** (exit 0). |
-| E Startup + seed | **Passed with Docker running:** API and supervisor started from `data\demo-app`; both demo cases seeded and matched the independent `Decimal` totals (750.75 → 410.75 INR, −340.00, unexplained 0; 65.00 → 10.00 points, −55.00, unexplained 0). Note: when `mg.ps1 start` is run with its output captured by another process (piped), the call does not return because the started API/supervisor inherit the output handle; interactive use in a terminal was not separately checked. |
+| E Startup + seed | **Passed with Docker running:** API and supervisor started from `data\demo-app`; both demo cases seeded and matched the independent `Decimal` totals (750.75 → 410.75 INR, −340.00, unexplained 0; 65.00 → 10.00 points, −55.00, unexplained 0). The script printed every step and exited 0 (seeder refusal reason: “Only one SUM over the whole snapshot is supported”). When its output was captured by another process it returned only after a long delay, so prefer running it directly in a terminal. |
 | L Guided totals (engine) | Engine totals verified through the seeder; the guided form itself was not clicked through. |
 | N Refusal | **Passed:** `SELECT AVG(sales_amount) FROM snapshot` was refused and no definition was stored. Editor retention after refusal was not clicked through. |
 | O Discovery and replay | **Passed in the browser:** both case types listed together with type/status filters; the saved case opened on results (“…340.00 INR lower… 3 records account for the difference”, R003/R004/R007); **Replay saved inputs** reported an exact reproduction. |
