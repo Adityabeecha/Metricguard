@@ -113,3 +113,24 @@ Run against the UCI Bike Sharing dataset (Fanaee-T 2013, DOI 10.24432/C5W894, CC
 | Saved calculations | Each side can start from a saved calculation; an unchanged one is reused instead of registered again. | browser |
 | Staying signed in | “Keep me signed in on this computer for 8 hours”: the server issues an HttpOnly, SameSite=Strict session cookie. The key is never stored in the browser; sessions expire, end on sign-out, and end when the key is deactivated. Cookie-authenticated changes require the web app's request header, which blocks forged requests from other local pages. | tests; browser: sign in → reload stays signed in → sign out → 401 |
 | Regression | Backend: 556 passed, 45 skipped (PostgreSQL-dependent), 0 failed. Web: 64/64. Frontend build passes. | full suites |
+
+## End-to-end check and fixes (2026-10-18)
+
+A full end-to-end check on a clean, separate instance (fresh data folder, seeded demo, key-required second API) found 12 issues. All are fixed, and each fix was rechecked in the browser on a fresh instance.
+
+| # | Issue found | Fix | Recheck |
+| --- | --- | --- | --- |
+| 1 | Upload sent the chosen row key or amount as a filter column too, giving a confusing “Column names must be distinct” rejection. | Key, amount and subtraction columns are removed from the filter list when chosen and never sent as filters. | `ref_code` filter → chosen as key → validates |
+| 2 | Each “Check and compare” registered new “Current/Proposed calculation” definitions, even for unchanged or refused attempts. | Identical validated SQL on the same dataset is reused; new definitions get descriptive names (e.g. “amount over all rows where state is paid”). | re-run adds 0 definitions |
+| 3 | Dashboard marked comparisons with a saved case as “Unreviewed / needs review”; replays and repeats flooded the queue. | Saved, replayed and superseded runs are excluded; unsaved differences show “Not yet explained · Review and save”. | saved case not flagged; unsaved −40.00 run flagged |
+| 4 | When the intended key repeated, the dialog silently suggested the amount column as key and no amount. | Every row is scanned for repeated or blank values; amount-like columns are never suggested as keys; `_ref/_no/_code` names count as key names. | `order_ref` suggested, amount `net_value` |
+| 5 | No warning that the chosen key repeats. | Warning under the key (“repeats "A1"”) and Validate is blocked with the reason. | shown and blocked |
+| 6 | Generic “check precision, scale” suggestion for unrelated contract errors. | Suggestion matches the message (one role per column, blank handling, decimals); duplicate/blank key errors from the runner are mapped. | unit tests |
+| 7 | Refusal guidance listed filter operators for an AVG refusal. | Guidance matches the reason (one SUM; single statement; no GROUP BY; unknown column). | AVG shows the SUM example |
+| 8 | Two-table datasets labelled “CSV extract”. | Labelled “Two tables” / “Two connected CSV tables (fact + lookup)”. | Data Sources |
+| 9 | `mg.ps1` suggested the same busy port. | Suggests the next free port. | “start -Port 8001” |
+| 10 | `mg.ps1 status -Port N` showed another instance's details. | Status reports the recorded instance on its own port and says when it differs. | checked |
+| 11 | Sign-in help hard-coded `data\demo-app`; default workspace labelled “Sample / Demo workspace”. | Help names the data folder generically; default workspace labelled “Default”. | checked |
+| 12 | Outage screen took about 10 seconds after connecting. | A network failure while connecting shows the outage screen at once. | about 2 seconds |
+
+Withdrawn during the check: `mg.ps1 stop` does stop the server (killing the venv launcher also ends its child process). Tests: web 67/67 with new tests for inference, key warnings and error guidance; frontend build passes. No backend code changed in this round (the last full backend run: 556 passed, 45 skipped).

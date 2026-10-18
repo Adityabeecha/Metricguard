@@ -152,7 +152,12 @@ export function App() {
       if (decision.action === 'go') { navigate({ workspaceId: decision.workspaceId, page: 'dashboard' }); return; }
       if (decision.action === 'choose') { setGate({ kind: 'denied', reason: 'not_member', message: `No active role in '${route.workspaceId}'.` }); setChooserOpen(true); return; }
       if (decision.action === 'none') { setGate({ kind: 'denied', reason: 'not_member', message: 'This key has no workspace roles yet.' }); return; }
-    } catch { /* fall through: bootstrap classifies invalid keys and outages */ }
+    } catch (err) {
+      // A network failure means the service is down: say so now instead of
+      // retrying more requests that will each take seconds to fail.
+      if (err instanceof TypeError) { setData(null); setGate({ kind: 'unavailable', message: err.message }); return; }
+      /* otherwise fall through: bootstrap classifies invalid keys */
+    }
     void loadWorkspace(route.workspaceId);
   };
 

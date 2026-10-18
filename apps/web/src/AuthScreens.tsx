@@ -40,9 +40,10 @@ function KeyHelp() {
       <summary>Where do I get an API key?</summary>
       <p>
         Each person receives their own key from a workspace owner. On the machine that runs MetricGuard,
-        the owner issues one with:
+        the owner issues one with the command below, using the same data folder the app was started with
+        (<code>data\demo-app</code> when started by <code>scripts\mg.ps1</code>):
       </p>
-      <pre className="gate-command">.venv\Scripts\python -m scripts.issue_api_key --data-dir data\demo-app --name "Your name" --email you@example.com --workspace WORKSPACE_ID:analyst</pre>
+      <pre className="gate-command">.venv\Scripts\python -m scripts.issue_api_key --data-dir DATA_FOLDER --name "Your name" --email you@example.com --workspace WORKSPACE_ID:analyst</pre>
       <p>Roles are <b>reader</b> (view), <b>analyst</b> (compare and save) and <b>owner</b> (approve and manage members).</p>
     </details>
   );

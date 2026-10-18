@@ -218,3 +218,36 @@ test('result: exact changed count from the server summary on large data', () => 
   assert.equal(s.headline, 'The proposed calculation is 1,000,269 rentals lower than the current calculation.');
   assert.equal(s.recordsSentence, '5,514 records account for the difference.');
 });
+
+// ---------- end-to-end fixes ----------
+import { inferMeaning, parseCsvText } from './csvInference.ts';
+import { humanizeError } from './errorUtils.ts';
+import { classifyInvestigationError } from './investigationUtils.ts';
+
+test('upload: a repeating key is never replaced by the amount column, and is flagged', () => {
+  const parsed = parseCsvText('order_ref,net_value,state\nA1,1.00,paid\nA1,2.00,paid\n', 25);
+  assert.equal(parsed.key_issues.order_ref, 'repeats "A1"');
+  const inf = inferMeaning(parsed.headers, parsed.observed_types, parsed.sample_rows, 'x.csv', parsed.key_issues);
+  assert.notEqual(inf.rowKey, 'net_value');
+  assert.equal(inf.measure, 'net_value');
+  assert.match(inf.keyWarning, /No column uniquely identifies every row/);
+});
+
+test('upload: a unique reference column is suggested as the key over the whole file', () => {
+  const rows = Array.from({ length: 40 }, (_, i) => `R${i},${i}.50,paid`).join('\n');
+  const parsed = parseCsvText(`order_ref,net_value,state\n${rows}\n`, 25);
+  const inf = inferMeaning(parsed.headers, parsed.observed_types, parsed.sample_rows, 'x.csv', parsed.key_issues);
+  assert.equal(inf.rowKey, 'order_ref');
+  assert.equal(inf.measure, 'net_value');
+  assert.ok(!inf.categories.includes('order_ref') && !inf.categories.includes('net_value'));
+  // a duplicate only after the 25-row display sample is still caught
+  const late = parseCsvText(`order_ref,net_value\n${Array.from({ length: 30 }, (_, i) => `R${i},1.00`).join('\n')}\nR3,2.00\n`, 25);
+  assert.equal(late.key_issues.order_ref, 'repeats "R3"');
+});
+
+test('errors: suggestions match the actual problem', () => {
+  assert.match(humanizeError({ code: 'INVALID_CONTRACT', message: 'Column names must be distinct plain identifiers' }).suggestion, /only one role/);
+  assert.match(humanizeError({ code: 'INVALID_KEYS', message: 'Row key values must be unique; duplicate A1' }).title, /Not Unique/);
+  assert.match(classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: 'Only one SUM over the whole snapshot is supported' }).guidance, /Averages, counts/);
+  assert.match(classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: 'Exactly one SELECT is required' }).guidance, /single SELECT/);
+});

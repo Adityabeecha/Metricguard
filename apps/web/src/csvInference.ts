@@ -10,6 +10,8 @@ export interface ParsedCsvPreview {
   null_counts?: Record<string, number>;
   sample_rows: Array<Record<string, string | null>>;
   totalRowsSampled: number;
+  /** Per column, why it cannot be a row key (checked over every row), e.g. 'repeats "A1"'. */
+  key_issues?: Record<string, string>;
 }
 
 export interface InferredMeaning {
@@ -24,6 +26,8 @@ export interface InferredMeaning {
   nullPolicy: 'blank_nullable' | 'native_null';
   candidateKeys: string[];
   candidateMeasures: string[];
+  /** Set when no column is a safe row key; explains the chosen column's problem. */
+  keyWarning?: string;
   candidateCategories: string[];
 }
 
@@ -65,6 +69,9 @@ export function parseCsvText(text: string, maxSampleRows = 25, nullPolicy: 'blan
   for (const h of headers) {
     columnTypeCounts[h] = { num: 0, date: 0, timestamp: 0, bool: 0, str: 0, total: 0, nullCount: 0, scaleMax: 0 };
   }
+  // Row-key suitability over every row: stop tracking a column once it fails.
+  const seen: Record<string, Set<string> | null> = Object.fromEntries(headers.map(h => [h, new Set<string>()]));
+  const keyIssues: Record<string, string> = {};
 
   const isValidDate = (s: string) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
@@ -86,6 +93,12 @@ export function parseCsvText(text: string, maxSampleRows = 25, nullPolicy: 'blan
     headers.forEach((h, idx) => {
       const val = values[idx] === (nullPolicy === 'blank_nullable' ? '' : 'NULL') ? null : values[idx];
       row[h] = val;
+      const seenValues = seen[h];
+      if (seenValues) {
+        if (val === null) { keyIssues[h] = 'has blank values'; seen[h] = null; }
+        else if (seenValues.has(val)) { keyIssues[h] = `repeats "${val.length > 40 ? val.slice(0, 40) + '…' : val}"`; seen[h] = null; }
+        else seenValues.add(val);
+      }
 
       if (columnTypeCounts[h]) {
         if (val === null) {
@@ -156,6 +169,7 @@ export function parseCsvText(text: string, maxSampleRows = 25, nullPolicy: 'blan
     null_counts: nullCounts,
     sample_rows: sampleRows,
     totalRowsSampled: records.length,
+    key_issues: keyIssues,
   };
 }
 
@@ -169,37 +183,39 @@ export function inferMeaning(
   headers: string[],
   observedTypes: Record<string, string>,
   sampleRows: Array<Record<string, string | null>> = [],
-  filename = ''
+  filename = '',
+  keyIssues?: Record<string, string>,
 ): InferredMeaning {
   const cleanHeaders = headers.map((h) => h.toLowerCase());
 
-  // 1. Identify Candidate Keys
+  // 1. Identify Candidate Keys. A key must be unique and never blank; when the
+  // whole file was scanned (keyIssues), that is checked over every row.
+  const keyNamePatterns = [/^(?:order_id|id|record_id|transaction_id|payment_id|sale_id|user_id|item_id)$/i, /_id$/i, /_key$/i, /^key$/i,
+    /_(?:ref|no|number|code)$/i, /^(?:ref|reference|code)$/i];
+  const nameMatch = (h: string) => keyNamePatterns.some(p => p.test(h));
+  const typeOf = (h: string) => (observedTypes[h] || '').toLowerCase();
+  const decimalLike = (h: string) => typeOf(h) === 'numeric' || typeOf(h).includes('decimal');
+  const valid = (h: string) => {
+    if (keyIssues) return !keyIssues[h];
+    const values = sampleRows.map(r => r[h]).filter((v): v is string => v !== null && v !== '');
+    return sampleRows.length > 0 && values.length === sampleRows.length && new Set(values).size === values.length;
+  };
+  const byName = [...headers].sort((a, b) => keyNamePatterns.findIndex(p => p.test(a)) - keyNamePatterns.findIndex(p => p.test(b)))
+    .filter(nameMatch);
   const candidateKeys: string[] = [];
-  const keyNamePatterns = [/^(?:order_id|id|record_id|transaction_id|payment_id|sale_id|user_id|item_id)$/i, /_id$/i, /_key$/i, /^key$/i];
-
-  for (const pattern of keyNamePatterns) {
-    for (const h of headers) {
-      if (pattern.test(h) && !candidateKeys.includes(h)) {
-        candidateKeys.push(h);
-      }
+  const add = (h: string) => { if (!candidateKeys.includes(h)) candidateKeys.push(h); };
+  byName.filter(h => valid(h) && !decimalLike(h)).forEach(add);
+  // Unique string/integer columns that do not look like amounts.
+  headers.filter(h => valid(h) && !decimalLike(h) && ['string', 'integer'].includes(typeOf(h))
+    && !/amount|total|revenue|price|value|cost|profit|sales/i.test(h)).forEach(add);
+  let keyWarning: string | undefined;
+  if (candidateKeys.length === 0) {
+    const fallback = byName[0] || headers[0];
+    if (fallback) {
+      add(fallback);
+      const issue = keyIssues?.[fallback];
+      keyWarning = issue ? `No column uniquely identifies every row. “${fallback}” ${issue}.` : undefined;
     }
-  }
-
-  // Also check uniqueness in sample rows
-  if (sampleRows.length > 1) {
-    for (const h of headers) {
-      if (!candidateKeys.includes(h)) {
-        const values = sampleRows.map((r) => r[h]).filter((v): v is string => v !== null && v !== '');
-        if (values.length === sampleRows.length && new Set(values).size === values.length) {
-          candidateKeys.push(h);
-        }
-      }
-    }
-  }
-
-  // Fallback key: first column
-  if (candidateKeys.length === 0 && headers.length > 0) {
-    candidateKeys.push(headers[0]);
   }
   const rowKey = candidateKeys[0] || '';
 
@@ -318,6 +334,7 @@ export function inferMeaning(
     nullPolicy,
     candidateKeys,
     candidateMeasures,
+    keyWarning,
     candidateCategories,
   };
 }

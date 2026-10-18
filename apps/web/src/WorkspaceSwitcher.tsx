@@ -94,7 +94,8 @@ export function WorkspaceSwitcher({
     }
   };
 
-  const isDemo = currentWorkspaceId === 'local-retail';
+  // The built-in default workspace; it may hold real work, so it is not called a sample.
+  const isDefault = currentWorkspaceId === 'local-retail';
 
   return (
     <div className="workspace-switcher-wrapper" ref={dropdownRef}>
@@ -112,9 +113,9 @@ export function WorkspaceSwitcher({
         <div className="workspace-info">
           <div className="workspace-name-row">
             <strong>{currentWorkspaceName}</strong>
-            {isDemo && <span className="demo-chip">Sample</span>}
+            {isDefault && <span className="demo-chip">Default</span>}
           </div>
-          <small>{isDemo ? 'Demo workspace' : 'Workspace'}</small>
+          <small>{isDefault ? 'Default local workspace' : 'Workspace'}</small>
         </div>
         <ChevronDown size={14} className={`chevron-icon ${open ? 'rotated' : ''}`} />
       </button>
@@ -128,7 +129,7 @@ export function WorkspaceSwitcher({
           <div className="workspace-items-list">
             {workspaces.map((ws) => {
               const selected = ws.id === currentWorkspaceId;
-              const isSample = ws.id === 'local-retail';
+              const isDefaultWs = ws.id === 'local-retail';
               return (
                 <button
                   type="button"
@@ -147,7 +148,7 @@ export function WorkspaceSwitcher({
                   <div className="menu-item-details">
                     <div className="menu-item-title-row">
                       <span>{ws.name}</span>
-                      {isSample && <span className="demo-chip-small">Sample</span>}
+                      {isDefaultWs && <span className="demo-chip-small">Default</span>}
                       {ws.role && <span className="demo-chip-small">{ws.role}</span>}
                     </div>
                     <small>{ws.id}</small>

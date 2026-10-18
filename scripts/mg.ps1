@@ -31,6 +31,7 @@ $RunDir = Join-Path $Root '.metricguard'
 $StateFile = Join-Path $RunDir 'run.json'
 $Image = 'metricguard-runner:1.0'
 $Url = "http://127.0.0.1:$Port"
+$PortGiven = $PSBoundParameters.ContainsKey('Port')
 
 function Write-Step([string]$Text) { Write-Host "  - $Text" }
 function Fail([string]$Text) { Write-Host "ERROR: $Text" -ForegroundColor Red; exit 1 }
@@ -66,8 +67,14 @@ function Test-Docker {
 
 function Show-Status {
   $state = Get-State
+  # Report the recorded instance on its own port unless -Port was given explicitly.
+  if ($state -and -not $PSBoundParameters.ContainsKey('Port') -and -not $script:PortGiven) { $script:Url = "http://127.0.0.1:$($state.port)" }
   $health = Get-Health
   Write-Host "MetricGuard at $Url"
+  if ($state -and [int]$state.port -ne [int]($Url -replace '.*:', '')) {
+    Write-Step "The instance started by this script runs on port $($state.port), not $($Url -replace '.*:', '')."
+    $state = $null
+  }
   if ($state) {
     $api = if (Test-Pid $state.api_pid) { "running (PID $($state.api_pid))" } else { 'not running' }
     $sup = if (Test-Pid $state.supervisor_pid) { "running (PID $($state.supervisor_pid))" } else { 'not running' }
@@ -118,7 +125,9 @@ function Start-App {
 
   $owner = Get-PortOwner $Port
   if ($owner) {
-    Fail "Port $Port is already in use by $($owner.Name) (PID $($owner.Pid)). Stop it, or choose another port with -Port 8010."
+    $free = ($Port + 1)..($Port + 50) | Where-Object { -not (Get-PortOwner $_) } | Select-Object -First 1
+    $hint = if ($free) { "choose a free port, for example: .\scripts\mg.ps1 start -Port $free" } else { 'choose another port with -Port.' }
+    Fail "Port $Port is already in use by $($owner.Name) (PID $($owner.Pid)). Stop that program, or $hint"
   }
   Write-Step "Port $Port is free"
 

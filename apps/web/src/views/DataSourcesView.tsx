@@ -128,7 +128,12 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
       null
     );
   }, [activeSnapshot, flatContracts]);
+  const keyIssue = confirmedKey ? filePreview?.key_issues?.[confirmedKey] : undefined;
+  const roleColumns = new Set([confirmedKey, enableSubtraction ? minuendColumn : confirmedMeasure, enableSubtraction ? subtrahendColumn : ''].filter(Boolean));
+  const filterColumns = confirmedCategories.filter(c => !roleColumns.has(c));
   const validateBlocker = !confirmedKey ? 'Choose the column that identifies each row.'
+    : keyIssue ? `The row key “${confirmedKey}” ${keyIssue}; choose a column whose values are all different.`
+    : roleColumns.size < (enableSubtraction ? 3 : 2) ? 'The row key and the amount must be different columns.'
     : enableSubtraction && (!minuendColumn || !subtrahendColumn) ? 'Choose both amount columns for the subtraction.'
     : !enableSubtraction && !confirmedMeasure ? 'Choose the amount to total.'
     : !confirmedUnit.trim() ? 'Enter the unit the amount uses.'
@@ -253,7 +258,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
         if (file.size > 25 * 1024 * 1024) throw new Error('Source exceeds 25 MiB');
         const parsed = parseCsvText(await file.text(), 25);
         setFilePreview(parsed);
-        const inf = inferMeaning(parsed.headers, parsed.observed_types, parsed.sample_rows, file.name);
+        const inf = inferMeaning(parsed.headers, parsed.observed_types, parsed.sample_rows, file.name, parsed.key_issues);
         setConfirmedKey(inf.rowKey);
         setConfirmedMeasure(inf.measure);
         setConfirmedCategories(inf.categories);
@@ -347,7 +352,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
     try {
       // 1. Register flat contract with explicit dimension types
       const dimensionTypes: Record<string, string> = {};
-      for (const cat of confirmedCategories) {
+      for (const cat of filterColumns) {
         const obs = filePreview?.observed_types[cat];
         const inferred = obs === 'date' ? 'date' : obs === 'boolean' ? 'boolean' : obs === 'timestamp' ? 'timestamp' : 'string';
         dimensionTypes[cat] = categoryTypeOverrides[cat] || inferred;
@@ -380,9 +385,9 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
           subtrahend: subtrahendColumn,
         },
         scale,
-        categories: confirmedCategories,
+        categories: filterColumns,
         dimension_types: dimensionTypes,
-        nullable_categories: confirmedCategories.filter(cat => !filePreview?.null_counts || filePreview.null_counts[cat] > 0),
+        nullable_categories: filterColumns.filter(cat => !filePreview?.null_counts || filePreview.null_counts[cat] > 0),
         measure_meaning: confirmedMeaning || `${minuendColumn} minus ${subtrahendColumn}`,
         unit_label: confirmedUnit.trim(),
         values_comparable: true,
@@ -398,9 +403,9 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
         measure: confirmedMeasure,
         precision,
         scale,
-        categories: confirmedCategories,
+        categories: filterColumns,
         dimension_types: dimensionTypes,
-        nullable_categories: confirmedCategories.filter(cat => !filePreview?.null_counts || filePreview.null_counts[cat] > 0),
+        nullable_categories: filterColumns.filter(cat => !filePreview?.null_counts || filePreview.null_counts[cat] > 0),
         measure_meaning: confirmedMeaning || `Row ${confirmedMeasure}`,
         unit_label: confirmedUnit.trim(),
         values_comparable: true,
@@ -550,6 +555,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
 
   const getSourceTypeBadge = (s: Snapshot) => {
     const isParquet = s.name.endsWith('.parquet') || (s.manifest as { format?: string })?.format === 'parquet';
+    if (s.execution_policy === 'relational_snapshot_v1') return <span className="source-tag csv">Two tables</span>;
     if (isParquet) return <span className="source-tag parquet">Parquet</span>;
     if (s.name.toLowerCase().includes('postgres')) return <span className="source-tag postgres">PostgreSQL</span>;
     return <span className="source-tag csv">CSV</span>;
@@ -557,6 +563,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
 
   const getSourceTypeLabel = (s: Snapshot) => {
     const isParquet = s.name.endsWith('.parquet') || (s.manifest as { format?: string })?.format === 'parquet';
+    if (s.execution_policy === 'relational_snapshot_v1') return 'Two connected CSV tables (fact + lookup)';
     if (isParquet) return 'Parquet extract';
     if (s.name.toLowerCase().includes('postgres')) return 'PostgreSQL snapshot';
     return 'CSV extract';
@@ -1370,7 +1377,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                         <select
                           required
                           value={confirmedKey}
-                          onChange={(e) => setConfirmedKey(e.target.value)}
+                          onChange={(e) => { setConfirmedKey(e.target.value); setConfirmedCategories(c => c.filter(x => x !== e.target.value)); }}
                         >
                           <option value="">Select column…</option>
                           {filePreview?.headers.map((h) => (
@@ -1380,6 +1387,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                           ))}
                         </select>
                         <small className="field-hint">Example: <code>order_id</code> or <code>row_id</code>. No two rows may share a value, and none may be blank.</small>
+                        {keyIssue && <span className="disabled-reason" role="alert">“{confirmedKey}” {keyIssue}, so it cannot identify each row. Choose another column or fix the file.</span>}
                       </label>
 
                       <label>
@@ -1387,7 +1395,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                         <select
                           required
                           value={confirmedMeasure}
-                          onChange={(e) => setConfirmedMeasure(e.target.value)}
+                          onChange={(e) => { setConfirmedMeasure(e.target.value); setConfirmedCategories(c => c.filter(x => x !== e.target.value)); }}
                         >
                           <option value="">Select numeric column…</option>
                           {filePreview?.headers.map((h) => (

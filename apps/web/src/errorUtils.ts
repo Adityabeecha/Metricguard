@@ -101,9 +101,21 @@ export function humanizeError(
       return {
         title: 'Configuration Issue',
         message: rawMsg || 'The dataset configuration does not match the file format or null policy.',
-        suggestion: 'Check the precision, scale, and null handling in advanced settings.',
+        // Suggest the fix that matches the actual problem, not a generic one.
+        suggestion: /distinct|identifier|duplicate column/i.test(rawMsg)
+          ? 'Each column can have only one role: the row key, the amount and the filter columns must all be different columns.'
+          : /null/i.test(rawMsg)
+          ? 'Check the blank-value handling under Advanced details: blank cells for CSV, native NULLs for Parquet.'
+          : /precision|scale|decimal/i.test(rawMsg)
+          ? 'Check the decimal precision and places under Advanced details.'
+          : 'Go back to the previous step and review your answers; the message above names the problem.',
         code: rawCode,
       };
+
+    case 'INVALID_KEYS':
+      return /blank|null|missing|empty/i.test(rawMsg)
+        ? { title: 'Missing Key Values', message: rawMsg, suggestion: 'Choose a row key column with a value in every row.', field: context?.key || 'row_key', code: rawCode }
+        : { title: 'Row Key Not Unique', message: rawMsg, suggestion: 'Choose a column with a different value in every row, or remove duplicate rows before uploading.', field: context?.key || 'row_key', code: rawCode };
 
     case 'ISOLATION_REQUIRED':
       return {

@@ -53,6 +53,8 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   const [showTwoTable, setShowTwoTable] = useState(false);
   const [loadingPrefill, setLoadingPrefill] = useState(Boolean(prefill?.from || prefill?.left));
   const skipReset = useRef(false);
+  // SQL already registered in this visit, so re-running never registers it twice.
+  const registered = useRef(new Map<string, string>());
 
   const isolated = data.mode === 'isolated';
   const engineReady = isolated && data.runner_available;
@@ -180,6 +182,16 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
       && !(sides.baseline.reuse && sides.baseline.reuse.versionId === sides.target.reuse?.versionId)
       ? 'The two calculations are identical; change one of them.' : '');
 
+  /** A name that says what the calculation does, unless the analyst typed their own. */
+  function definitionName(side: Side, sql: string): string {
+    const typed = sides[side].name.trim();
+    if (typed && typed !== 'Current calculation' && typed !== 'Proposed calculation') return typed.slice(0, 160);
+    const described = describe(side);
+    if (described) return described.replace(/^Total of /, '').replace(/\.$/, '').slice(0, 160);
+    const where = sql.match(/\bWHERE\b([\s\S]*)$/i)?.[1]?.trim();
+    return (where ? `Where ${where}` : 'All records').replace(/\s+/g, ' ').slice(0, 160);
+  }
+
   async function registerAndCompare() {
     if (!choice || !contract) return;
     setBusy(true); setProblem(null); setRun(null);
@@ -191,9 +203,15 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
         try { sql = sqlFor(side); } catch (e) { update(side, {}); throw e; }
         const reuse = sides[side].reuse;
         if (reuse && sides[side].mode === 'sql' && reuse.sql.trim() === sql.trim()) { ids[side] = reuse.versionId; continue; }
+        // Reuse an identical, already-validated calculation on this dataset instead of registering a duplicate.
+        const cacheKey = `${contract.id}|${sql.trim()}`;
+        const existing = registered.current.get(cacheKey)
+          || allVersions.find(x => x.version.contract_hash === contract.contract_hash && x.version.support_state === 'executable'
+            && x.version.raw_sql.trim() === sql.trim())?.version.id;
+        if (existing) { ids[side] = existing; continue; }
         try {
           const def = await api.post<{ versions: Array<{ id: string; support_state: string; support_reason?: string | null }> }>(
-            endpoint, { name: sides[side].name.trim() || (side === 'baseline' ? 'Current calculation' : 'Proposed calculation'), raw_sql: sql, contract_id: contract.id });
+            endpoint, { name: definitionName(side, sql), raw_sql: sql, contract_id: contract.id });
           const version = def.versions.at(-1);
           if (!version || version.support_state !== 'executable') {
             const refusal = classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: version?.support_reason || 'This calculation is outside the supported grammar.' });
@@ -201,6 +219,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
             return;
           }
           ids[side] = version.id;
+          registered.current.set(cacheKey, version.id);
         } catch (e) {
           const refusal = classifyInvestigationError(e);
           if (refusal.isRefusal) { setSides(s => ({ ...s, [side]: { ...s[side], refusal, sql: s[side].sql || sql } })); return; }
@@ -228,7 +247,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   async function rememberDraft(started: Run, baselineId: string, targetId: string) {
     const editor_state = { mode: 'adhoc' as const, baseline_name: sides.baseline.name, target_name: sides.target.name,
       baseline_sql: safeSql('baseline'), target_sql: safeSql('target') };
-    const fields = { title: title.trim() || `${sides.baseline.name} vs ${sides.target.name}`, snapshot_id: started.snapshot_id,
+    const fields = { title: title.trim() || `${choice?.snapshot.name || 'Comparison'}: ${definitionName('target', safeSql('target'))}`.slice(0, 160), snapshot_id: started.snapshot_id,
       baseline_version_id: baselineId, target_version_id: targetId, comparison_run_id: started.id, editor_state };
     try {
       if (draft) setDraft(await api.updateInvestigationDraft(undefined, draft.id, { ...fields, status: 'needs_decision', version_token: draft.version_token }));
@@ -473,7 +492,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
           )}
           <div className="guided-nav">
             <button className="button secondary" onClick={() => setStage(1)}><ArrowLeft size={15} /> Edit calculations</button>
-            <button className="button primary" disabled={!run.result} onClick={() => { setTitle(t => t || `${sides.baseline.name} vs ${sides.target.name} · ${choice?.snapshot.name || ''}`); setStage(3); }}>
+            <button className="button primary" disabled={!run.result} onClick={() => { setTitle(t => t || `${choice?.snapshot.name || 'Comparison'}: ${definitionName('target', safeSql('target'))}`.slice(0, 160)); setStage(3); }}>
               Next: save explanation <ArrowRight size={15} />
             </button>
           </div>

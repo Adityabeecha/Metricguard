@@ -67,13 +67,25 @@ export function Dashboard({
   // Build priority queue items from real workspace state
   const priorityItems: PriorityItem[] = [];
 
-  // 1. Identify runs with material or non-zero delta
-  const diffRuns = runs.filter((r) => {
-    const res = r.result;
-    if (!res) return false;
-    const delta = res.delta_target_minus_baseline;
-    return !isDefinedComparison(res) || !isExactZero(delta);
-  });
+  // 1. Comparisons with a difference that nobody has explained yet. Runs already
+  // saved in an investigation, replays, and older repeats of the same comparison
+  // are not "needing review": the saved case (listed below) carries the decision.
+  const savedRunIds = new Set(investigations.map((inv) => inv.run_id));
+  const savedPairs = new Set(investigations.map((inv) => `${inv.baseline_version_id}|${inv.target_version_id}|${inv.snapshot_id}`));
+  const purposeOf = (r: Run) => r.purpose ?? (r as unknown as { request?: { purpose?: string } }).request?.purpose;
+  const seenPairs = new Set<string>();
+  const diffRuns = [...runs]
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+    .filter((r) => {
+      const res = r.result;
+      if (!res) return false;
+      if (savedRunIds.has(r.id) || /replay/.test(purposeOf(r) || '')) return false;
+      const pair = `${r.baseline_version_id}|${r.target_version_id}|${r.snapshot_id}`;
+      if (savedPairs.has(pair) || seenPairs.has(pair)) return false;
+      seenPairs.add(pair);
+      const delta = res.delta_target_minus_baseline;
+      return !isDefinedComparison(res) || !isExactZero(delta);
+    });
 
   diffRuns.slice(0, 3).forEach((r) => {
     const res = r.result;
@@ -86,13 +98,13 @@ export function Dashboard({
     priorityItems.push({
       id: `run-${r.id}`,
       kind: 'material_drift',
-      badgeLabel: defined ? 'Definition drift' : 'Gap unavailable',
+      badgeLabel: defined ? 'Not yet explained' : 'Total undefined',
       badgeTone: 'attention',
       title: `${baseName} → ${targetName}`,
       subtitle: `${snap?.name || 'Fixed snapshot'} · ${res?.explanation_status?.replaceAll('_', ' ') || 'reconciliation complete'}`,
       deltaDisplay: delta,
       currency: res?.currency || (snap as any)?.unit_label || snap?.currency || '',
-      actionLabel: 'Investigate',
+      actionLabel: 'Review and save',
       onAction: () => {
         if (onOpenRun) onOpenRun(r);
         else onNavigate('investigations');
@@ -243,9 +255,9 @@ export function Dashboard({
                     )}
                     {topAttentionItem.badgeLabel}
                   </span>
-                  <span className="hero-timestamp">Requires review</span>
+                  <span className="hero-timestamp">{topAttentionItem.kind === 'saved_case' ? 'Saved' : 'Requires review'}</span>
                 </div>
-                <h2>{topAttentionItem.title} needs review</h2>
+                <h2>{topAttentionItem.kind === 'saved_case' ? topAttentionItem.title : `${topAttentionItem.title} needs an explanation`}</h2>
                 <p className="hero-subtitle">{topAttentionItem.subtitle}</p>
               </div>
 
@@ -260,8 +272,8 @@ export function Dashboard({
                   </div>
                   <div className="drift-stat">
                     <span className="stat-label">DECISION STATE</span>
-                    <strong className="stat-value attention-text">Unreviewed</strong>
-                    <small>No approval or variance decision recorded</small>
+                    <strong className="stat-value attention-text">Not saved yet</strong>
+                    <small>Save an explanation to record what this difference means</small>
                   </div>
                 </div>
               )}

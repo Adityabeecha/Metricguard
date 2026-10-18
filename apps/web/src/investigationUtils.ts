@@ -350,6 +350,14 @@ export function classifyInvestigationError(err: unknown, measurePolicy?: string)
     } else if (lowerMsg.includes('only sum')) {
       message = rawMsg || 'Queries must evaluate the calculation registered by the frozen snapshot contract.';
       guidance = 'Use the frozen snapshot\'s declared calculation inside SUM(...), directly FROM snapshot.';
+    } else if (/only one sum|one sum|aggregate|\bavg\b|\bcount\b|\bmin\b|\bmax\b/.test(lowerMsg)) {
+      guidance = "Write one SUM of the dataset's amount column, for example SELECT SUM(amount) FROM snapshot WHERE status = 'completed'. Averages, counts and other functions are not supported.";
+    } else if (/exactly one select|statement|semicolon/.test(lowerMsg)) {
+      guidance = 'Enter a single SELECT statement, without semicolons or further statements.';
+    } else if (lowerMsg.includes('group by')) {
+      guidance = 'GROUP BY is not supported. Compare one total at a time and use WHERE to choose the records.';
+    } else if (/not registered|unknown column|no such column/.test(lowerMsg)) {
+      guidance = 'Use only the amount column and the filter columns chosen when the dataset was uploaded (listed under Choose data).';
     }
 
     return {
