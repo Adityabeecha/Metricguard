@@ -134,3 +134,20 @@ A full end-to-end check on a clean, separate instance (fresh data folder, seeded
 | 12 | Outage screen took about 10 seconds after connecting. | A network failure while connecting shows the outage screen at once. | about 2 seconds |
 
 Withdrawn during the check: `mg.ps1 stop` does stop the server (killing the venv launcher also ends its child process). Tests: web 67/67 with new tests for inference, key warnings and error guidance; frontend build passes. No backend code changed in this round (the last full backend run: 556 passed, 45 skipped).
+
+## Analyst feedback pass (2026-10-18)
+
+Built from the senior-analyst evaluation. Stress results are from `scripts/stress_test.py` at 100,000 rows on a fresh instance (report: `data/evaluation/stress-v2/stress_report.json`): **24/24 checks pass**, every total exact against an independent Decimal calculation.
+
+| Item | What changed | Verified |
+| --- | --- | --- |
+| Breakdown of the difference | “Where the difference comes from”: split the change by any filter column, exact sums and share, largest first. Single tables use a new record-context file written by the runner and validated line-by-line by the supervisor; evidence hashes and replay identity are unchanged. Two-table runs use the values already in their evidence. Runs made before this change show “Replay it to enable breakdowns”. | 100k by status exact; two-table by segment exact; browser |
+| Columns beside records | “Show columns” (up to 3) in Supporting records. | 100k context matches source; browser |
+| COUNT(*) | Single-table datasets can compare numbers of records (guided “What do you want to compare?” or SQL). Separate IR aggregate, so existing SUM IRs and hashes are unchanged; COUNT of nothing is 0; COUNT and SUM cannot be mixed; COUNT(DISTINCT)/COUNT(column)/COUNT(1) are refused. | unit tests; 100k COUNT exact; browser 8 → 5 records |
+| COUNT(DISTINCT) and ratios | Not built. They are not sums of per-record contributions, so “record changes add up exactly to the total change” cannot hold without a new evidence model. | — |
+| Warehouse source | “Use a PostgreSQL table” in Start a comparison: read-only, one REPEATABLE READ transaction, sample first then full table. The collector now writes the same typed schema as uploads (dates, booleans, timestamps), records the real contract version, validates typed and nullable columns, and rejects subtraction/CASE contracts. The connection string is used per request and stored without its password. Row limit stays 100,000. | 2 new tests against a real PostgreSQL 16; existing 38 collector tests pass |
+| Speed | Supervisor verifies evidence once (the copy is checked by SHA-256); two-table join pages cached after one full check; runner image precompiled; job folders can live outside OneDrive (`METRICGUARD_JOB_DIR`, set by `mg.ps1`); supervisor polls every 0.5 s. | 100k compare 31.7 → 29.0 s; 5-job burst 153 → 124 s; two-table compare 61 → 49 s; join pages 19 s each → 0.03–0.06 s after the first; first evidence read 5.7 s → 0.6 s when the breakdown has already verified it |
+
+Full backend suite with a live PostgreSQL: 609 passed, 0 skipped. Web: 67/67.
+
+Remaining speed limit: about 25 s of each 100k comparison is Docker Desktop file sharing and container overhead on Windows, not calculation (in-process the same comparison takes about 5 s).

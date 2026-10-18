@@ -307,6 +307,7 @@ class PostgresExtractionInput(Input):
     extraction_id: str | None = Field(default=None, max_length=64)
     snapshot_name: str | None = Field(default=None, max_length=160)
     row_limit: int | None = Field(default=1_000_000, ge=1, le=10_000_000)
+    sample_rows: int | None = Field(default=None, ge=1, le=100_000)
 
 
 class MetricCreateInput(Input):

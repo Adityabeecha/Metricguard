@@ -351,7 +351,7 @@ export function classifyInvestigationError(err: unknown, measurePolicy?: string)
       message = rawMsg || 'Queries must evaluate the calculation registered by the frozen snapshot contract.';
       guidance = 'Use the frozen snapshot\'s declared calculation inside SUM(...), directly FROM snapshot.';
     } else if (/only one sum|one sum|aggregate|\bavg\b|\bcount\b|\bmin\b|\bmax\b/.test(lowerMsg)) {
-      guidance = "Write one SUM of the dataset's amount column, for example SELECT SUM(amount) FROM snapshot WHERE status = 'completed'. Averages, counts and other functions are not supported.";
+      guidance = "Write one SUM of the dataset's amount column, for example SELECT SUM(amount) FROM snapshot WHERE status = 'completed'. COUNT(*) is also supported on single-table datasets; averages, distinct counts and other functions are not.";
     } else if (/exactly one select|statement|semicolon/.test(lowerMsg)) {
       guidance = 'Enter a single SELECT statement, without semicolons or further statements.';
     } else if (lowerMsg.includes('group by')) {

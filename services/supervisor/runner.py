@@ -54,6 +54,15 @@ def run_job(input_dir=Path('/job/input'), output_dir=Path('/job/output')):
     if job.get('execution_policy') == 'flat_snapshot_v1' and case_context is None:
         measure_expr = job.get('baseline_ir', {}).get('measure_expression')
     result['evidence_artifact'] = write_artifact(output_dir / 'evidence.jsonl', evidence, measure_expression=measure_expr, case_context=case_context, relational_context=relational_context)
+    if job.get('execution_policy') == 'flat_snapshot_v1':
+        # Optional, separately hashed record context (filter-column values per row).
+        # Best effort: the comparison and its evidence never depend on it.
+        try:
+            from services.supervisor.row_context import write_flat_context
+            info = write_flat_context(snapshot, manifest['contract'], evidence, output_dir / 'context.jsonl')
+            (output_dir / 'context.json').write_text(json.dumps(info), encoding='utf-8')
+        except Exception:
+            (output_dir / 'context.jsonl').unlink(missing_ok=True)
     encoded = json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8')
     if len(encoded) > MAX_OUTPUT_BYTES:
         raise ValueError('RUNNER_OUTPUT_TOO_LARGE')

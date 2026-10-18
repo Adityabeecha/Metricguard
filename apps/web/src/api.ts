@@ -18,6 +18,8 @@ export type DecimalColumn={name:string;precision:number;scale:number;unit_label:
 export type MeasureExpression={op:'sub';minuend:string;subtrahend:string};
 export type FlatContract={id:string;version:3|4|5|6|7;predicate_policy?:'flat-boolean-v1';measure_policy?:'flat-subtraction-v1'|'flat-case-v1';decimal_columns?:DecimalColumn[];measure_expression?:MeasureExpression;dimension_types?:Record<string,'string'|'boolean'|'date'|'timestamp'>;nullable_categories?:string[];version_number:number;name:string;row_key:string;measure:string;precision?:number;scale:number;categories:string[];measure_meaning:string;unit_label:string;values_comparable:boolean;scope:'entire_supplied_snapshot';null_policy:'blank_nullable'|'literal_NULL'|'native_null';contract_hash:string};
 export type EvidenceSummary={total:number;changed:number;blank_amount_rows:number;top_changes:Array<Evidence&{row_key?:string;fact_key?:string}>};
+export type BreakdownGroup={value:string|boolean|null;records:number;changed_records:number;current:string;proposed:string;change:string};
+export type EvidenceBreakdown={available:boolean;columns:string[];reason?:string;column?:string;total_change?:string;groups?:BreakdownGroup[];other_groups?:number;other_change?:string};
 export type FlatEvidence=Evidence&{row_key?:string;measure?:string|null;categories?:Record<string,string|null>;source_payment_ids?:string[]};
 export type RelationalContract = {
   id:string; version:1; version_number:number; mode:'relational_snapshot'; policy:'relational-snapshot-v1';
@@ -706,8 +708,11 @@ export const api = {
       `/comparisons/${encodeURIComponent(id)}/evidence?offset=${offset}&limit=${limit}`
     ),
   evidenceSummary: (id: string) => request<EvidenceSummary>(`/comparisons/${encodeURIComponent(id)}/evidence-summary`),
-  evidenceView: (id: string, view: { offset: number; limit: number; changedOnly?: boolean; q?: string; order?: 'file' | 'impact' }) => {
+  evidenceBreakdown: (id: string, column?: string) =>
+    request<EvidenceBreakdown>(`/comparisons/${encodeURIComponent(id)}/evidence-breakdown${column ? `?column=${encodeURIComponent(column)}` : ''}`),
+  evidenceView: (id: string, view: { offset: number; limit: number; changedOnly?: boolean; q?: string; order?: 'file' | 'impact'; withContext?: boolean }) => {
     const params = new URLSearchParams({ offset: String(view.offset), limit: String(view.limit) });
+    if (view.withContext) params.set('with_context', 'true');
     if (view.changedOnly) params.set('changed_only', 'true');
     if (view.q?.trim()) params.set('q', view.q.trim());
     if (view.order === 'impact') params.set('order', 'impact');

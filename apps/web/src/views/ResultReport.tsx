@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, type Evidence, type EvidenceSummary, type FlatEvidence, type RelationalEvidence, type RelationalRun, type Result, type Run, type Snapshot, type Version } from '../api';
+import { api, type EvidenceBreakdown, type Evidence, type EvidenceSummary, type FlatEvidence, type RelationalEvidence, type RelationalRun, type Result, type Run, type Snapshot, type Version } from '../api';
 import { groupDigits, summarizeResult, type RecordDelta } from '../resultSummary';
 import { RelationalEvidencePanel } from './RelationalEvidencePanel';
 
@@ -26,7 +26,7 @@ export function useEvidenceSummary(run: Run | RelationalRun | null) {
 }
 
 /** One page of a filtered/sorted record view, fetched from the server. */
-function useRecordPage(runId: string, view: { offset: number; changedOnly: boolean; q: string; order: 'file' | 'impact' }) {
+function useRecordPage(runId: string, view: { offset: number; changedOnly: boolean; q: string; order: 'file' | 'impact'; withContext: boolean }) {
   const [rows, setRows] = useState<AnyEvidence[]>([]);
   const [total, setTotal] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -42,8 +42,67 @@ function useRecordPage(runId: string, view: { offset: number; changedOnly: boole
         .finally(() => { if (active) setBusy(false); });
     }, view.q ? 250 : 0);
     return () => { active = false; clearTimeout(timer); };
-  }, [runId, view.offset, view.changedOnly, view.q, view.order]);
+  }, [runId, view.offset, view.changedOnly, view.q, view.order, view.withContext]);
   return { rows, total, busy, problem };
+}
+
+const columnLabel = (c: string) => c.startsWith('dimension.') ? `${c.slice(10)} (lookup)` : c.startsWith('fact.') ? c.slice(5) : c;
+const showValue = (v: unknown) => v === null || v === undefined ? 'blank' : String(v);
+
+/** Exact split of the change by one filter column, largest first. */
+function Breakdown({ runId, unit, onColumns }: { runId: string; unit: string; onColumns: (c: string[]) => void }) {
+  const [column, setColumn] = useState('');
+  const [data, setData] = useState<EvidenceBreakdown | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState('');
+  useEffect(() => {
+    let active = true;
+    setBusy(true); setProblem('');
+    api.evidenceBreakdown(runId, column || undefined)
+      .then(d => { if (!active) return; setData(d); onColumns(d.columns || []); if (!column && d.column) setColumn(d.column); })
+      .catch(e => { if (active) setProblem(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { if (active) setBusy(false); });
+    return () => { active = false; };
+  }, [runId, column]);
+  if (problem) return <p className="disabled-reason">The breakdown could not be loaded: {problem}</p>;
+  if (!data) return busy ? <p role="status">Working out where the difference comes from…</p> : null;
+  if (!data.available) return <p className="example">{data.reason}</p>;
+  const total = Number(data.total_change || 0);
+  return (
+    <div>
+      <h3 style={{ fontSize: 14, margin: '0 0 6px' }}>Where the difference comes from</h3>
+      <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6 }}>Split by
+        <select value={data.column || ''} onChange={e => setColumn(e.target.value)}>
+          {data.columns.map(c => <option key={c} value={c}>{columnLabel(c)}</option>)}
+        </select>
+      </label>
+      <div className="table-scroll" aria-busy={busy}>
+        <table>
+          <thead><tr><th>{columnLabel(data.column || '')}</th><th>Records changed</th><th>Current</th><th>Proposed</th><th>Change</th><th>Share of change</th></tr></thead>
+          <tbody>
+            {(data.groups || []).map(g => {
+              const share = total ? Number(g.change) / total : 0;
+              return (
+                <tr key={showValue(g.value)}>
+                  <td>{showValue(g.value)}</td>
+                  <td>{groupDigits(String(g.changed_records))} of {groupDigits(String(g.records))}</td>
+                  <td>{groupDigits(g.current)}</td>
+                  <td>{groupDigits(g.proposed)}</td>
+                  <td className={signedClass(g.change)}>{groupDigits(g.change)}{unit ? ` ${unit}` : ''}</td>
+                  <td>
+                    <span className="share-bar" aria-hidden="true"><span style={{ width: `${Math.min(100, Math.abs(share) * 100)}%` }} /></span>
+                    {' '}{total ? `${(share * 100).toFixed(1)}%` : '—'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {(data.other_groups || 0) > 0 && <small>{data.other_groups} more values together account for {groupDigits(data.other_change || '0')}{unit ? ` ${unit}` : ''}.</small>}
+      <small style={{ display: 'block' }}>Exact sums over every record. Shares are rounded for display; a value can move the total in either direction.</small>
+    </div>
+  );
 }
 
 type Props = {
@@ -72,8 +131,10 @@ function inclusion(row: AnyEvidence, side: 'baseline' | 'target') {
   return nullTerm ? 'Included · blank amount (ignored)' : 'Included';
 }
 
-export function ResultReport({ run, unit, relational, baselineLabel, targetLabel, baselineSql, targetSql, baselineDescription, targetDescription, snapshot, versions }: Props) {
+export function ResultReport({ run, unit: declaredUnit, relational, baselineLabel, targetLabel, baselineSql, targetSql, baselineDescription, targetDescription, snapshot, versions }: Props) {
   const result = run.result as Result;
+  // COUNT(*) comparisons count records; the dataset's declared unit does not apply.
+  const unit = (result as unknown as { aggregate?: string }).aggregate === 'count' ? 'records' : declaredUnit;
   const evidence = useEvidenceSummary(run);
   const top = (evidence.summary?.top_changes || []) as AnyEvidence[];
   const total = evidence.summary?.total ?? 0;
@@ -89,8 +150,10 @@ export function ResultReport({ run, unit, relational, baselineLabel, targetLabel
   const [q, setQ] = useState('');
   const [order, setOrder] = useState<'file' | 'impact'>('file');
   const [jump, setJump] = useState('');
+  const [columns, setColumns] = useState<string[]>([]);
+  const [shown, setShown] = useState<string[]>([]);
   const [csvProblem, setCsvProblem] = useState('');
-  const records = useRecordPage(run.result ? run.id : '', { offset, changedOnly, q, order });
+  const records = useRecordPage(run.result ? run.id : '', { offset, changedOnly, q, order, withContext: shown.length > 0 });
   const pages = Math.max(1, Math.ceil(records.total / PAGE));
   const pageNo = Math.floor(offset / PAGE) + 1;
   const goPage = (n: number) => setOffset((Math.min(Math.max(1, n), pages) - 1) * PAGE);
@@ -134,6 +197,8 @@ export function ResultReport({ run, unit, relational, baselineLabel, targetLabel
           <small>Part of the change not traced to a record</small>
         </div>
       </div>
+
+      {run.result && <Breakdown runId={run.id} unit={unit} onColumns={setColumns} />}
 
       {top.length > 0 && (
         <div>
@@ -185,23 +250,33 @@ export function ResultReport({ run, unit, relational, baselineLabel, targetLabel
                   <option value="impact">Largest change first</option>
                 </select>
               </label>
+              {columns.length > 0 && (
+                <fieldset className="column-picker">
+                  <legend>Show columns</legend>
+                  {columns.map(c => (
+                    <label key={c}><input type="checkbox" checked={shown.includes(c)} disabled={!shown.includes(c) && shown.length >= 3}
+                      onChange={e => setShown(s => e.target.checked ? [...s, c] : s.filter(x => x !== c))} /> {columnLabel(c)}</label>
+                  ))}
+                </fieldset>
+              )}
               <button type="button" className="button secondary small" onClick={downloadCsv}>Download all records (CSV)</button>
             </div>
             {csvProblem && <p className="disabled-reason">The download failed: {csvProblem}</p>}
             {records.problem && <p className="disabled-reason">Records could not be loaded: {records.problem}</p>}
             <div className="table-scroll" aria-busy={records.busy}>
               <table>
-                <thead><tr><th>Record</th><th>Current</th><th>Proposed</th><th>Change</th></tr></thead>
+                <thead><tr><th>Record</th>{shown.map(c => <th key={c}>{columnLabel(c)}</th>)}<th>Current</th><th>Proposed</th><th>Change</th></tr></thead>
                 <tbody>
                   {records.rows.map(r => (
                     <tr key={recordKey(r)}>
                       <td className="mono-cell">{recordKey(r)}</td>
+                      {shown.map(c => <td key={c}>{showValue((r as { context?: Record<string, unknown> }).context?.[c])}</td>)}
                       <td>{inclusion(r, 'baseline')}{r.baseline_contribution != null && ` · ${num(r.baseline_contribution)}`}</td>
                       <td>{inclusion(r, 'target')}{r.target_contribution != null && ` · ${num(r.target_contribution)}`}</td>
                       <td className={signedClass(r.delta)}>{num(r.delta)}</td>
                     </tr>
                   ))}
-                  {!records.busy && records.rows.length === 0 && <tr><td colSpan={4}>No records match.</td></tr>}
+                  {!records.busy && records.rows.length === 0 && <tr><td colSpan={4 + shown.length}>No records match.</td></tr>}
                 </tbody>
               </table>
             </div>

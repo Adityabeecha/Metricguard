@@ -18,7 +18,7 @@ import hashlib
 import json
 import threading
 from collections import OrderedDict
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import Any, Callable
 
@@ -164,3 +164,89 @@ def iter_rows(path: Path, key: tuple, verify_all: Callable[[], Any]):
 def clear() -> None:
     with _lock:
         _cache.clear()
+
+
+# ---------- record context and breakdowns ----------
+
+_contexts: 'OrderedDict[str, tuple[int, int, str, dict[str, dict]]]' = OrderedDict()
+
+
+def load_context(path: Path, info: dict) -> dict[str, dict]:
+    """Record key -> column values from a registered context file, verified by SHA-256 and row count."""
+    path = Path(path)
+    stat = path.stat()
+    with _lock:
+        hit = _contexts.get(str(path))
+        if hit and hit[0] == stat.st_size and hit[1] == stat.st_mtime_ns and hit[2] == info.get('sha256'):
+            _contexts.move_to_end(str(path))
+            return hit[3]
+    digest = hashlib.sha256()
+    values: dict[str, dict] = {}
+    with path.open('rb') as source:
+        for line in iter(source.readline, b''):
+            digest.update(line)
+            item = json.loads(line)
+            values[str(item['k'])] = item['v']
+    if digest.hexdigest() != info.get('sha256') or len(values) != info.get('row_count'):
+        raise ValueError('CONTEXT_INVALID')
+    with _lock:
+        _contexts[str(path)] = (stat.st_size, stat.st_mtime_ns, info['sha256'], values)
+        while len(_contexts) > MAX_ENTRIES:
+            _contexts.popitem(last=False)
+    return values
+
+
+def row_values(row: dict, context: dict[str, dict] | None) -> dict:
+    """Column values for one evidence row: from the context file (single table) or the row itself (two tables)."""
+    if context is not None:
+        return context.get(record_key(row), {})
+    out = {}
+    for prefix, field in (('fact', 'fact_values'), ('dimension', 'dimension_values')):
+        for name, value in (row.get(field) or {}).items():
+            out[f'{prefix}.{name}'] = value
+    return out
+
+
+def _dec(value) -> Decimal:
+    try:
+        return Decimal(value) if value not in (None, '') else Decimal(0)
+    except InvalidOperation:
+        return Decimal(0)
+
+
+def breakdown(path: Path, key: tuple, verify_all: Callable[[], Any], column: str,
+              context: dict[str, dict] | None, limit: int = 50) -> dict[str, Any]:
+    """Exact split of the change by the values of one column, largest change first."""
+    entry = _fresh(Path(path), key, verify_all)
+    cache_key = ('breakdown', column, id(context))
+    if cache_key in entry.views:
+        return entry.views[cache_key]  # type: ignore[return-value]
+    groups: dict[Any, dict[str, Any]] = {}
+    with localcontext() as exact:
+        exact.prec = 100  # exact sums for 38-digit decimals
+        total_change = Decimal(0)
+        for row in iter_rows(path, key, verify_all):
+            value = row_values(row, context).get(column)
+            group = groups.setdefault(value, {'value': value, 'records': 0, 'changed_records': 0,
+                                              'current': Decimal(0), 'proposed': Decimal(0), 'change': Decimal(0)})
+            change = _dec(row.get('delta'))
+            group['records'] += 1
+            group['changed_records'] += 1 if change else 0
+            group['current'] += _dec(row.get('baseline_contribution'))
+            group['proposed'] += _dec(row.get('target_contribution'))
+            group['change'] += change
+            total_change += change
+        ordered = sorted(groups.values(), key=lambda g: (-abs(g['change']), str(g['value'])))
+        rest = ordered[limit:]
+        result = {
+            'column': column,
+            'total_change': str(total_change),
+            'groups': [{**g, 'current': str(g['current']), 'proposed': str(g['proposed']), 'change': str(g['change'])}
+                       for g in ordered[:limit]],
+            'other_groups': len(rest),
+            'other_change': str(sum((g['change'] for g in rest), Decimal(0))),
+        }
+    if len(entry.views) > 8:
+        entry.views.clear()
+    entry.views[cache_key] = result  # type: ignore[assignment]
+    return result

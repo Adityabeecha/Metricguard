@@ -145,3 +145,9 @@ button.context-card { font: inherit; text-align: left; width: 100%; color: inher
   .queue-row-top { flex-wrap: wrap; }
   .queue-row-top strong { white-space: normal; }
 }
+
+/* Breakdown share bars and the record-table column picker. */
+.share-bar { display: inline-block; width: 60px; height: 8px; background: #EEF3FF; border-radius: 4px; vertical-align: middle; overflow: hidden; }
+.share-bar > span { display: block; height: 100%; background: #245BFF; }
+.column-picker { border: 1px solid #E4E7EC; border-radius: 6px; padding: 4px 10px; display: flex; flex-wrap: wrap; gap: 10px; font-size: 13px; }
+.column-picker legend { font-size: 12px; font-weight: 600; color: #475467; padding: 0 4px; }

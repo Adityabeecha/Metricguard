@@ -3,13 +3,14 @@ import { ArrowLeft, ArrowRight, Database, Plus, Save, Trash2, UploadCloud } from
 import { api, ApiError, type Bootstrap, type FlatContract, type InvestigationDraft, type RelationalContract, type Run, type Snapshot } from '../api';
 import {
   buildFlatSql, buildRelationalSql, describeCalculation, flatFilterColumns, formProblems, guidedFormSupported,
-  OP_LABEL, operatorsFor, relationalFilterColumns, supportsAnyMatch, type CalculationForm, type Filter, type FilterColumn,
+  OP_LABEL, operatorsFor, relationalFilterColumns, supportsAnyMatch, supportsCount, type CalculationForm, type Filter, type FilterColumn,
 } from '../comparisonBuilder';
 import { summarizeDataset } from '../datasetSummary';
 import { classifyInvestigationError, type ClassifiedInvestigationError } from '../investigationUtils';
 import type { Page } from '../router';
 import { ResultReport } from './ResultReport';
 import { TwoTableUpload } from './TwoTableUpload';
+import { WarehouseSource } from './WarehouseSource';
 
 type Side = 'baseline' | 'target';
 type SideState = { name: string; mode: 'form' | 'sql'; form: CalculationForm; sql: string; refusal: ClassifiedInvestigationError | null;
@@ -51,6 +52,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   const [draft, setDraft] = useState<InvestigationDraft | null>(null);
   const [origin, setOrigin] = useState<string>('');
   const [showTwoTable, setShowTwoTable] = useState(false);
+  const [showWarehouse, setShowWarehouse] = useState(false);
   const [loadingPrefill, setLoadingPrefill] = useState(Boolean(prefill?.from || prefill?.left));
   const skipReset = useRef(false);
   // SQL already registered in this visit, so re-running never registers it twice.
@@ -349,8 +351,13 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
             <div className="report-actions" style={{ marginTop: 8 }}>
               <button className="button secondary small" onClick={() => onNavigate('data', undefined, { add: '1' })}><UploadCloud size={14} /> Upload one table</button>
               <button className="button secondary small" aria-expanded={showTwoTable} onClick={() => setShowTwoTable(v => !v)}><Database size={14} /> Upload two connected tables</button>
+              <button className="button secondary small" aria-expanded={showWarehouse} onClick={() => setShowWarehouse(v => !v)}><Database size={14} /> Use a PostgreSQL table</button>
             </div>
           </div>
+          {showWarehouse && (
+            <WarehouseSource workspaceId={data.project.id} refresh={refresh}
+              onCreated={id => { setShowWarehouse(false); setSnapshotId(id); }} />
+          )}
           {showTwoTable && (
             <TwoTableUpload refresh={refresh} canUpload={engineReady}
               blocker={isolated ? 'The comparison engine is not running. Start it with scripts\\mg.ps1 start.' : 'Uploads need the isolated engine. Start MetricGuard with scripts\\mg.ps1 start.'}
@@ -369,8 +376,21 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
       {stage === 1 && choice && contract && (
         <section className="guided-card" aria-labelledby="stage-calc">
           <h2 id="stage-calc">2. Define calculations</h2>
-          <p className="lead">Describe the calculation in use today and the one being proposed. Both add up <code>{summary?.measureLabel}</code>; they differ only in which records they include.</p>
+          <p className="lead">Describe the calculation in use today and the one being proposed. Both {sides.target.form.aggregate === 'count' ? 'count records' : <>add up <code>{summary?.measureLabel}</code></>}; they differ only in which records they include.</p>
           {!formAllowed && <div className="guided-explain">This dataset uses a conditional (CASE) total, which is written in the SQL editor.</div>}
+          {formAllowed && supportsCount(contract) && (
+            <label style={{ maxWidth: 420 }}>What do you want to compare?
+              <select value={sides.target.form.aggregate || 'sum'} onChange={e => {
+                const aggregate = e.target.value as 'sum' | 'count';
+                setSides(s => ({ baseline: { ...s.baseline, form: { ...s.baseline.form, aggregate }, refusal: null },
+                                 target: { ...s.target, form: { ...s.target.form, aggregate }, refusal: null } }));
+              }}>
+                <option value="sum">Totals of {summary?.measureLabel}</option>
+                <option value="count">Numbers of records (COUNT)</option>
+              </select>
+              <span className="example">Both calculations use the same choice. A count includes records with a blank amount.</span>
+            </label>
+          )}
           <div className="calc-grid">
             {(['baseline', 'target'] as Side[]).map(side => {
               const s = sides[side];

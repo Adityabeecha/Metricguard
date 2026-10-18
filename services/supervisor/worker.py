@@ -297,6 +297,26 @@ class Supervisor:
         if finished:
             source.unlink(missing_ok=True)
 
+    def _publish_context(self, output_dir, published_evidence, contract, evidence_dir, run_id, attempt):
+        """Validate and publish the optional record-context file; never fails the run."""
+        source = output_dir / 'context.jsonl'
+        if not source.is_file():
+            return None
+        target = evidence_dir / f'{run_id}-{attempt}.context.jsonl'
+        try:
+            from services.supervisor.row_context import validate_context
+            info = validate_context(source, published_evidence, list(contract.get('categories', [])))
+            staged = evidence_dir / f'.{run_id}-{attempt}-{uuid.uuid4().hex}.context.tmp'
+            shutil.copyfile(source, staged)
+            if file_hash(staged) != info['sha256']:
+                staged.unlink(missing_ok=True)
+                return None
+            os.replace(staged, target)
+            return info
+        except Exception:
+            target.unlink(missing_ok=True)
+            return None
+
     def _execute(self, run):
         run_id, attempt = run['id'], run['attempt']
         snapshot = self.store.snapshot(run['snapshot_id'])
@@ -395,15 +415,23 @@ class Supervisor:
                 if published.exists():
                     raise ValueError('RUNNER_OUTPUT_INVALID')
                 shutil.copyfile(artifact, staged)
-                try:
-                    verify_artifact(staged, result['evidence_artifact'], result['delta_target_minus_baseline'], measure_expression=measure_expr, case_context=case_context, expected_result=result, relational_context=relational_context)
-                except (OSError, ValueError) as error:
-                    raise ValueError('RUNNER_OUTPUT_INVALID') from error
+                # The source bytes were fully verified above; the copy only has to be
+                # byte-identical to them, which its SHA-256 and size establish.
+                if (file_hash(staged) != result['evidence_artifact']['sha256'] or
+                        staged.stat().st_size != result['evidence_artifact']['byte_count']):
+                    raise ValueError('RUNNER_OUTPUT_INVALID')
                 os.replace(staged, published)
                 did_publish = True
+                context_info = self._publish_context(output_dir, published, contract, evidence_dir, run_id, attempt)
                 if not self.store.finish(run_id, self.worker_id, attempt, result=result):
                     published.unlink(missing_ok=True)
                     did_publish = False
+                elif context_info is not None and hasattr(self.store, 'record'):
+                    try:
+                        self.store.record('evidence_context', {'run_id': run_id, 'attempt': attempt, **context_info},
+                                          project_id=run.get('project_id'))
+                    except Exception:
+                        pass
             except Exception:
                 if did_publish:
                     published.unlink(missing_ok=True)
@@ -520,13 +548,16 @@ def main():
     from services.api.store import Store
     database_url = os.environ.get('METRICGUARD_DATABASE_URL', 'sqlite:///data/metricguard.db')
     data_dir = Path(os.environ.get('METRICGUARD_DATA_DIR', './data'))
+    # Temporary job folders can live outside synced folders (e.g. OneDrive), which
+    # makes the Docker bind-mount traffic much faster. Results still go to data_dir.
+    job_root = Path(os.environ.get('METRICGUARD_JOB_DIR') or data_dir / 'jobs')
     store = Store(database_url)
-    supervisor = Supervisor(store, DockerLauncher(), data_dir / 'jobs',
-                            worker_id=f'local-{os.getpid()}')
+    supervisor = Supervisor(store, DockerLauncher(), job_root,
+                            worker_id=f'local-{os.getpid()}', data_dir=data_dir)
     while True:
         store.worker_seen(supervisor.worker_id)
         if not supervisor.run_once():
-            time.sleep(2)
+            time.sleep(0.5)
 
 
 if __name__ == '__main__':

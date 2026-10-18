@@ -39,7 +39,7 @@ from .monitoring import classify_change, evaluate_materiality, compute_event_has
 from .relational_routes import verify_shared_access
 from .backup import backup_project, restore_project
 from . import evidence_cache
-from services.supervisor.evidence_artifact import verify_artifact
+from services.supervisor.evidence_artifact import explain_row, verify_artifact
 from services.supervisor.collector import CollectorError, PostgresCollector, PostgresSourceSelection
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -975,7 +975,9 @@ def create_app(database_url=None, data_dir=None, mode=None):
             if (a['ir'].get('measure_expression') != b['ir'].get('measure_expression') or
                     a['ir'].get('measure_expression') != snapshot['manifest']['contract'].get('measure_expression')):
                 raise DomainError('DIFFERENT_MEASURE_EXPRESSIONS', 'Both definitions must evaluate the identical declared measure expression.', 422)
-        elif (a['ir']['measure'] != b['ir']['measure'] or
+        elif a['ir'].get('aggregate') != b['ir'].get('aggregate'):
+            raise DomainError('NOT_COMPARABLE', 'Both definitions must use the same aggregate: both SUM or both COUNT(*).', 422)
+        elif a['ir'].get('aggregate') != 'count' and (a['ir']['measure'] != b['ir']['measure'] or
                 a['ir']['measure'] != snapshot['manifest']['contract']['measure']):
             raise DomainError('NOT_COMPARABLE', 'Both definitions must SUM the same declared measure.')
         if (payload['context']['unit_label'] != snapshot['manifest']['unit_label'] or
@@ -1244,12 +1246,57 @@ def create_app(database_url=None, data_dir=None, mode=None):
 
     @app.get('/api/v1/comparisons/{ident}/evidence')
     def evidence(ident: str, request: Request, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100),
-                 changed_only: bool = Query(False), q: str = Query('', max_length=256), order: str = Query('file', pattern='^(file|impact)$')):
+                 changed_only: bool = Query(False), q: str = Query('', max_length=256), order: str = Query('file', pattern='^(file|impact)$'),
+                 with_context: bool = Query(False)):
         auth = get_auth_context(request, store)
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
-        return evidence_page(run, offset, limit, changed_only=changed_only, query=q, order=order)
+        page = evidence_page(run, offset, limit, changed_only=changed_only, query=q, order=order)
+        if with_context:
+            context, _ = run_context(run)
+            if context is not None or run.get('execution_policy') == 'relational_snapshot_v1':
+                page['items'] = [{**row, 'context': evidence_cache.row_values(row, context)} for row in page['items']]
+        return page
+
+    def run_context(run):
+        """(record context or None, available column names) for one run; never raises for missing context."""
+        if run.get('execution_policy') == 'relational_snapshot_v1':
+            contract = (store.snapshot(run['snapshot_id']).get('manifest') or {}).get('contract') or {}
+            columns = [f'fact.{c}' for c in (contract.get('fact') or {}).get('categories', [])] + \
+                      [f'dimension.{c}' for c in (contract.get('dimension') or {}).get('categories', [])]
+            return None, columns
+        info = store.evidence_context(run['id'], run.get('attempt', 1))
+        path = data_dir / 'evidence' / f"{run['id']}-{run.get('attempt', 1)}.context.jsonl"
+        if not info or not path.is_file():
+            return None, []
+        try:
+            return evidence_cache.load_context(path, info), list(info.get('columns') or [])
+        except (ValueError, OSError, KeyError):
+            return None, []
+
+    @app.get('/api/v1/comparisons/{ident}/evidence-breakdown')
+    def evidence_breakdown(ident: str, request: Request, column: str = Query('', max_length=200)):
+        """Exact split of the change by one filter column (largest first), or the columns available."""
+        auth = get_auth_context(request, store)
+        run = store.get_run(ident)
+        verify_shared_access(request, store, auth, run)
+        verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        if not (run.get('result') or {}).get('evidence_artifact'):
+            return {'available': False, 'columns': [], 'reason': 'This run has no stored record evidence.'}
+        context, columns = run_context(run)
+        if not columns:
+            return {'available': False, 'columns': [],
+                    'reason': 'This comparison was run before column breakdowns existed. Replay it to enable them.'}
+        chosen = column or columns[0]
+        if chosen not in columns:
+            raise DomainError('INVALID_COLUMN', f"'{chosen}' is not a filter column of this dataset.")
+        path, key, verify_all = evidence_access(run)
+        try:
+            return {'available': True, 'columns': columns,
+                    **evidence_cache.breakdown(path, key, verify_all, chosen, context)}
+        except (ValueError, KeyError, TypeError, OSError) as error:
+            raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
 
     @app.get('/api/v1/comparisons/{ident}/join-evidence')
     def join_evidence(ident: str, request: Request, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100)):
@@ -1366,9 +1413,34 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
             return {'items': items, 'total': total}
         try:
-            return evidence_verify(run, manifest, artifact, offset, limit, include_join_evidence=True)
-        except (ValueError, KeyError, TypeError) as error:
+            # Join summary: computed once per artifact by a full verification, then reused.
+            path, key, verify_all = evidence_access(run)
+            stat = path.stat()
+            summary_key = (*key, stat.st_size, stat.st_mtime_ns)
+            summary = join_summaries.get(summary_key)
+            if summary is None:
+                summary = evidence_verify(run, manifest, artifact, 0, 0, include_join_evidence=True)['join_evidence']['summary']
+                if len(join_summaries) > 16:
+                    join_summaries.clear()
+                join_summaries[summary_key] = summary
+            items, total = evidence_cache.page(path, key, verify_all, offset, limit)
+            context = relational_context_for(run)
+            return {'items': items, 'total': total,
+                    'join_evidence': {'summary': summary, 'rows': [explain_row(context, row) for row in items]}}
+        except (ValueError, KeyError, TypeError, OSError) as error:
             raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
+
+    join_summaries: dict[tuple, dict] = {}
+
+    def relational_context_for(run):
+        frozen_snapshot = store.snapshot(run['snapshot_id'])
+        frozen_manifest = frozen_snapshot['manifest']
+        from packages.metricguard_core.relational import context_for
+        if (run['context'] != context_for(frozen_manifest['contract']) or
+                frozen_snapshot.get('execution_policy') != run['execution_policy']):
+            raise ValueError('EVIDENCE_INVALID')
+        return {'contract': frozen_manifest['contract'], 'manifest': frozen_manifest,
+                'baseline': store.version(run['baseline_version_id'])['ir'], 'target': store.version(run['target_version_id'])['ir']}
 
     def evidence_verify(run, manifest, artifact, offset, limit, *, include_join_evidence=False):
         result = run['result']
@@ -1772,6 +1844,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             extraction_id=payload.extraction_id,
             snapshot_name=payload.snapshot_name,
             row_limit=payload.row_limit or 1_000_000,
+            sample_rows=payload.sample_rows,
         )
         result = collector.collect(selection, project_id=pid)
         return store.get_extraction(result['extraction_id'], project_id=pid)

@@ -783,6 +783,15 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
             conn.execute(insert(records).values(id=value['id'], project_id=pid, kind=kind, created_at=value['created_at'], data=value))
         return value
 
+    def evidence_context(self, run_id: str, attempt: int) -> dict | None:
+        """The record-context file registered for one run attempt, if the runner produced one."""
+        with self.engine.connect() as conn:
+            for row in conn.execute(select(records).where(records.c.kind == 'evidence_context')).mappings():
+                data = row['data']
+                if data.get('run_id') == run_id and data.get('attempt') == attempt:
+                    return data
+        return None
+
     def record_baseline(self, data, project_id=None):
         pid = project_id or self.project_id
         self.version(data['version_id'])

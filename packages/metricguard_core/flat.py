@@ -645,7 +645,7 @@ def parse_flat(sql, contract):
         validate_case_ast(tree)
     if any(value is not None and value is not False and value != [] for key, value in tree.args.items()
            if key not in {'expressions', 'from_', 'where'}) or len(list(tree.walk())) > (250 if ver == 7 else 200) or len(tree.expressions) != 1:
-        _error('unsupported_sql', 'Only one SUM over the whole snapshot is supported')
+        _error('unsupported_sql', 'Only one SUM, or COUNT(*), over the whole snapshot is supported')
     source = tree.args.get('from_')
     if not isinstance(source, exp.From) or not isinstance(source.this, exp.Table) or any(value is not None and value is not False and value != [] for key, value in source.this.args.items() if key != 'this') or _identifier(source.this.this) != 'snapshot':
         _error('unsupported_sql', 'FROM snapshot is required without joins or aliases')
@@ -654,8 +654,17 @@ def parse_flat(sql, contract):
         if ver == 7:
             _error('unsupported_sql', 'Aliases are not supported by the CASE policy')
         _identifier(aggregate.args['alias']); aggregate = aggregate.this
-    if not isinstance(aggregate, exp.Sum) or any(value is not None and value is not False and value != [] for key, value in aggregate.args.items() if key != 'this'):
-        _error('unsupported_sql', 'Only one SUM over the whole snapshot is supported')
+    # COUNT(*) counts records (each included row contributes exactly 1). It is a
+    # separate aggregate in the frozen IR, so existing SUM IRs and hashes are unchanged.
+    is_count = isinstance(aggregate, exp.Count)
+    if is_count:
+        if ver in (6, 7):
+            _error('unsupported_sql', 'COUNT(*) is available on datasets with a single amount column, not on subtraction or CASE datasets')
+        if (not isinstance(aggregate.this, exp.Star) or
+                any(value is not None and value is not False and value != [] for key, value in aggregate.args.items() if key not in ('this', 'big_int'))):
+            _error('unsupported_sql', 'Only COUNT(*) is supported; COUNT(DISTINCT ...) and COUNT(column) are not')
+    elif not isinstance(aggregate, exp.Sum) or any(value is not None and value is not False and value != [] for key, value in aggregate.args.items() if key != 'this'):
+        _error('unsupported_sql', 'Only one SUM, or COUNT(*), over the whole snapshot is supported')
 
     if ver == 7:
         from .flat_case import parse_case
@@ -682,7 +691,7 @@ def parse_flat(sql, contract):
             _error('unsupported_sql', f'Operands must be registered decimal columns: {dec_names}')
         if minuend != contract['measure_expression']['minuend'] or subtrahend != contract['measure_expression']['subtrahend']:
             _error('different_measure_expressions', f"Expression must match contract measure expression: {contract['measure_expression']['minuend']} - {contract['measure_expression']['subtrahend']}")
-    else:
+    elif not is_count:
         if isinstance(aggregate.this, exp.Sub):
             _error('unsupported_sql', 'Measure expressions require a FlatContract v6 snapshot')
         if not isinstance(aggregate.this, exp.Column) or any(value is not None and value is not False and value != [] for key, value in aggregate.this.args.items() if key != 'this') or _identifier(aggregate.this.this) != contract['measure']:
@@ -700,7 +709,7 @@ def parse_flat(sql, contract):
         return {**ir, 'ir_hash': digest(ir)}
     elif ver == 5:
         ir = {'mode': 'flat_snapshot', 'policy': POLICY, 'contract_hash': contract['contract_hash'],
-              'table': 'snapshot', 'aggregate': 'sum', 'measure': contract['measure'],
+              'table': 'snapshot', 'aggregate': 'count' if is_count else 'sum', 'measure': '*' if is_count else contract['measure'],
               'predicate_policy': PREDICATE_POLICY,
               'predicate_tree': lower_boolean(where.this if where else None, lambda node: _typed_predicates(node, contract)[0])}
         validate_boolean(ir['predicate_tree'], lambda p: _check_flat_predicates([p], contract))
@@ -829,7 +838,7 @@ def parse_flat(sql, contract):
             else:
                 lower(where.this)
         ir = {'mode': 'flat_snapshot', 'policy': POLICY, 'contract_hash': contract['contract_hash'],
-              'table': 'snapshot', 'aggregate': 'sum', 'measure': contract['measure'], 'predicates': predicates}
+              'table': 'snapshot', 'aggregate': 'count' if is_count else 'sum', 'measure': '*' if is_count else contract['measure'], 'predicates': predicates}
         return {**ir, 'ir_hash': digest(ir)}
 
 
@@ -902,7 +911,8 @@ def _check_ir(ir, contract):
     fields |= {'predicate_policy', 'predicate_tree'} if ver == 5 else {'predicates'}
     if not isinstance(ir, dict) or set(ir) != fields:
         _error('invalid_ir', 'Flat IR shape is invalid for the frozen contract version')
-    if ir['mode'] != 'flat_snapshot' or ir['policy'] != POLICY or ir['contract_hash'] != contract['contract_hash'] or ir['table'] != 'snapshot' or ir['aggregate'] != 'sum' or ir['measure'] != contract['measure']:
+    if (ir['mode'] != 'flat_snapshot' or ir['policy'] != POLICY or ir['contract_hash'] != contract['contract_hash'] or ir['table'] != 'snapshot' or
+            (ir['aggregate'], ir['measure']) not in (('sum', contract['measure']), ('count', '*'))):
         _error('invalid_ir', 'Flat IR policy or contract differs')
     if ver == 5:
         if ir['predicate_policy'] != PREDICATE_POLICY:
@@ -1014,7 +1024,8 @@ def _query(ir, key, measure=None, contract=None):
         predicate, params = compile_boolean(ir['predicate_tree'], lambda p: _predicates_sql({'predicates': [p]}, contract))
     else:
         predicate, params = _predicates_sql(ir, contract)
-    return f'SELECT {_quote(key)}, {predicate} AS included, {_quote(measure)} FROM snapshot ORDER BY {_quote(key)}', params
+    value = '1' if ir.get('aggregate') == 'count' else _quote(measure)
+    return f'SELECT {_quote(key)}, {predicate} AS included, {value} FROM snapshot ORDER BY {_quote(key)}', params
 
 
 def compare_flat(database, baseline_ir, target_ir, context):
@@ -1030,6 +1041,9 @@ def compare_flat(database, baseline_ir, target_ir, context):
         raise CoreError('snapshot_missing', 'Flat snapshot or manifest is unavailable') from exc
     contract = validate_contract(manifest['contract'])
     baseline_ir, target_ir = _check_ir(baseline_ir, contract), _check_ir(target_ir, contract)
+    if baseline_ir.get('aggregate') != target_ir.get('aggregate'):
+        _error('different_aggregates', 'Both definitions must use the same aggregate: both SUM or both COUNT(*)')
+    counting = baseline_ir.get('aggregate') == 'count'
     if contract['version'] == 6:
         if baseline_ir['measure_expression'] != target_ir['measure_expression']:
             _error('different_measure_expressions', 'Both definitions must evaluate the identical declared measure expression')
@@ -1086,6 +1100,8 @@ def compare_flat(database, baseline_ir, target_ir, context):
                 else:
                     # Preserve historical v3–v6 arithmetic/serialization byte-for-byte.
                     endpoint_val = sum(terms, Decimal(0)) if terms else None
+                    if counting and endpoint_val is None:
+                        endpoint_val = Decimal(0)  # SQL: COUNT over no rows is 0, unlike SUM
                     if contract['version'] == 6 and endpoint_val is not None:
                         scaled_endpoint = abs(endpoint_val * (Decimal(10) ** contract['scale']))
                         if scaled_endpoint > (Decimal(10) ** 38 - 1):
@@ -1160,4 +1176,6 @@ def compare_flat(database, baseline_ir, target_ir, context):
                                'Unknown currency remains unknown; no verified financial loss is claimed.'] +
                                (['CASE evidence checks consistency with both frozen definitions and typed row inputs; source authenticity relies on the isolated runner and snapshot/artifact integrity checks.',
                                  'The bridge describes one whole-definition contribution change, not per-predicate causal attribution.'] if contract['version'] == 7 else []) +
-                               (['An endpoint SUM is NULL because no non-NULL terms matched; the gap is undefined.'] if gap is None else [])}
+                               (['An endpoint SUM is NULL because no non-NULL terms matched; the gap is undefined.'] if gap is None else []) +
+                               (['COUNT(*) counts records; the dataset unit does not apply to these totals.'] if counting else []),
+                **({'aggregate': 'count'} if counting else {})}

@@ -32,6 +32,7 @@ from packages.metricguard_core.v2_contract import (
 )
 from packages.metricguard_core.flat import (
     validate_contract as validate_flat_contract,
+    flat_schema,
     MAX_FLAT_ROWS,
 )
 
@@ -117,6 +118,8 @@ class PostgresSourceSelection:
     snapshot_name: str | None = None
     row_limit: int = MAX_RETAIL_ROWS
     chunk_size: int = 1000
+    # Optional quick look: take only the first N rows (by row key) into a separate, clearly labelled snapshot.
+    sample_rows: int | None = None
 
 
 class PostgresCollector:
@@ -313,6 +316,8 @@ class PostgresCollector:
         if is_flat:
             clean_contract = {k: v for k, v in contract.items() if k not in {'id', 'created_at', 'version_number', 'project_id'}}
             validated_contract = validate_flat_contract(clean_contract)
+            if validated_contract['version'] in (6, 7):
+                raise CollectorError('UNSUPPORTED_CONTRACT', 'Warehouse extraction supports datasets with one amount column (not subtraction or CASE datasets).')
             return {
                 'is_flat': True,
                 'contract': validated_contract,
@@ -383,8 +388,11 @@ class PostgresCollector:
             order_by = columns_to_select[0]
 
         # Build parameterized query using psycopg.sql
+        sample = selection.sample_rows if is_flat and selection.sample_rows else None
+        if sample is not None and not 1 <= sample <= MAX_FLAT_ROWS:
+            raise CollectorError('INVALID_SAMPLE', f'A sample must be between 1 and {MAX_FLAT_ROWS} rows.')
         query = sql.SQL(
-            "SELECT {cols} FROM {schema}.{table} WHERE {cutoff} <= %s ORDER BY {order}"
+            "SELECT {cols} FROM {schema}.{table} WHERE {cutoff} <= %s ORDER BY {order}" + (" LIMIT %s" if sample else "")
         ).format(
             cols=sql.SQL(", ").join(sql.Identifier(c) for c in columns_to_select),
             schema=sql.Identifier(selection.schema_name),
@@ -402,16 +410,9 @@ class PostgresCollector:
         with duckdb.connect(str(staging_db)) as ddb:
             ddb.execute("BEGIN TRANSACTION")
             if is_flat:
-                cat_defs = ', '.join(f'"{c}" VARCHAR' for c in contract['categories'])
-                cat_part = f', {cat_defs}' if cat_defs else ''
-                if contract.get('version') == 6:
-                    dec_defs = ', '.join(f'"{c["name"]}" DECIMAL({c["precision"]},{c["scale"]})' for c in contract['decimal_columns'])
-                    ddb.execute(f'CREATE TABLE snapshot ("{contract["row_key"]}" VARCHAR, {dec_defs}{cat_part})')
-                else:
-                    ddb.execute(
-                        f'CREATE TABLE snapshot ("{contract["row_key"]}" VARCHAR, '
-                        f'"{contract["measure"]}" DECIMAL({contract["precision"]},{contract["scale"]}){cat_part})'
-                    )
+                # Same typed physical schema as a validated file upload (dates, booleans, timestamps).
+                schema = flat_schema(contract)
+                ddb.execute('CREATE TABLE snapshot (' + ', '.join(f'"{name}" {kind}' for name, kind in schema.items()) + ')')
                 insert_placeholders = ', '.join(['?'] * len(columns_to_select))
                 insert_sql = f'INSERT INTO snapshot VALUES ({insert_placeholders})'
             else:
@@ -423,7 +424,7 @@ class PostgresCollector:
             try:
                 with conn.cursor(name=cursor_name) as cursor:
                     cursor.itersize = selection.chunk_size
-                    cursor.execute(query, [cutoff_val])
+                    cursor.execute(query, [cutoff_val, sample] if sample else [cutoff_val])
 
                     while True:
                         rows = cursor.fetchmany(selection.chunk_size)
@@ -569,15 +570,32 @@ class PostgresCollector:
             dec_amount = dec
 
         categories = []
+        types = contract.get('dimension_types') or {}
+        nullable = set(contract.get('nullable_categories') or contract['categories'])
         for i, cat_name in enumerate(contract['categories'], start=2):
             val = raw_tuple[i]
-            if val is not None:
+            kind = types.get(cat_name, 'string') if contract['version'] >= 4 else 'string'
+            if val is None:
+                if contract['version'] >= 4 and cat_name not in nullable:
+                    raise CollectorError('INVALID_ROW', f"'{cat_name}' is blank at row {row_number} but was not declared nullable")
+                categories.append(None)
+            elif kind == 'boolean':
+                if not isinstance(val, bool):
+                    raise CollectorError('INVALID_ROW', f"'{cat_name}' must be a boolean at row {row_number}")
+                categories.append(val)
+            elif kind == 'date':
+                if not isinstance(val, date) or isinstance(val, datetime):
+                    raise CollectorError('INVALID_ROW', f"'{cat_name}' must be a date at row {row_number}")
+                categories.append(val)
+            elif kind == 'timestamp':
+                if not isinstance(val, datetime) or val.tzinfo is not None:
+                    raise CollectorError('INVALID_ROW', f"'{cat_name}' must be a timestamp without time zone at row {row_number}")
+                categories.append(val)
+            else:
                 val_str = str(val)
                 if len(val_str) > 256:
                     raise CollectorError('INVALID_ROW', f"Category '{cat_name}' exceeds 256 chars at row {row_number}")
                 categories.append(val_str)
-            else:
-                categories.append(None)
 
         return (key, dec_amount, *categories)
 
@@ -608,7 +626,7 @@ class PostgresCollector:
 
         manifest = {
             'snapshot_id': snapshot_id,
-            'name': selection.snapshot_name or f"PostgreSQL {selection.table_name} snapshot",
+            'name': (selection.snapshot_name or f"PostgreSQL {selection.table_name} snapshot") + (f" (sample of {selection.sample_rows} rows)" if selection.sample_rows else ''),
             'source_type': 'postgresql',
             'sanitized_source': sanitized_source,
             'schema': selection.schema_name,
@@ -647,7 +665,7 @@ class PostgresCollector:
             manifest['mode'] = 'flat_snapshot'
             manifest['policy'] = 'flat-snapshot-v1'
             manifest['execution_policy'] = 'flat_snapshot_v1'
-            manifest['contract_version'] = 3
+            manifest['contract_version'] = contract['version']
             manifest['contract'] = contract
             manifest['scope'] = contract['scope']
             manifest['unit_label'] = contract['unit_label']
@@ -656,19 +674,10 @@ class PostgresCollector:
             manifest['null_policy'] = contract['null_policy']
             manifest['currency'] = None
             manifest['timezone'] = None
-            cat_schema = {c: 'VARCHAR' for c in contract['categories']}
-            if contract.get('version') == 6:
-                manifest['schema'] = {
-                    contract['row_key']: 'VARCHAR',
-                    **{c['name']: f"DECIMAL({c['precision']},{c['scale']})" for c in contract['decimal_columns']},
-                    **cat_schema
-                }
-            else:
-                manifest['schema'] = {
-                    contract['row_key']: 'VARCHAR',
-                    contract['measure']: f"DECIMAL({contract['precision']},{contract['scale']})",
-                    **cat_schema
-                }
+            manifest['schema'] = flat_schema(contract)
+            if selection.sample_rows:
+                manifest['sample_rows'] = selection.sample_rows
+                manifest['transformations'] = [*manifest['transformations'], f'Sample: first {selection.sample_rows} rows by row key']
         else:
             manifest['currency'] = contract.get('currency', 'INR')
             manifest['timezone'] = contract.get('timezone', 'Asia/Kolkata')

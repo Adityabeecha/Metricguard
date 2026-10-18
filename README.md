@@ -44,15 +44,16 @@ Browser (React)  ──►  API (FastAPI)  ──►  job queue  ──►  supe
 ```
 
 - **Datasets are frozen.** An upload is validated against a declared contract (row key, amount, unit, filter columns) and stored immutably with hashes.
-- **Calculations are restricted SQL.** One `SUM` with bounded filters, over one table or one fact table joined to one dimension table. Anything else is refused.
+- **Calculations are restricted SQL.** One `SUM` (or `COUNT(*)` on single tables) with bounded filters, over one table or one fact table joined to one dimension table. Anything else is refused.
+- **Differences are broken down.** Every result can be split by any filter column (for example, how much of the change comes from each region), with exact sums, and any filter column can be shown beside each record.
 - **Evidence is exact.** Every record's contribution to each total is stored; the record changes plus any unexplained difference always equal the total change. Decimals are never floating point.
 - **Saved investigations replay.** A case pins the dataset, both calculations and the result; replay must reproduce it bit for bit.
 - **Access** is per workspace with reader / analyst / owner roles. Sign in with an API key issued by an owner (`python -m scripts.issue_api_key`). The key is never stored in the browser; “keep me signed in” uses an 8-hour server session instead.
 
 ## Limitations
 
-- Supported: `SUM` over one table, or one fact table plus one unique dimension table, with `=`, `!=`, `IN`, comparisons, `IS [NOT] NULL` and (per dataset) `AND/OR/NOT`, one subtraction, or one `CASE WHEN`. No averages, ratios, `GROUP BY`, multiple joins or window functions.
-- Up to 100,000 rows per table and 25 MiB per upload. Data preparation (cleaning, wider joins) happens before upload.
+- Supported: `SUM` over one table, or one fact table plus one unique dimension table, with `=`, `!=`, `IN`, comparisons, `IS [NOT] NULL` and (per dataset) `AND/OR/NOT`, one subtraction, or one `CASE WHEN`; `COUNT(*)` on single tables. No averages, ratios, `COUNT(DISTINCT …)`, `GROUP BY`, multiple joins or window functions: these are not sums of per-record contributions, so the exact record-level explanation would not hold.
+- Up to 100,000 rows per table and 25 MiB per upload. A PostgreSQL table can be frozen directly (sample first, then the full table, up to the same row limit). Data preparation (cleaning, wider joins) happens beforehand.
 - No currency or unit conversion: a declared unit is a label the analyst confirms.
 - “Explained” means every unit of the difference is traced to records; it does not mean either calculation is correct. A lower total is not automatically a loss.
 - Local, single-machine deployment. Sign-in is API-key based (with optional 8-hour sessions); there is no single sign-on.

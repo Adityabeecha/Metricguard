@@ -163,6 +163,9 @@ function Start-App {
   $env:METRICGUARD_DATA_DIR = $data
   $env:METRICGUARD_DATABASE_URL = "sqlite:///$($data -replace '\\','/')/metricguard.db"
   $env:METRICGUARD_ALLOW_UNVERIFIED_LOCAL = $(if ($RequireKey) { 'false' } else { 'true' })
+  # Temporary runner job folders outside OneDrive/synced folders: faster Docker file sharing.
+  $env:METRICGUARD_JOB_DIR = Join-Path $env:LOCALAPPDATA 'MetricGuard\jobs'
+  New-Item -ItemType Directory -Force -Path $env:METRICGUARD_JOB_DIR | Out-Null
 
   Write-Host 'Starting'
   $api = Start-Process -FilePath $Python -ArgumentList '-m', 'uvicorn', 'services.api.app:app', '--host', '127.0.0.1', '--port', "$Port" `
