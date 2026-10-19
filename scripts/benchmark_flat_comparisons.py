@@ -148,10 +148,13 @@ def benchmark(rows, repetitions, output, docker_image=None):
                         result = _timed(stage, 'compare_and_evidence', lambda: compare_flat(database, baseline, target, context))
                         ratio, distinct = aggregate_contexts(contract, baseline, target)
                         evidence = result.pop('evidence')
-                        # Match the runner's validation order: aggregate rows checked once on artifact write.
-                        result['evidence'] = [] if ratio or distinct else evidence
-                        if ratio or distinct:
-                            result['evidence_artifact'] = {}
+                        # Match the runner's validation order: aggregate and on-disk rows are checked once on artifact write.
+                        deferred = ratio or distinct or hasattr(evidence, 'artifact_policy')
+                        result['evidence'] = [] if deferred else evidence
+                        if deferred:
+                            result['evidence_artifact'] = {'row_count': len(evidence),
+                                                           **({'storage_policy': evidence.artifact_policy}
+                                                              if hasattr(evidence, 'artifact_policy') else {})}
                         _timed(stage, 'result_validation', lambda: validate_result(result, ratio_context=ratio, distinct_context=distinct))
                         result.pop('evidence_artifact', None)
                         result['evidence'] = []

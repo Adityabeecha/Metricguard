@@ -162,3 +162,10 @@ button.context-card { font: inherit; text-align: left; width: 100%; color: inher
 .exact-values summary { cursor: pointer; }
 .exact-values ul { margin: 4px 0 0; padding-left: 18px; }
 .exact-values code { overflow-wrap: anywhere; }
+
+/* Prepare a large two-table dataset */
+.prepare-two-table fieldset { border: 0; padding: 0; margin: 10px 0; min-width: 0; }
+.prepare-two-table legend { font-weight: 600; margin-bottom: 6px; }
+.prepare-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0; }
+.prepare-row > span { min-width: 160px; }
+.prepare-row select, .prepare-row input { min-width: 0; max-width: 100%; }

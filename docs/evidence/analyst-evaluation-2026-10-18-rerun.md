@@ -183,3 +183,37 @@ The errors read "Temporary evidence storage is unavailable or full" or "Internal
 4. Lift the two-load limit, or warn before queuing. Export only changed records by default.
 5. Add a "Prepare for large comparisons" screen that keeps the original column names.
 6. Show failure reasons in lists, and trim the workspace payload.
+
+## Third pass: remaining fixes (2026-10-19)
+
+| # | Fix | Where |
+|---|---|---|
+| 1 | Large ratio comparisons stream both calculations in one pass. They list only records whose inclusion or terms differ; every other record's share is exactly 0. The verifier proves that the listed rows' numerator and denominator changes equal the claimed changes. A tamper test drops a record and checks that it is refused. The temporary evidence file is written and read in 1 MiB blocks instead of with a seek per row. | `flat_ratio.py`, `flat_ratio_evidence.py`, `disk_evidence.py`, `flat.py` |
+| 2 | Comparing two data loads streams a key-ordered merge, up to 5,000,000 rows per load. No more 100,000-row limit. | `flat_change.py` |
+| 3 | The two-load export lists only added, removed and changed records. Unchanged records are still counted in the change summary. | `flat_change.py` |
+| 4 | "Prepare for large comparisons" panel, in the guided flow and on the dataset page. Prepared columns keep their source names; a shared name gets its lookup prefix (`customer_region`). | `PrepareTwoTable.tsx`, `relational_prepared.py` |
+| 5 | Failure reasons are shown in the Changes list and the Investigations list. | `ChangesView.tsx`, `investigationLibrary.ts` |
+| 6 | The workspace payload carries run summaries only: 418 KB down to 223 KB. Definitions load in two queries instead of two per definition: 35 ms down to 8 ms. | `app.py`, `store.py` |
+| 7 | Two-table filters accept `<>` and `NOT IN`, following SQL NULL rules. The guided form offers "is not" and "is none of". | `relational_star.py`, `comparisonBuilder.ts` |
+| — | The upload preview no longer refuses CSVs over 100,000 rows; the limit is now 5,000,000, matching the server. | `csvInference.ts` |
+
+**Stress run on shipped settings:** every check passes, 13.5 minutes in total.
+
+| Check (1M rows unless noted) | Before | After |
+|---|---|---|
+| AVG / rate / share | 230 / 221 / 295 s | **32 / 17 / 36 s** |
+| Replay of the AVG case | 285 s | 36 s |
+| Margin, 500k rows | 126 s | 13 s |
+| Two data loads, 1M rows each | Refused | **8 s**, exact. 20,124 changed records listed. |
+| Two tables, 100k facts, `<>` on a lookup column | Refused | Exact, 29 s |
+| Two tables, 500k facts (prepare + compare) | API only, `field_N` names | 27 s + 10 s, exact, names `status`, `segment`, `city` |
+| Reads during an 8-comparison burst | p95 13.4 s | p95 5.4 s, 0 errors |
+
+COUNT(DISTINCT) on 1M rows is still 54–69 s and was not changed.
+
+**Tests:**
+
+- Backend: 717 passed, 0 failed. This includes the 47 PostgreSQL tests, run against the local test database.
+- Web: 82 / 82; build OK.
+
+**Score after this pass:** about **8 / 10**. What remains is mainly running comparisons concurrently, and connectors beyond CSV, Parquet and PostgreSQL.

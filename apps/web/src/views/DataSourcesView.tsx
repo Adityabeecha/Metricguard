@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { api, type Bootstrap, type Snapshot, type SnapshotImport } from '../api';
 import { inferMeaning, parseCsvText, type ParsedCsvPreview } from '../csvInference';
+import { DIRECT_TWO_TABLE_LIMIT, PrepareTwoTable } from './PrepareTwoTable';
 import { humanizeError, type HumanizedError } from '../errorUtils';
 import { ROLE_LABEL, summarizeDataset } from '../datasetSummary';
 import { useDialog } from '../useDialog';
@@ -950,6 +951,18 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                       <span className="prov-text">{activeSnapshot.scope || 'synthetic_retail_all_orders'}</span>
                     </div>
                   </div>
+
+                  {activeSnapshot.execution_policy === 'relational_snapshot_v1' && (() => {
+                    const relationalContract = (data.relational_contracts || []).find((c) => c.contract_hash === activeSnapshot.contract_hash);
+                    if (!relationalContract) return null;
+                    return (
+                      <details className="prov-details" style={{ marginTop: '16px' }} open={activeSnapshot.row_count > DIRECT_TWO_TABLE_LIMIT}>
+                        <summary>Prepare for large comparisons{activeSnapshot.row_count > DIRECT_TWO_TABLE_LIMIT ? ' (needed: over 100,000 facts)' : ''}</summary>
+                        <PrepareTwoTable key={activeSnapshot.id} snapshot={activeSnapshot} contract={relationalContract}
+                          onPrepared={async (id) => { await refresh(); setSelectedSnapshotId(id); }} />
+                      </details>
+                    );
+                  })()}
 
                   {activeSnapshot.preparation && (
                     <details className="prov-details" style={{ marginTop: '16px' }}>

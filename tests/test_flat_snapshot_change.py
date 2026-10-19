@@ -65,10 +65,10 @@ def test_sum_change_is_explained_by_added_removed_and_changed_records(loads, tmp
     rows = _by_key(result)
     assert {key: (row['change'], row['delta']) for key, row in rows.items()} == {
         'R1': ('left_filter', '-120.00'), 'R2': ('value_changed', '15.00'), 'R3': ('entered_filter', '200.00'),
-        'R4': ('removed', '0'), 'R5': ('unchanged', '0'), 'R6': ('unchanged', '0'),
-        'R7': ('added', '30.00'), 'R8': ('removed', '-10.00')}
+        'R4': ('removed', '0'), 'R7': ('added', '30.00'), 'R8': ('removed', '-10.00')}
     assert rows['R7']['baseline_present'] is False and rows['R8']['target_present'] is False
-    assert rows['R5']['baseline_null_term'] and rows['R5']['target_null_term']
+    # Unchanged records (R5 blank in both loads, R6) are counted, not listed: they add nothing to the change.
+    assert result['change_summary']['unchanged'] == {'records': 2, 'delta': '0'}
     assert sum(Decimal(row['delta']) for row in result['evidence']) == Decimal('115.00')
     assert result['change_summary']['removed'] == {'records': 2, 'delta': '-10.00'}
     assert result['provenance']['target_snapshot_manifest_hash'] == context['target_manifest_hash']
@@ -108,8 +108,9 @@ def test_count_star_change_counts_added_and_removed_records(loads):
     assert result['aggregate'] == 'count'
     changed = {row['order_id']: (row['change'], row['delta']) for row in result['evidence'] if Decimal(row['delta'])}
     assert changed == {'R4': ('removed', '-1'), 'R7': ('added', '1'), 'R8': ('removed', '-1')}
-    # records whose amount changed are still counted once in each load
-    assert _by_key(result)['R2']['change'] == 'unchanged'
+    # records whose amount changed are still counted once in each load, so they are not listed
+    assert 'R2' not in _by_key(result)
+    assert result['change_summary']['unchanged']['records'] == 5
     validate_result(result)
 
 
@@ -230,3 +231,23 @@ def test_http_compare_two_loads_end_to_end(tmp_path):
         replayed = client.get(f"/api/v1/comparisons/{replay.json()['id']}").json()
         assert replayed['state'] == 'succeeded', replayed['error']
         assert replayed['result']['delta_target_minus_baseline'] == '115.00'
+
+
+def test_large_loads_stream_and_list_only_changed_records(loads, tmp_path, monkeypatch):
+    """Over FULL_EVIDENCE_ROWS the loads are merged in key order and evidence is kept on disk."""
+    import packages.metricguard_core.flat_change as flat_change
+    from packages.metricguard_core.disk_evidence import DiskRows, STORAGE_POLICY
+    c, sep, oct_, context = loads
+    ir = parse_flat("SELECT SUM(amount) FROM snapshot WHERE status = 'completed'", c)
+    small = compare_snapshots(sep, oct_, ir, context)
+    monkeypatch.setattr(flat_change, 'FULL_EVIDENCE_ROWS', 3)
+    large = compare_snapshots(sep, oct_, ir, context)
+    assert isinstance(large['evidence'], DiskRows)
+    assert list(large['evidence']) == small['evidence']
+    assert large['change_summary'] == small['change_summary']
+    assert large['provenance']['evidence_storage_policy'] == STORAGE_POLICY
+    evidence = large.pop('evidence')
+    stored = {**large, 'evidence': []}
+    manifest = write_artifact(tmp_path / 'large.jsonl', evidence, expected_result=stored)
+    assert manifest['row_count'] == len(small['evidence'])
+    verify_artifact(tmp_path / 'large.jsonl', manifest, large['delta_target_minus_baseline'], expected_result=stored)

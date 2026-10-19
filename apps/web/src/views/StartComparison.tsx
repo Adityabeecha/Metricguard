@@ -10,6 +10,7 @@ import { summarizeDataset } from '../datasetSummary';
 import { classifyInvestigationError, type ClassifiedInvestigationError } from '../investigationUtils';
 import type { Page } from '../router';
 import { ResultReport } from './ResultReport';
+import { DIRECT_TWO_TABLE_LIMIT, PrepareTwoTable } from './PrepareTwoTable';
 import { TwoTableUpload } from './TwoTableUpload';
 import { WarehouseSource } from './WarehouseSource';
 import { SnapshotChange } from './SnapshotChange';
@@ -213,6 +214,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     return amounts.length > 1 ? (sides[side].form.amountColumn || amounts[0]) : (summary?.measureLabel || 'amount');
   }
 
+  const tooLargeTwoTable = Boolean(choice?.relational && choice.snapshot.row_count > DIRECT_TWO_TABLE_LIMIT);
   const largeSnapshotReason = aggregateRowLimitReason(choice?.snapshot.row_count || 0, choice?.flat?.version);
   const sideProblems = (side: Side) => {
     if (largeSnapshotReason) return [largeSnapshotReason];
@@ -406,9 +408,16 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
               </details>
             </div>
           )}
+          {choice?.relational && choice.snapshot.row_count > DIRECT_TWO_TABLE_LIMIT && (
+            <div role="note">
+              <p className="disabled-reason">Two-table comparisons run directly on up to {DIRECT_TWO_TABLE_LIMIT.toLocaleString()} facts; this dataset has {choice.snapshot.row_count.toLocaleString()}. Prepare it once below, then compare the prepared copy.</p>
+              <PrepareTwoTable key={choice.snapshot.id} snapshot={choice.snapshot} contract={choice.relational}
+                onPrepared={async id => { await refresh(); setSnapshotId(id); }} />
+            </div>
+          )}
           <div className="guided-nav">
             <span className="example">{choice ? <>Selected: <b>{choice.snapshot.name}</b></> : choices.length ? 'Select a dataset above.' : ''}</span>
-            <button className="button primary" disabled={!choice} onClick={() => setStage(1)} aria-describedby={!choice ? 'need-data' : undefined}>
+            <button className="button primary" disabled={!choice || tooLargeTwoTable} onClick={() => setStage(1)} aria-describedby={!choice ? 'need-data' : undefined}>
               Next: define calculations <ArrowRight size={15} />
             </button>
           </div>
@@ -581,7 +590,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                         {s.form.filters.length > 1 && !supportsAnyMatch(contract) && <span className="example">All conditions must be true. This dataset was not set up for OR conditions.</span>}
                         {s.form.filters.map((f, i) => {
                           const col = columns.find(c => c.id === f.column);
-                          const ops = operatorsFor(col?.type || 'string', relational);
+                          const ops = operatorsFor(col?.type || 'string', relational, choice?.relational?.version);
                           const needsValue = f.op !== 'is_null' && f.op !== 'is_not_null';
                           const setFilter = (patch: Partial<Filter>) => updateForm(side, { ...s.form, filters: s.form.filters.map((x, j) => j === i ? { ...x, ...patch } : x) });
                           return (
@@ -598,7 +607,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                               </label>
                               <label>Value
                                 <input disabled={!needsValue} value={needsValue ? f.value : ''} onChange={e => setFilter({ value: e.target.value })}
-                                  placeholder={col?.type === 'boolean' ? 'true or false' : col?.type === 'date' ? '2026-09-01' : f.op === 'in' ? 'completed, shipped' : 'completed'} />
+                                  placeholder={col?.type === 'boolean' ? 'true or false' : col?.type === 'date' ? '2026-09-01' : f.op === 'in' || f.op === 'not_in' ? 'completed, shipped' : 'completed'} />
                               </label>
                               <button type="button" className="icon-button button secondary small" aria-label={`Remove condition ${i + 1}`} onClick={() => updateForm(side, { ...s.form, filters: s.form.filters.filter((_, j) => j !== i) })}><Trash2 size={14} /></button>
                             </div>
@@ -625,7 +634,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                               </label>
                               <label>Condition
                                 <select value={f.op} onChange={e => setPart({ op: e.target.value as Filter['op'] })}>
-                                  {operatorsFor(col?.type || 'string', relational).map(op => <option key={op} value={op}>{OP_LABEL[op]}</option>)}
+                                  {operatorsFor(col?.type || 'string', relational, choice?.relational?.version).map(op => <option key={op} value={op}>{OP_LABEL[op]}</option>)}
                                 </select>
                               </label>
                               <label>Value

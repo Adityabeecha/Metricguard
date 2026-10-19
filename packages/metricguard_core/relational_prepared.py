@@ -30,7 +30,7 @@ def specification(contract, selected_columns, joins, name):
         fail('invalid_preparation', 'Choose LEFT or INNER for declared lookup roles only.')
     if not isinstance(selected_columns, list) or len(selected_columns) > 8 or len(set(selected_columns)) != len(selected_columns):
         fail('invalid_preparation', 'Select at most eight distinct categorical fields.')
-    mapping = {}
+    checked = []
     for field in sorted(selected_columns):
         if not isinstance(field, str) or field.count('.') != 1:
             fail('invalid_preparation', 'Fields must use role.column names.')
@@ -43,7 +43,18 @@ def specification(contract, selected_columns, joins, name):
             allowed |= {d['fact_foreign_key'] for d in contract['dimensions']}
         if column not in allowed:
             fail('invalid_preparation', 'Only registered keys and categorical fields may be selected.')
-        mapping[field] = 'field_' + str(len(mapping) + 1)
+        checked.append((field, role, column))
+    # Prepared columns keep their source names, so analysts filter on `segment`, not `field_2`.
+    # A name shared by two tables (or one of the fixed output columns) is prefixed with its role.
+    counts = {}
+    for _, _, column in checked:
+        counts[column] = counts.get(column, 0) + 1
+    mapping = {}
+    for field, role, column in checked:
+        name = column if counts[column] == 1 and column not in ('fact_key', 'amount') else f'{role}_{column}'
+        if name in mapping.values() or name in ('fact_key', 'amount'):
+            name = f'{role}_{column}_{len(mapping) + 1}'
+        mapping[field] = name
     m = contract['measure']
     flat = validate_flat({'version': 5, 'mode': 'flat_snapshot', 'name': name,
         'row_key': 'fact_key', 'measure': 'amount', 'precision': m['precision'], 'scale': m['scale'],

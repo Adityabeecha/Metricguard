@@ -1578,25 +1578,22 @@ def _compare_ratio(database, manifest, contract, baseline_ir, target_ir, context
     flat_ratio.check_comparable(baseline_ir, target_ir, contract)
     leaf = lambda p: _predicates_sql({'predicates': [p]}, contract)
     key = contract['row_key']
-    from .disk_evidence import DiskRows, DiskBudget, cursor_rows
     disk = manifest['row_count'] > FULL_EVIDENCE_ROWS
-    budget = DiskBudget()
     rows, query_hashes = [], []
-    with _connect(database) as con:
-        for ir in (baseline_ir, target_ir):
-            sql, params = flat_ratio.build_query(ir, key, leaf)
-            check_sql, check_params = flat_ratio.check_query(ir, leaf)
+    coverage = None
+    if disk:
+        with _connect(database) as con:
             try:
-                cursor = con.execute(sql, params)
-                fetched = DiskRows(cursor_rows(cursor), budget=budget) if disk else cursor.fetchall()
-                check = con.execute(check_sql, check_params).fetchone()
+                ratio, evidence, (r0, r1), sides, coverage, query_hashes = flat_ratio.compare_streaming(
+                    con, baseline_ir, target_ir, contract, leaf, key)
+                checks = [con.execute(*flat_ratio.check_query(ir, leaf)).fetchone() for ir in (baseline_ir, target_ir)]
             except duckdb.Error as exc:
                 if 'overflow' in str(exc).lower():
                     _error('arithmetic_overflow', f'Aggregate arithmetic overflow: {exc}')
                 raise
-            totals, records = flat_ratio.endpoint(fetched, ir, contract)
-            if disk:
-                records.close()
+        if coverage['total_records'] != manifest['row_count']:
+            _error('snapshot_integrity', 'Snapshot row count differs from its manifest')
+        for ir, totals, check in zip((baseline_ir, target_ir), sides, checks):
             for name, database_total in zip(('numerator', 'denominator'), check):
                 theirs = None if database_total is None else Fraction(database_total)
                 if totals[name] != theirs:
@@ -1604,9 +1601,30 @@ def _compare_ratio(database, manifest, contract, baseline_ir, target_ir, context
                 part_scale = flat_ratio.part_scale(ir[name], contract)
                 if theirs is not None and abs(theirs) * 10 ** part_scale > 10 ** 38 - 1:
                     _error('arithmetic_overflow', f'Ratio {name} exceeds DECIMAL(38, {part_scale}) capacity')
-            rows.append(fetched)
-            query_hashes.append(digest({'sql': sql, 'params': params}))
-    ratio, evidence, (r0, r1) = flat_ratio.compare_endpoints(baseline_ir, target_ir, contract, rows[0], rows[1])
+    else:
+        with _connect(database) as con:
+            for ir in (baseline_ir, target_ir):
+                sql, params = flat_ratio.build_query(ir, key, leaf)
+                check_sql, check_params = flat_ratio.check_query(ir, leaf)
+                try:
+                    cursor = con.execute(sql, params)
+                    fetched = cursor.fetchall()
+                    check = con.execute(check_sql, check_params).fetchone()
+                except duckdb.Error as exc:
+                    if 'overflow' in str(exc).lower():
+                        _error('arithmetic_overflow', f'Aggregate arithmetic overflow: {exc}')
+                    raise
+                totals, _ = flat_ratio.endpoint(fetched, ir, contract)
+                for name, database_total in zip(('numerator', 'denominator'), check):
+                    theirs = None if database_total is None else Fraction(database_total)
+                    if totals[name] != theirs:
+                        _error('reconciliation_failure', f'Ratio {name} differs from the database total')
+                    part_scale = flat_ratio.part_scale(ir[name], contract)
+                    if theirs is not None and abs(theirs) * 10 ** part_scale > 10 ** 38 - 1:
+                        _error('arithmetic_overflow', f'Ratio {name} exceeds DECIMAL(38, {part_scale}) capacity')
+                rows.append(fetched)
+                query_hashes.append(digest({'sql': sql, 'params': params}))
+        ratio, evidence, (r0, r1) = flat_ratio.compare_endpoints(baseline_ir, target_ir, contract, rows[0], rows[1])
     shown_b, shown_t, delta = flat_ratio.result_fields(ratio, r0, r1)
     defined = ratio['status'] == 'defined'
     shape = lambda ir: {'where': ir['predicate_tree'], 'numerator': ir['numerator'], 'denominator': ir['denominator']}
@@ -1649,6 +1667,12 @@ def _compare_ratio(database, manifest, contract, baseline_ir, target_ir, context
             'explanation_status': 'complete_ratio_bridge' if defined else 'components_only',
             'steps': [step] if defined else [], 'shapley': shapley, 'evidence': evidence,
             'definition_differences': differences,
-            'provenance': _base_provenance(manifest, contract, baseline_ir, target_ir, context, query_hashes,
-                                           started, 'row_key'),
-            'limitations': limitations, 'aggregate': 'ratio', 'value_is_rounded': True, 'ratio': ratio}
+            'provenance': {**_base_provenance(manifest, contract, baseline_ir, target_ir, context, query_hashes,
+                                              started, 'row_key'),
+                           **({'evidence_coverage': 'changed_records'} if coverage else {})},
+            'limitations': limitations + ([
+                f'Only the {coverage["listed_records"]:,} records whose inclusion or contribution changed are listed. '
+                f'The other {coverage["unchanged_records"]:,} records add the same terms to both calculations, '
+                'so each one\'s share of the change is exactly 0.'] if coverage else []),
+            'aggregate': 'ratio', 'value_is_rounded': True, 'ratio': ratio,
+            **({'evidence_coverage': coverage} if coverage else {})}

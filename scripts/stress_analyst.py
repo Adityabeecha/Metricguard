@@ -426,7 +426,7 @@ class Harness:
         run, secs = self.compare(contract, snap, 'SELECT SUM(o.amount) FROM orders o',
                                  'SELECT SUM(o.amount) FROM orders o JOIN customers c ON o.customer_id = c.customer_id '
                                  'LEFT JOIN products p ON o.product_id = p.product_id JOIN stores s ON o.store_id = s.store_id '
-                                 "WHERE c.segment = 'vip' AND s.city IN ('delhi', 'mumbai', 'pune')", 'star', endpoint='relational')
+                                 "WHERE c.segment = 'vip' AND s.city <> 'goa'", 'star', endpoint='relational')
         exp_b = sum(a for _, a, _ in facts)
         exp_t = sum(a for fk, a, _ in facts if maps['customer'].get(fk['customer']) == 'vip'
                     and fk['store'] in maps['store'] and maps['store'][fk['store']] != 'goa')
@@ -480,10 +480,17 @@ class Harness:
                     error=None if snap else json.dumps(job.get('error'))[:240])
         if not snap:
             return
-        run, secs = self.compare(contract, snap, "SELECT SUM(o.amount) FROM orders o WHERE o.status = 'paid'",
-                                 "SELECT SUM(o.amount) FROM orders o JOIN customers c ON o.customer_id = c.customer_id "
-                                 "JOIN stores s ON o.store_id = s.store_id WHERE o.status = 'paid' AND c.segment = 'vip' AND s.city IN ('delhi', 'mumbai', 'pune')",
-                                 'star large', endpoint='relational')
+        t0 = time.monotonic()
+        prepared = self.ok(self.c.post(f'/api/v1/relational/snapshots/{snap}/prepare-flat', json={
+            'name': f'Star large {rows} prepared', 'joins': {'customer': 'left', 'store': 'left'},
+            'selected_columns': ['fact.status', 'customer.segment', 'store.city']}))
+        mapping = prepared['column_mapping']
+        self.record('star_large_prepare_readable_names', mapping == {'fact.status': 'status', 'customer.segment': 'segment',
+                                                                     'store.city': 'city'},
+                    seconds=round(time.monotonic() - t0, 1), mapping=mapping)
+        run, secs = self.compare(prepared['contract'], prepared['snapshot']['id'], "SELECT SUM(amount) FROM snapshot WHERE status = 'paid'",
+                                 "SELECT SUM(amount) FROM snapshot WHERE status = 'paid' AND segment = 'vip' AND city <> 'goa'",
+                                 'star large')
         res = run['result'] or {}
         exp = (sum(a for _, _, a, st in facts if st == 'paid'),
                sum(a for c, s, a, st in facts if st == 'paid' and cust.get(c) == 'vip' and store[s] != 'goa'))

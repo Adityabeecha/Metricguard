@@ -166,9 +166,9 @@ def validate_ir(ir, contract):
         if allowed is None or pred['column'] not in allowed:
             fail('invalid_ir', 'Predicates may reference only registered categories of the fact or joined lookup tables.')
         values, op = pred['values'], pred['op']
-        if (op not in ('eq', 'in', 'is_null', 'is_not_null') or not isinstance(values, list) or
+        if (op not in ('eq', 'neq', 'in', 'not_in', 'is_null', 'is_not_null') or not isinstance(values, list) or
                 any(not isinstance(v, str) or len(v) > 256 or '\x00' in v for v in values) or
-                (op == 'eq' and len(values) != 1) or (op == 'in' and not 1 <= len(values) <= 20) or
+                (op in ('eq', 'neq') and len(values) != 1) or (op in ('in', 'not_in') and not 1 <= len(values) <= 20) or
                 (op in ('is_null', 'is_not_null') and values) or values != sorted(set(values))):
             fail('invalid_ir', 'Invalid bounded string predicate values.')
     if predicates != sorted(predicates, key=digest) or len({digest(p) for p in predicates}) != len(predicates):
@@ -265,14 +265,19 @@ def parse(raw_sql, contract):
         col = node.this
         if isinstance(node, exp.EQ):
             op, literals = 'eq', [node.expression]
+        elif isinstance(node, exp.NEQ):
+            op, literals = 'neq', [node.expression]
         elif isinstance(node, exp.In) and not node.args.get('query') and not node.args.get('unnest'):
             op, literals = 'in', node.expressions
+        elif (isinstance(node, exp.Not) and isinstance(node.this, exp.In) and not node.this.args.get('query')
+              and not node.this.args.get('unnest')):
+            op, literals, col = 'not_in', node.this.expressions, node.this.this
         elif isinstance(node, exp.Is) and isinstance(node.expression, exp.Null):
             op, literals = 'is_null', []
         elif isinstance(node, exp.Not) and isinstance(node.this, exp.Is) and isinstance(node.this.expression, exp.Null):
             op, literals, col = 'is_not_null', [], node.this.this
         else:
-            fail('unsupported_sql', 'Filters support AND over string equality, IN, IS NULL or IS NOT NULL only.')
+            fail('unsupported_sql', 'Filters support AND over =, <>, IN, NOT IN, IS NULL or IS NOT NULL on text columns.')
         role, name = column(col)
         allowed = c['fact']['categories'] if role == 'fact' else roles[role]['categories']
         if name not in allowed:
@@ -305,10 +310,12 @@ def compile_predicates(ir, contract):
         col = ('f' if p['table'] == 'fact' else alias(p['table'])) + '.' + quote(p['column'])
         if p['op'] in ('is_null', 'is_not_null'):
             parts.append(col + (' IS NULL' if p['op'] == 'is_null' else ' IS NOT NULL'))
-        elif p['op'] == 'eq':
-            parts.append(col + ' = ?'); params.extend(p['values'])
+        elif p['op'] in ('eq', 'neq'):
+            parts.append(col + (' = ?' if p['op'] == 'eq' else ' <> ?')); params.extend(p['values'])
         else:
-            parts.append(col + ' IN (' + ','.join('?' for _ in p['values']) + ')'); params.extend(p['values'])
+            # SQL semantics, matched by includes(): a NULL value satisfies neither IN nor NOT IN.
+            parts.append(col + (' IN (' if p['op'] == 'in' else ' NOT IN (') + ','.join('?' for _ in p['values']) + ')')
+            params.extend(p['values'])
     return '(' + ' AND '.join(parts or ['TRUE']) + ')', params
 
 
@@ -326,6 +333,8 @@ def includes(ir, matched, fact_values, dimension_values):
             accepted = value is None
         elif p['op'] == 'is_not_null':
             accepted = value is not None
+        elif p['op'] in ('neq', 'not_in'):
+            accepted = value is not None and value not in p['values']
         else:
             accepted = value is not None and value in p['values']
         if not accepted:
@@ -817,6 +826,8 @@ def predicate_states(ir, row, contract):
             state = 'false' if value is None else 'true'
         elif value is None:
             state = 'unknown'
+        elif op in ('neq', 'not_in'):
+            state = 'true' if value not in predicate['values'] else 'false'
         else:
             state = 'true' if value in predicate['values'] else 'false'
         items.append({'table': role, 'field': tables[role] + '.' + column, 'column': column, 'op': op,

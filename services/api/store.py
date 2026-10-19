@@ -852,7 +852,15 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
     def bootstrap(self, project_id=None):
         pid = project_id or self.project_id
         with self.engine.connect() as conn:
-            ids = list(conn.execute(select(definitions.c.id).where(definitions.c.project_id == pid).order_by(definitions.c.created_at)).scalars())
+            # Definitions and their versions in two queries (not two per definition).
+            definition_list = [dict(r) for r in conn.execute(select(definitions).where(definitions.c.project_id == pid).order_by(definitions.c.created_at)).mappings()]
+            version_rows = conn.execute(select(versions.c.definition_id, versions.c.data).where(
+                versions.c.definition_id.in_([d['id'] for d in definition_list])).order_by(versions.c.version_number)).mappings() if definition_list else []
+            by_definition = {}
+            for r in version_rows:
+                by_definition.setdefault(r['definition_id'], []).append(r['data'])
+            for d in definition_list:
+                d['versions'] = by_definition.get(d['id'], [])
             snapshot_list = [_with_flat_policy({**r['data'], 'project_id': r['project_id']}) for r in conn.execute(select(snapshots).where(snapshots.c.project_id == pid).order_by(snapshots.c.id)).mappings()]
             run_list = [self._run(r) for r in conn.execute(select(runs).where(runs.c.project_id == pid).order_by(runs.c.created_at.desc()).limit(100)).mappings()]
             all_records = list(conn.execute(select(records).where(records.c.project_id == pid).order_by(records.c.created_at.desc())).mappings())
@@ -861,7 +869,7 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
         p_name = p_row['name'] if p_row else ('Retail analytics' if pid == 'local-retail' else f"Workspace {pid}")
         metric_list = self.list_metrics(pid) if hasattr(self, 'list_metrics') else []
         diff_list = self.list_metric_diff_reports(pid) if hasattr(self, 'list_metric_diff_reports') else []
-        return dict(project={'id': pid, 'name': p_name}, definitions=[self.definition(i) for i in ids],
+        return dict(project={'id': pid, 'name': p_name}, definitions=definition_list,
             snapshots=snapshot_list, imports=snapshot_import_list, runs=run_list, baselines=[r['data'] for r in all_records if r['kind'] == 'baseline'],
             dependencies=[r['data'] for r in all_records if r['kind'] == 'dependency'], reviews=[r['data'] for r in all_records if r['kind'] == 'review'],
             metadata_imports=[r['data'] for r in all_records if r['kind'] == 'metadata_import'],

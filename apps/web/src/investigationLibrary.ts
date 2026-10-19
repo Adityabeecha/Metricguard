@@ -20,6 +20,8 @@ export type LibraryItem = {
   unit: string;
   hasConclusion: boolean;
   updatedAt: string;
+  /** Why the draft's comparison did not finish, when it failed or was refused. */
+  problem?: string;
 };
 
 export const KIND_LABEL: Record<LibraryKind, string> = {
@@ -32,7 +34,7 @@ export const STATUS_LABEL: Record<LibraryStatus, string> = {
   saved: 'Saved',
   draft: 'Draft',
   running: 'Running',
-  refused: 'Refused',
+  refused: 'Failed or refused',
 };
 
 function kindOf(mode: string | undefined, policy: string | undefined): LibraryKind {
@@ -86,7 +88,8 @@ export function buildLibraryItems(data: Pick<Bootstrap, 'investigations' | 'runs
       id: d.id,
       source: 'draft',
       kind: kindOf(ctx?.mode, snapshot?.execution_policy),
-      status: d.status === 'running' ? 'running' : d.status === 'refused' ? 'refused' : 'draft',
+      status: run?.state === 'failed' || d.status === 'refused' ? 'refused' : d.status === 'running' ? 'running' : 'draft',
+      problem: run?.state === 'failed' ? run.error?.message || 'The comparison failed without a recorded reason.' : undefined,
       title: d.title || 'Untitled draft',
       metricNames: metricsFor([d.baseline_version_id, d.target_version_id], d.metric_id),
       datasetName: d.snapshot_id ? snapshotName(d.snapshot_id) : 'No dataset chosen',

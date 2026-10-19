@@ -19,6 +19,7 @@ MAX_DISK_ROWS = 5_000_000
 MAX_DISK_BYTES = 4 * 1024**3
 MAX_SCRATCH_BYTES = 8 * 1024**3
 MAX_ROW_BYTES = 64 * 1024
+WRITE_BLOCK_BYTES = READ_BLOCK_BYTES = 1024 * 1024
 
 
 class DiskBudget:
@@ -49,6 +50,7 @@ class DiskRows(Sequence):
     def __init__(self, rows=(), *, budget=None):
         self.budget = budget if budget is not None else DiskBudget()
         self.file = tempfile.TemporaryFile(mode='w+b')
+        self.pending, self.pending_bytes = [], 0
         self.count = self.byte_count = 0
         self.closed = False
         try:
@@ -65,23 +67,47 @@ class DiskRows(Sequence):
                 self.byte_count + len(line) > MAX_DISK_BYTES or
                 self.budget.used + len(line) > MAX_SCRATCH_BYTES):
             raise CoreError('evidence_limit', 'Flat evidence exceeds the bounded disk row or byte budget')
-        try:
-            self.file.seek(0, 2)
-            self.file.write(line)
-        except OSError as exc:
-            raise CoreError('evidence_limit', 'Temporary evidence storage is unavailable or full') from exc
+        # Lines are buffered and written in blocks: a seek per row dominated large runs.
+        self.pending.append(line)
+        self.pending_bytes += len(line)
+        if self.pending_bytes >= WRITE_BLOCK_BYTES:
+            self._flush()
         self.count += 1
         self.byte_count += len(line)
         self.budget.used += len(line)
 
+    def _flush(self):
+        if not self.pending:
+            return
+        try:
+            self.file.seek(0, 2)
+            self.file.write(b''.join(self.pending))
+        except OSError as exc:
+            raise CoreError('evidence_limit', 'Temporary evidence storage is unavailable or full') from exc
+        self.pending, self.pending_bytes = [], 0
+
     def __iter__(self):
-        # Each iterator tracks its own cursor, allowing repeated/nested scans.
-        offset = 0
-        for _ in range(self.count):
+        # Each iterator tracks its own offset and reads in blocks, allowing repeated/nested scans.
+        count = self.count
+        offset, produced, carry = 0, 0, b''
+        while produced < count:
+            self._flush()
             self.file.seek(offset)
-            line = self.file.readline(MAX_ROW_BYTES + 1)
-            offset += len(line)
-            yield json.loads(line, object_hook=_decode)
+            block = self.file.read(READ_BLOCK_BYTES)
+            if not block:
+                raise CoreError('evidence_limit', 'Temporary evidence storage is truncated')
+            offset += len(block)
+            lines = (carry + block).split(b'\n')
+            carry = lines.pop()
+            for line in lines:
+                if produced == count:
+                    break
+                if len(line) >= MAX_ROW_BYTES:
+                    raise CoreError('evidence_limit', 'Temporary evidence row exceeds its byte budget')
+                produced += 1
+                yield json.loads(line, object_hook=_decode)
+            if len(carry) > MAX_ROW_BYTES:
+                raise CoreError('evidence_limit', 'Temporary evidence row exceeds its byte budget')
 
     def __len__(self):
         return self.count

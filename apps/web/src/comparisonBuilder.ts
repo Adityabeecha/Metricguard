@@ -27,7 +27,7 @@ export function starLookups(contract: FlatContract | RelationalContract): Relati
 export type LookupJoin = 'left' | 'inner' | 'none';
 
 export type ValueType = 'string' | 'boolean' | 'date' | 'timestamp';
-export type FilterOp = 'eq' | 'neq' | 'in' | 'is_null' | 'is_not_null' | 'gt' | 'gte' | 'lt' | 'lte';
+export type FilterOp = 'eq' | 'neq' | 'in' | 'not_in' | 'is_null' | 'is_not_null' | 'gt' | 'gte' | 'lt' | 'lte';
 
 export type FilterColumn = {
   /** Value used in the form, e.g. `status` or `dimension.segment`. */
@@ -75,17 +75,18 @@ export type CalculationForm = {
 };
 
 export const OP_LABEL: Record<FilterOp, string> = {
-  eq: 'is', neq: 'is not', in: 'is one of', is_null: 'is blank (NULL)', is_not_null: 'is not blank',
+  eq: 'is', neq: 'is not', in: 'is one of', not_in: 'is none of', is_null: 'is blank (NULL)', is_not_null: 'is not blank',
   gt: 'is after / greater than', gte: 'is on or after / at least', lt: 'is before / less than', lte: 'is on or before / at most',
 };
 
 const NEEDS_VALUE = (op: FilterOp) => op !== 'is_null' && op !== 'is_not_null';
 
-export function operatorsFor(type: ValueType, relational: boolean): FilterOp[] {
-  if (relational) return ['eq', 'in', 'is_null', 'is_not_null'];
+/** Two-table datasets: the original one-lookup format (v1) accepts only =, IN and blank tests. */
+export function operatorsFor(type: ValueType, relational: boolean, relationalVersion = 2): FilterOp[] {
+  if (relational) return relationalVersion === 1 ? ['eq', 'in', 'is_null', 'is_not_null'] : ['eq', 'neq', 'in', 'not_in', 'is_null', 'is_not_null'];
   if (type === 'boolean') return ['eq', 'neq', 'is_null', 'is_not_null'];
-  if (type === 'date' || type === 'timestamp') return ['eq', 'neq', 'in', 'gt', 'gte', 'lt', 'lte', 'is_null', 'is_not_null'];
-  return ['eq', 'neq', 'in', 'is_null', 'is_not_null'];
+  if (type === 'date' || type === 'timestamp') return ['eq', 'neq', 'in', 'not_in', 'gt', 'gte', 'lt', 'lte', 'is_null', 'is_not_null'];
+  return ['eq', 'neq', 'in', 'not_in', 'is_null', 'is_not_null'];
 }
 
 export function quoteIdent(name: string): string {
@@ -118,10 +119,11 @@ function predicate(ref: string, f: Filter, type: ValueType): string {
   switch (f.op) {
     case 'is_null': return `${ref} IS NULL`;
     case 'is_not_null': return `${ref} IS NOT NULL`;
-    case 'in': {
+    case 'in':
+    case 'not_in': {
       const values = splitList(f.value);
       if (values.length === 0) throw new Error('List at least one value, separated by commas.');
-      return `${ref} IN (${values.map(v => literal(v, type)).join(', ')})`;
+      return `${ref} ${f.op === 'in' ? 'IN' : 'NOT IN'} (${values.map(v => literal(v, type)).join(', ')})`;
     }
     default: {
       const sym = { eq: '=', neq: '!=', gt: '>', gte: '>=', lt: '<', lte: '<=' }[f.op];
@@ -294,7 +296,7 @@ function describeFilter(f: Filter, columns: FilterColumn[]): string {
   const col = columns.find(c => c.id === f.column);
   const label = col?.label || f.column || '…';
   if (!NEEDS_VALUE(f.op)) return `${label} ${OP_LABEL[f.op]}`;
-  const value = f.op === 'in' ? splitList(f.value).join(', ') : f.value.trim();
+  const value = f.op === 'in' || f.op === 'not_in' ? splitList(f.value).join(', ') : f.value.trim();
   return `${label} ${OP_LABEL[f.op]} ${value || '…'}`;
 }
 

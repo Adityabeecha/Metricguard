@@ -44,7 +44,8 @@ export function parseCsvText(text: string, maxSampleRows = 25, nullPolicy: 'blan
     row.push(cell);
     if (!(row.length === 1 && row[0] === '')) records.push(row);
     row = []; cell = ''; closed = false;
-    if (records.length > 100001) throw new Error('Flat snapshot exceeds 100000 rows');
+    // Matches the server's MAX_FLAT_ROWS (5,000,000 records plus the header row).
+    if (records.length > 5_000_001) throw new Error('Flat snapshot exceeds 5,000,000 rows');
   };
   for (let i = 0; i < text.length; i++) {
     const c = text[i];

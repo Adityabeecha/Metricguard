@@ -87,6 +87,14 @@ class RatioEvidenceValidator:
         # Integer coefficients: numerator values at s_n, denominator values at s_d, inputs at each side's input scale.
         self.inputs = {'baseline': fr.input_scales(self.baseline, self.contract),
                        'target': fr.input_scales(self.target, self.contract)}
+        # Each part's term is aligned from its own scale to the shared one; computed once, not per row.
+        self.align = {(side, part_name): 10 ** (scale - fr.part_scale(ir[part_name], self.contract))
+                      for side, ir in (('baseline', self.baseline), ('target', self.target))
+                      for part_name, scale in (('numerator', s_n), ('denominator', s_d))}
+        # Large snapshots list only records whose inclusion or contribution changed; the
+        # rest add identical terms to both sides. Their rows then prove the parts' changes.
+        coverage = expected_result.get('evidence_coverage')
+        self.changed_only = isinstance(coverage, dict) and coverage.get('mode') == 'changed_records'
         self.totals = {(side, part): 0 for side in ('baseline', 'target') for part in ('numerator', 'denominator')}
         self.seen = {key: False for key in self.totals}
         self.previous = None
@@ -125,7 +133,7 @@ class RatioEvidenceValidator:
                 if part['measure'] == '*' and raw is not None:
                     _invalid()
                 value = None if raw is None else _coefficient(raw, self.inputs[side][part_name])
-                term = fr.part_coeff(part, inside, value) * 10 ** (scale - fr.part_scale(part, self.contract))
+                term = fr.part_coeff(part, inside, value) * self.align[(side, part_name)]
                 if row[f'{side}_{part_name}'] != ScaledInteger(term, scale).to_fixed_string():
                     _invalid()
                 values[(side, part_name)] = term
@@ -149,9 +157,21 @@ class RatioEvidenceValidator:
                 part = ir[part_name]
                 total = Fraction(self.totals[(side, part_name)], 10 ** scale)
                 totals.append(total if (part['aggregate'] != 'sum' or self.seen[(side, part_name)]) else None)
-        if totals != self.claimed:
-            _invalid()
-        n0, d0, n1, d1 = totals
+        if self.changed_only:
+            # Rows hold only the changed records: listed (target - baseline) per part must be
+            # exactly the claimed change in that part; the claimed totals then fix the ratio block.
+            n0, d0, n1, d1 = self.claimed
+            for index, (before, after) in enumerate(((n0, n1), (d0, d1))):
+                if before is not None and after is not None:
+                    scale = s_n if index == 0 else s_d
+                    part_name = 'numerator' if index == 0 else 'denominator'
+                    listed = self.totals[('target', part_name)] - self.totals[('baseline', part_name)]
+                    if Fraction(listed, 10 ** scale) != after - before:
+                        _invalid()
+        else:
+            if totals != self.claimed:
+                _invalid()
+            n0, d0, n1, d1 = totals
         ratio, r0, r1, _, _ = fr.summarize(n0, d0, n1, d1, self.baseline, self.target, self.contract)
         if digest(ratio) != digest(expected_result.get('ratio')):
             _invalid()

@@ -371,38 +371,58 @@ def part_coeff(part, inside, value):
     return 1 if value is not None else 0
 
 
+class _Endpoint:
+    """Per-record values and running exact totals for one side; part scales computed once."""
+
+    def __init__(self, ir, contract):
+        self.parts = [(name, ir[name], input_scale(ir[name], contract)) for name in ('numerator', 'denominator')]
+        self.totals = {'numerator': 0, 'denominator': 0}
+        self.seen = {'numerator': False, 'denominator': False}  # a SUM part is NULL until a non-NULL term matches
+        self.contract = contract
+
+    def record(self, row):
+        """row: (key, included, in_numerator, in_denominator, numerator_input, numerator_minus,
+        denominator_input, denominator_minus) -> (included, in_n, in_d, n, d, null_term, n_input, d_input)."""
+        _, included, in_num, in_den, num_raw, num_minus, den_raw, den_minus = row
+        raws = {'numerator': (num_raw, num_minus, in_num is True), 'denominator': (den_raw, den_minus, in_den is True)}
+        values, inputs, null_term = {}, {}, False
+        for name, part, scale in self.parts:
+            raw, minus_raw, inside = raws[name]
+            if part['measure'] == '*' or raw is None or (part['minus'] is not None and minus_raw is None):
+                value = None
+            else:
+                value = _coeff(raw, scale)
+                if part['minus'] is not None:
+                    value -= _coeff(minus_raw, scale)
+            inputs[name] = value
+            values[name] = part_coeff(part, inside, value)
+            self.totals[name] += values[name]
+            if inside and (part['aggregate'] != 'sum' or value is not None):
+                self.seen[name] = True
+            null_term = null_term or (inside and part['measure'] != '*' and value is None)
+        return (included is True, raws['numerator'][2], raws['denominator'][2], values['numerator'],
+                values['denominator'], null_term, inputs['numerator'], inputs['denominator'])
+
+    def result(self):
+        return {name: (Fraction(self.totals[name], 10 ** part_scale(part, self.contract))
+                       if part['aggregate'] != 'sum' or self.seen[name] else None)
+                for name, part, _ in self.parts}
+
+
 def endpoint(rows, ir, contract):
     """rows: (key, included, in_numerator, in_denominator, numerator_input, numerator_minus,
     denominator_input, denominator_minus). Returns (totals as Fractions or None, per-record values)."""
     from .disk_evidence import DiskRows
     disk = isinstance(rows, DiskRows)
     records = DiskRows(budget=rows.budget) if disk else {}
-    totals = {'numerator': 0, 'denominator': 0}
-    seen = {'numerator': False, 'denominator': False}  # a SUM part is NULL until a non-NULL term matches
-    parts = {name: ir[name] for name in ('numerator', 'denominator')}
-    for key, included, in_num, in_den, num_raw, num_minus, den_raw, den_minus in rows:
-        inputs = {'numerator': _input_coeff(num_raw, num_minus, parts['numerator'], contract),
-                  'denominator': _input_coeff(den_raw, den_minus, parts['denominator'], contract)}
-        flags = {'numerator': in_num is True, 'denominator': in_den is True}
-        values = {}
-        null_term = False
-        for name, part in parts.items():
-            values[name] = part_coeff(part, flags[name], inputs[name])
-            totals[name] += values[name]
-            if flags[name] and (part['aggregate'] != 'sum' or inputs[name] is not None):
-                seen[name] = True
-            null_term = null_term or (flags[name] and _reads_amount(part) and inputs[name] is None)
-        record = (included is True, flags['numerator'], flags['denominator'], values['numerator'],
-                  values['denominator'], null_term, inputs['numerator'], inputs['denominator'])
+    side = _Endpoint(ir, contract)
+    for row in rows:
+        record = side.record(row)
         if disk:
-            records.append([key, record])
+            records.append([row[0], record])
         else:
-            records[key] = record
-    result = {}
-    for name, part in parts.items():
-        result[name] = (Fraction(totals[name], 10 ** part_scale(part, contract))
-                        if part['aggregate'] != 'sum' or seen[name] else None)
-    return result, records
+            records[row[0]] = record
+    return side.result(), records
 
 
 def undefined_reason(numerator, denominator):
@@ -541,7 +561,6 @@ def compare_endpoints(baseline_ir, target_ir, contract, baseline_rows, target_ro
     align_t = 10 ** (s_d - part_scale(target_ir['denominator'], contract))
     in_b = input_scales(baseline_ir, contract)
     in_t = input_scales(target_ir, contract)
-    text = lambda coeff, scale: None if coeff is None else ScaledInteger(coeff, scale).to_fixed_string()
     from .disk_evidence import DiskRows
     disk = isinstance(b_rec, DiskRows)
     evidence, total = (DiskRows(budget=b_rec.budget) if disk else []), 0
@@ -555,14 +574,26 @@ def compare_endpoints(baseline_ir, target_ir, contract, baseline_rows, target_ro
         pairs = paired()
     else:
         pairs = ((key, b_rec[key], t_rec[key]) for key in sorted(b_rec.keys() | t_rec.keys()))
+    row = _row_builder(weight_n, weight_d, align_b, align_t, in_b, in_t, s_n, s_d, s_g)
     for key, b_record, t_record in pairs:
+        item, share = row(key, b_record, t_record)
+        total += share
+        evidence.append(item)
+    if ratio['status'] == 'defined' and Fraction(total, 10 ** s_g) != to_fraction(ratio['scaled_gap']):
+        raise CoreError('reconciliation_failure', 'Ratio record shares do not reconcile')
+    return ratio, evidence, (r0, r1)
+
+
+def _row_builder(weight_n, weight_d, align_b, align_t, in_b, in_t, s_n, s_d, s_g):
+    text = lambda coeff, scale: None if coeff is None else ScaledInteger(coeff, scale).to_fixed_string()
+
+    def row(key, b_record, t_record):
         bi, b_in_n, b_in_d, bn, bd, b_null, b_ni, b_di = b_record
         ti, t_in_n, t_in_d, tn, td, t_null, t_ni, t_di = t_record
         bd, td = bd * align_b, td * align_t
         share = (tn - bn) * weight_n - (td - bd) * weight_d
-        total += share
         membership = ('included_in_both' if bi and ti else 'baseline_only' if bi else 'target_only' if ti else 'included_in_neither')
-        evidence.append({
+        return {
             'order_id': key, 'baseline_included': bi, 'target_included': ti, 'membership': membership,
             'baseline_numerator_input': text(b_ni, in_b['numerator']), 'target_numerator_input': text(t_ni, in_t['numerator']),
             'baseline_denominator_input': text(b_di, in_b['denominator']), 'target_denominator_input': text(t_di, in_t['denominator']),
@@ -571,10 +602,65 @@ def compare_endpoints(baseline_ir, target_ir, contract, baseline_rows, target_ro
             'baseline_numerator': text(bn, s_n), 'target_numerator': text(tn, s_n),
             'baseline_denominator': text(bd, s_d), 'target_denominator': text(td, s_d),
             'baseline_null_term': b_null, 'target_null_term': t_null,
-            'delta': text(share, s_g)})
-    if ratio['status'] == 'defined' and Fraction(total, 10 ** s_g) != to_fraction(ratio['scaled_gap']):
+            'delta': text(share, s_g)}, share
+    return row
+
+
+def compare_streaming(con, baseline_ir, target_ir, contract, leaf, key):
+    """Large snapshots: one ordered pass over both calculations' rows.
+
+    Exact totals are accumulated over every record, but only records whose inclusion or
+    contribution differs are kept: every other record has the same numerator and
+    denominator terms on both sides, so its share (dn * weight_n - dd * weight_d) is
+    exactly 0. Returns (ratio, evidence, (r0, r1), totals per side, coverage, query hashes).
+    """
+    from .disk_evidence import DiskRows
+    sides = [_Endpoint(baseline_ir, contract), _Endpoint(target_ir, contract)]
+    s_n, s_d, s_g = scales(baseline_ir, target_ir, contract)
+    align_b = 10 ** (s_d - part_scale(baseline_ir['denominator'], contract))
+    align_t = 10 ** (s_d - part_scale(target_ir['denominator'], contract))
+    queries = [build_query(ir, key, leaf) for ir in (baseline_ir, target_ir)]
+    cursors = [con.cursor().execute(sql, params) for sql, params in queries]
+    changed = DiskRows()
+    total = both = neither = 0
+    try:
+        while True:
+            b_batch, t_batch = cursors[0].fetchmany(10_000), cursors[1].fetchmany(10_000)
+            if len(b_batch) != len(t_batch):
+                raise CoreError('reconciliation_failure', 'Ratio endpoints must read the same ordered snapshot')
+            if not b_batch:
+                break
+            for b_row, t_row in zip(b_batch, t_batch):
+                if b_row[0] != t_row[0]:
+                    raise CoreError('reconciliation_failure', 'Ratio endpoints must read the same ordered snapshot')
+                b, t = sides[0].record(b_row), sides[1].record(t_row)
+                total += 1
+                if b[0] == t[0] and b[3] == t[3] and b[4] * align_b == t[4] * align_t:
+                    both += b[0]
+                    neither += not b[0]
+                else:
+                    changed.append([b_row[0], b, t])
+    finally:
+        for cursor in cursors:
+            cursor.close()
+    b_tot, t_tot = sides[0].result(), sides[1].result()
+    n0, d0, n1, d1 = b_tot['numerator'], b_tot['denominator'], t_tot['numerator'], t_tot['denominator']
+    ratio, r0, r1, _, _ = summarize(n0, d0, n1, d1, baseline_ir, target_ir, contract)
+    weight_n, weight_d = weights(ratio, n0, d0, n1, d1, s_n, s_d)
+    row = _row_builder(weight_n, weight_d, align_b, align_t, input_scales(baseline_ir, contract),
+                       input_scales(target_ir, contract), s_n, s_d, s_g)
+    evidence, share_total = DiskRows(budget=changed.budget), 0
+    for item_key, b, t in changed:
+        item, share = row(item_key, tuple(b), tuple(t))
+        share_total += share
+        evidence.append(item)
+    changed.close()
+    if ratio['status'] == 'defined' and Fraction(share_total, 10 ** s_g) != to_fraction(ratio['scaled_gap']):
         raise CoreError('reconciliation_failure', 'Ratio record shares do not reconcile')
-    return ratio, evidence, (r0, r1)
+    coverage = {'mode': 'changed_records', 'total_records': total, 'listed_records': len(evidence),
+                'unchanged_records': both + neither, 'unchanged_included_in_both': both,
+                'unchanged_included_in_neither': neither}
+    return ratio, evidence, (r0, r1), (b_tot, t_tot), coverage, [digest({'sql': s, 'params': p}) for s, p in queries]
 
 
 def _side(n, d, r, reason, s_n, s_d, places):

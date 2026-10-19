@@ -94,7 +94,8 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onOpen }: Pro
                   <td><span className={`library-type ${item.kind === 'relational' ? 'relational' : ''}`}>{KIND_LABEL[item.kind]}</span></td>
                   <td>{item.datasetName}</td>
                   <td className="mono-cell">{item.change == null ? '—' : `${item.change}${item.unit ? ` ${item.unit}` : ''}`}</td>
-                  <td>{STATUS_LABEL[item.status]}{item.status === 'saved' && !item.hasConclusion && ' · no conclusion'}</td>
+                  <td>{STATUS_LABEL[item.status]}{item.status === 'saved' && !item.hasConclusion && ' · no conclusion'}
+                    {item.problem && <div className="disabled-reason">{item.problem}</div>}</td>
                   <td>{item.updatedAt ? new Date(item.updatedAt).toLocaleDateString() : '—'}</td>
                   <td style={{ textAlign: 'right' }}>
                     <button className="button secondary small" onClick={() => onOpen(item)} aria-label={`Open ${item.title}`}>

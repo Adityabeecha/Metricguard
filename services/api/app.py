@@ -88,6 +88,29 @@ def resolve_project_id(
     )
 
 
+RUN_SUMMARY_FIELDS = ('baseline_value', 'target_value', 'delta_target_minus_baseline', 'absolute_gap',
+                      'relative_change_percent_display', 'residual', 'currency', 'unit_label', 'method',
+                      'definition_status', 'value_status', 'explanation_status', 'aggregate', 'value_is_rounded',
+                      'evidence_coverage', 'change_summary')
+
+
+def run_summary(result):
+    """What run lists need (values, units, status); heavy fields stay on /comparisons/{id}."""
+    if not isinstance(result, dict):
+        return result
+    summary = {key: result[key] for key in RUN_SUMMARY_FIELDS if key in result}
+    if isinstance(result.get('ratio'), dict):
+        ratio = result['ratio']
+        summary['ratio'] = {key: ratio.get(key) for key in ('unit', 'numerator', 'denominator', 'status',
+                                                             'display_places', 'gap_exact')}
+        summary['ratio'].update({side: {'undefined_reason': (ratio.get(side) or {}).get('undefined_reason'),
+                                        'exact': (ratio.get(side) or {}).get('exact')}
+                                 for side in ('baseline', 'target')})
+    if isinstance(result.get('distinct'), dict):
+        summary['distinct'] = {key: result['distinct'].get(key) for key in ('entity_column', 'gained', 'lost', 'kept')}
+    return summary
+
+
 def public_snapshot(snapshot):
     public = {key: value for key, value in snapshot.items() if key not in ('artifact_path', 'manifest')}
     manifest = snapshot.get('manifest') or {}
@@ -205,6 +228,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
         result = store.bootstrap(pid)
         result['snapshots'] = [public_snapshot(s) for s in result['snapshots']]
         result['candidates'] = rank_candidates(result['definitions'], result['reviews'])[:50]
+        # Lists only show each run's summary; the full result is fetched from /comparisons/{id}.
+        result['runs'] = [{**run, 'result': run_summary(run.get('result'))} for run in result['runs']]
         is_runner_available = True if execution_mode == 'demo' else store.worker_available()
         result.update(mode=execution_mode, runner_available=is_runner_available)
         return result

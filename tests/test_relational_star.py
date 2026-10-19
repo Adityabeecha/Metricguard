@@ -381,3 +381,53 @@ def test_one_lookup_contract_v1_still_runs_and_replays(tmp_path):
         split = client.get(f"/api/v1/comparisons/{run['id']}/evidence-breakdown?column=dimension.segment").json()
         assert split['available']
         assert client.get(f"/api/v1/comparisons/{run['id']}/export?format=html").status_code == 200
+
+
+def test_prepared_star_keeps_readable_column_names_and_exact_totals(tmp_path):
+    """Preparing a star for large comparisons keeps source names; a shared name gets its role prefix."""
+    from packages.metricguard_core.flat import compare_flat, parse_flat
+    from packages.metricguard_core.relational_prepared import prepare
+    contract = deepcopy(CONTRACT)
+    contract['dimensions'][0]['categories'] = ['segment', 'region']
+    contract['dimensions'][1]['categories'] = ['category', 'region']
+    tables = {'fact': ORDERS,
+              'customer': [['customer_id', 'segment', 'region'], ['C1', 'retail', 'north'], ['C2', 'trade', 'south']],
+              'product': [['product_id', 'category', 'region'], ['P1', 'books', 'east'], ['P2', 'toys', 'west']]}
+    database, _, _ = _snapshot(tmp_path, contract, tables)
+    flat_contract, manifest = prepare(database, tmp_path / 'prepared.duckdb', name='Orders prepared',
+                                      joins={'customer': 'left', 'product': 'left'},
+                                      selected_columns=['fact.status', 'customer.segment', 'customer.region',
+                                                        'product.category', 'product.region'])
+    mapping = manifest['relational_preparation']['column_mapping']
+    assert mapping == {'customer.region': 'customer_region', 'customer.segment': 'segment',
+                       'fact.status': 'status', 'product.category': 'category', 'product.region': 'product_region'}
+    assert set(flat_contract['categories']) == set(mapping.values())
+    a = parse_flat("SELECT SUM(amount) FROM snapshot WHERE status = 'paid'", flat_contract)
+    b = parse_flat("SELECT SUM(amount) FROM snapshot WHERE status = 'paid' AND segment = 'retail' "
+                   "AND product_region = 'east'", flat_contract)
+    context = {'mode': 'flat_snapshot', 'scope': flat_contract['scope'], 'contract_hash': flat_contract['contract_hash'],
+               'unit_label': flat_contract['unit_label'], 'values_comparable': True,
+               'manifest_hash': manifest['manifest_hash']}
+    result = compare_flat(tmp_path / 'prepared.duckdb', a, b, context)
+    # paid: O1 100 + O2 50 + O4 20 + O5 40 + O6 10 = 220; retail and product east (P1): O1 only = 100
+    assert (result['baseline_value'], result['target_value']) == ('220.00', '100.00')
+
+
+def test_star_not_equal_and_not_in_follow_sql_null_rules(tmp_path):
+    """<> and NOT IN on lookup and fact columns; a blank (NULL) value matches neither, as in SQL."""
+    from packages.metricguard_core.relational import context_for
+    from packages.metricguard_core.relational_compare import compare_relational
+    from packages.metricguard_core.relational_evidence import RelationalEvidenceValidator
+    database, contract, manifest = _snapshot(tmp_path)
+    baseline = parse_relational('SELECT SUM(o.amount) FROM orders o', contract)
+    target = parse_relational('SELECT SUM(o.amount) FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id '
+                              "WHERE c.segment <> 'trade' AND o.status NOT IN ('refunded', 'void')", contract)
+    assert {p['op'] for p in target['predicates']} == {'neq', 'not_in'}
+    result = compare_relational(database, baseline, target, context_for(contract))
+    # Only O1 (retail, paid) stays: O2/O6 are trade, O3 refunded, O4 has no customer and O5 an unknown one (NULL segment).
+    assert (result['baseline_value'], result['target_value'], result['delta_target_minus_baseline']) == ('250.00', '100.00', '-150.00')
+    context = {'contract': contract, 'manifest': manifest, 'baseline': baseline, 'target': target}
+    with RelationalEvidenceValidator(context, include_join_evidence=True) as validator:
+        for row in result['evidence']:
+            validator.add(row)
+        validator.finish(result)

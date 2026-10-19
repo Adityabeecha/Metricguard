@@ -79,31 +79,43 @@ def open_snapshot(database):
     return manifest
 
 
-def _endpoint(database, ir, contract):
-    """{row key: (included, contribution, null term)}, the endpoint value and the query hash."""
-    measure = ir['measure'] if contract['version'] == 8 else contract.get('measure')
-    sql, params = _query(ir, contract['row_key'], measure, contract=contract)
-    with _connect(database) as con:
-        try:
-            rows = con.execute(sql, params).fetchall()
-        except duckdb.Error as exc:
-            if 'overflow' in str(exc).lower():
-                _error('arithmetic_overflow', f'Row or aggregate arithmetic overflow: {exc}')
-            raise
-    records, terms = {}, []
-    for key, flag, amount in rows:
+class _Load:
+    """Streams one load's (key, included, contribution, null term) rows in key order and adds up its total."""
+
+    def __init__(self, con, ir, contract):
+        measure = ir['measure'] if contract['version'] == 8 else contract.get('measure')
+        sql, params = _query(ir, contract['row_key'], measure, contract=contract)
+        self.query_hash = digest({'sql': sql, 'params': params})
+        self.cursor = con.execute(sql, params)
+        self.batch, self.position = [], 0
+        self.total, self.terms, self.rows, self.previous = Decimal(0), 0, 0, None
+
+    def next(self):
+        if self.position == len(self.batch):
+            self.batch, self.position = self.cursor.fetchmany(10_000), 0
+            if not self.batch:
+                return None
+        key, flag, amount = self.batch[self.position]
+        self.position += 1
+        if self.previous is not None and key <= self.previous:
+            _error('snapshot_integrity', 'Snapshot rows are not in strict row-key order')
+        self.previous = key
+        self.rows += 1
         included = flag is True
-        records[key] = (included, Decimal(amount) if included and amount is not None else Decimal(0),
-                        included and amount is None)
         if included and amount is not None:
-            terms.append(Decimal(amount))
-    counting = ir.get('aggregate') == 'count'
-    value = sum(terms, Decimal(0)) if terms else (Decimal(0) if counting else None)
-    if contract['version'] == 8 and value is not None and not counting:
-        scale = amount_column(contract, ir['measure'])['scale']
-        if abs(value * (Decimal(10) ** scale)) > (Decimal(10) ** 38 - 1):
-            _error('arithmetic_overflow', f'Endpoint aggregate exceeds DECIMAL(38, {scale}) capacity')
-    return records, value, digest({'sql': sql, 'params': params})
+            amount = Decimal(amount)
+            self.total += amount
+            self.terms += 1
+        return key, (included, amount if included and amount is not None else Decimal(0), included and amount is None)
+
+    def value(self, ir, contract):
+        counting = ir.get('aggregate') == 'count'
+        value = self.total if self.terms else (Decimal(0) if counting else None)
+        if contract['version'] == 8 and value is not None and not counting:
+            scale = amount_column(contract, ir['measure'])['scale']
+            if abs(value * (Decimal(10) ** scale)) > (Decimal(10) ** 38 - 1):
+                _error('arithmetic_overflow', f'Endpoint aggregate exceeds DECIMAL(38, {scale}) capacity')
+        return value
 
 
 def check_definition(ir, contract):
@@ -137,33 +149,56 @@ def compare_snapshots(baseline_database, target_database, ir, context):
     for key, manifest in (('manifest_hash', baseline_manifest), ('target_manifest_hash', target_manifest)):
         if context.get(key) and context[key] != manifest['manifest_hash']:
             _error('snapshot_integrity', f'{key} differs from the frozen snapshot')
-    for manifest in (baseline_manifest, target_manifest):
-        if manifest['row_count'] > FULL_EVIDENCE_ROWS:
-            _error('too_many_rows', f'Comparing two data loads supports up to {FULL_EVIDENCE_ROWS:,} records per snapshot.')
     counting = ir.get('aggregate') == 'count'
-    with localcontext() as dc:
+    large = any(manifest['row_count'] > FULL_EVIDENCE_ROWS for manifest in (baseline_manifest, target_manifest))
+    from .disk_evidence import DiskRows, STORAGE_POLICY
+    # Only records that changed are listed; unchanged records add the same amount to both
+    # loads and nothing to the change. change_summary still counts every record by kind.
+    evidence = DiskRows() if large else []
+    absent = (False, Decimal(0), False)
+    summary = {kind: {'records': 0, 'delta': Decimal(0)} for kind in CHANGE_KINDS}
+    listed_delta = Decimal(0)
+    with localcontext() as dc, _connect(baseline_database) as b_con, _connect(target_database) as t_con:
         dc.prec = 100
-        before, av, baseline_query = _endpoint(baseline_database, ir, contract)
-        after, bv, target_query = _endpoint(target_database, ir, contract)
+        try:
+            before, after = _Load(b_con, ir, contract), _Load(t_con, ir, contract)
+            b_row, t_row = before.next(), after.next()
+            while b_row is not None or t_row is not None:
+                if t_row is None or (b_row is not None and b_row[0] < t_row[0]):
+                    key, (ai, ac, an), (bi, bc, bn), bp, tp = b_row[0], b_row[1], absent, True, False
+                    b_row = before.next()
+                elif b_row is None or t_row[0] < b_row[0]:
+                    key, (ai, ac, an), (bi, bc, bn), bp, tp = t_row[0], absent, t_row[1], False, True
+                    t_row = after.next()
+                else:
+                    key, (ai, ac, an), (bi, bc, bn), bp, tp = b_row[0], b_row[1], t_row[1], True, True
+                    b_row, t_row = before.next(), after.next()
+                change = classify(bp, tp, ai, bi, ac, bc, an, bn)
+                summary[change]['records'] += 1
+                summary[change]['delta'] += bc - ac
+                if change == 'unchanged':
+                    continue
+                listed_delta += bc - ac
+                membership = ('included_in_both' if ai and bi else 'baseline_only' if ai else
+                              'target_only' if bi else 'included_in_neither')
+                evidence.append({'order_id': key, 'baseline_included': ai, 'target_included': bi,
+                                 'baseline_contribution': format(ac, 'f'), 'target_contribution': format(bc, 'f'),
+                                 'delta': format(bc - ac, 'f'), 'baseline_null_term': an, 'target_null_term': bn,
+                                 'membership': membership, 'baseline_present': bp, 'target_present': tp,
+                                 'change': change})
+        except duckdb.Error as exc:
+            if 'overflow' in str(exc).lower():
+                _error('arithmetic_overflow', f'Row or aggregate arithmetic overflow: {exc}')
+            raise
+        for load, manifest in ((before, baseline_manifest), (after, target_manifest)):
+            if load.rows != manifest['row_count']:
+                _error('snapshot_integrity', 'Snapshot row count differs from its manifest')
+        av, bv = before.value(ir, contract), after.value(ir, contract)
+        baseline_query, target_query = before.query_hash, after.query_hash
         gap = bv - av if av is not None and bv is not None else None
-        absent = (False, Decimal(0), False)
-        evidence = []
-        summary = {kind: {'records': 0, 'delta': Decimal(0)} for kind in CHANGE_KINDS}
-        for key in sorted(before.keys() | after.keys()):
-            bp, tp = key in before, key in after
-            ai, ac, an = before.get(key, absent)
-            bi, bc, bn = after.get(key, absent)
-            change = classify(bp, tp, ai, bi, ac, bc, an, bn)
-            summary[change]['records'] += 1
-            summary[change]['delta'] += bc - ac
-            membership = ('included_in_both' if ai and bi else 'baseline_only' if ai else
-                          'target_only' if bi else 'included_in_neither')
-            evidence.append({'order_id': key, 'baseline_included': ai, 'target_included': bi,
-                             'baseline_contribution': format(ac, 'f'), 'target_contribution': format(bc, 'f'),
-                             'delta': format(bc - ac, 'f'), 'baseline_null_term': an, 'target_null_term': bn,
-                             'membership': membership, 'baseline_present': bp, 'target_present': tp,
-                             'change': change})
-        if gap is not None and sum((Decimal(row['delta']) for row in evidence), Decimal(0)) != gap:
+        if summary['unchanged']['delta'] != 0:
+            _error('reconciliation_failure', 'An unchanged record changed its contribution')
+        if gap is not None and listed_delta != gap:
             _error('reconciliation_failure', 'Snapshot-change evidence does not reconcile')
     number = lambda value: None if value is None else format(value, 'f')
     filter_key = 'predicate_tree' if contract['version'] in (5, 8) else 'predicates'
@@ -200,10 +235,13 @@ def compare_snapshots(baseline_database, target_database, ir, context):
                            **({'measure_policy': MEASURE_POLICY_V8} if contract['version'] == 8 else {}),
                            'context': context, 'baseline_query_hash': baseline_query, 'target_query_hash': target_query,
                            'query_count': 2, 'elapsed_ms': round((time.monotonic() - started) * 1000),
-                           'evidence_unit': 'row_key'},
+                           'evidence_unit': 'row_key',
+                           **({'evidence_storage_policy': STORAGE_POLICY} if large else {})},
             'limitations': ['Records are matched across the two loads by the dataset row key; a record whose key '
                             'changed between loads appears as one removed and one added record.',
                             'The comparison covers exactly these two frozen snapshots.',
+                            f'Only the {len(evidence):,} records that were added, removed or changed are listed; the other '
+                            f'{summary["unchanged"]["records"]:,} records are unchanged and contribute nothing to the change.',
                             'Unknown currency remains unknown; no verified financial loss is claimed.'] +
                            (['An endpoint SUM is NULL because no non-NULL terms matched; the change is undefined.']
                             if gap is None else []) +

@@ -98,7 +98,7 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
   return (
     <div className="guided-card" aria-labelledby="warehouse-title">
       <h2 id="warehouse-title">Use a PostgreSQL table</h2>
-      <p className="lead">MetricGuard reads the table once, read-only and in a single consistent transaction, and freezes the rows up to your cutoff as a dataset. Start with a sample to check your answers, then take the full table (up to 5,000,000 rows). Large datasets support bounded total and record-count comparisons; distinct counts and ratios require at most 100,000 rows.</p>
+      <p className="lead">MetricGuard reads the table once, read-only and in a single consistent transaction, and freezes the rows up to your cutoff as a dataset. Start with a sample to check your answers, then take the full table (up to 5,000,000 rows). Every calculation type works on large datasets.</p>
       <label>Connection string
         <input type="password" autoComplete="off" spellCheck={false} value={uri} onChange={e => setUri(e.target.value)} placeholder="postgresql://user:password@host:5432/database" />
         <span className="example">Used for this request only. It is never saved; the dataset records the connection with the password removed. Use a read-only database user.</span>

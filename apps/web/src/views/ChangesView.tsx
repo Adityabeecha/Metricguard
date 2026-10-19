@@ -1259,6 +1259,11 @@ export function ChangesView({
                     <p className="queue-row-sub">
                       {snap?.name || 'Snapshot'} · {new Date(r.created_at).toLocaleString()} · {r.relationship}
                     </p>
+                    {r.state === 'failed' && (
+                      <p className="queue-row-sub disabled-reason">
+                        Why it failed: {r.error?.message || 'no reason was recorded'}{r.error?.code ? ` (${r.error.code})` : ''}
+                      </p>
+                    )}
                   </div>
                   {res && (
                     <div className="queue-row-metric">

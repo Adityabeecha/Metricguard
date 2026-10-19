@@ -92,7 +92,18 @@ def test_large_ratio_and_distinct_match_full_path(tmp_path, monkeypatch, sql_a, 
                   'explanation_status', 'aggregate', 'shapley', 'ratio', 'distinct'):
         assert large.get(field) == full.get(field), field
     assert isinstance(large['evidence'], disk_evidence.DiskRows)
-    assert list(large['evidence']) == full['evidence']
+    if large.get('aggregate') == 'ratio':
+        # Large ratios list only records whose inclusion or terms differ; every omitted record's share is exactly 0.
+        differs = lambda r: (r['baseline_included'] != r['target_included'] or
+                             r['baseline_numerator'] != r['target_numerator'] or
+                             r['baseline_denominator'] != r['target_denominator'])
+        assert list(large['evidence']) == [r for r in full['evidence'] if differs(r)]
+        assert all(not any(ch in r['delta'] for ch in '123456789') for r in full['evidence'] if not differs(r))
+        coverage = large['evidence_coverage']
+        assert coverage['total_records'] == len(full['evidence'])
+        assert coverage['listed_records'] + coverage['unchanged_records'] == coverage['total_records']
+    else:
+        assert list(large['evidence']) == full['evidence']
     assert large['provenance']['evidence_storage_policy'] == disk_evidence.STORAGE_POLICY
     members = large.pop('members', None)
     if members is not None:
@@ -105,6 +116,11 @@ def test_large_ratio_and_distinct_match_full_path(tmp_path, monkeypatch, sql_a, 
                               expected_result=stored)
     verify_artifact(path, manifest, expected_artifact_delta(stored, ratio_context), expected_result=stored,
                     ratio_context=ratio_context, distinct_context=distinct_context)
+    if ratio_context is not None and len(checked['evidence']) > 1:
+        # Changed-only evidence must still prove the parts' changes: a dropped record is refused.
+        with pytest.raises(ValueError, match='EVIDENCE_INVALID'):
+            write_artifact(tmp_path / 'tampered.jsonl', list(checked['evidence'])[1:], ratio_context=ratio_context,
+                           distinct_context=distinct_context, expected_result=stored)
 
 
 def test_large_subtraction_datasets_are_refused(tmp_path, monkeypatch):
@@ -268,7 +284,10 @@ def test_ratio_and_distinct_over_100k_rows_through_the_runner(tmp_path):
                         expected_result=result, ratio_context=ratio_context, distinct_context=distinct_context)
         if name == 'ratio':
             assert result['aggregate'] == 'ratio' and result['value_status'] == 'defined'
-            assert artifact['row_count'] == rows  # every record carries its share of the ratio change
+            # Only the refunded records change inclusion; the others add identical terms to both sides.
+            changed = sum(1 for i in range(rows) if statuses[i % 3] == 'refunded')
+            assert artifact['row_count'] == result['evidence_coverage']['listed_records'] == changed
+            assert result['evidence_coverage']['total_records'] == rows
         else:
             assert result['aggregate'] == 'count_distinct'
             entities = len({i % 40_000 for i in range(rows) if i % 50})

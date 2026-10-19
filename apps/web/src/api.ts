@@ -40,7 +40,7 @@ export type RelationalLookup={role:string; table:string; key:string; grain:strin
  * Read lookups through `lookupsOf` instead of `dimension`.
  */
 export type RelationalContract = {
-  id:string; version:1|2; version_number:number; mode:'relational_snapshot'; policy:'relational-snapshot-v1'|'relational-star-v1';
+  id:string; version:1|2|3; version_number:number; mode:'relational_snapshot'; policy:'relational-snapshot-v1'|'relational-star-v1'|'relational-star-prepared-v1';
   dimensions?:RelationalLookup[];
   name:string; contract_hash:string;
   fact:{table:string; key:string; grain:string; categories:string[]};
