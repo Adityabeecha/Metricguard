@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
 import json
@@ -23,7 +23,7 @@ from .models import (BaselineInput, ColumnMappingInput, ComparisonInput,
                      FlatDefinitionInput, FlatComparisonInput, FlatSnapshotChangeInput,
                      UserCreateInput, ProjectCreateInput, ProjectMemberInput,
                      ReviewRequestInput, DecisionInput, MonitoringPolicyInput,
-                     AlertAcknowledgeInput, ProjectQuotaInput, PostgresExtractionInput,
+                     AlertAcknowledgeInput, ProjectQuotaInput, PostgresExtractionInput, WarehouseExtractionInput,
                      MetricCreateInput, MetricUpdateInput, ExternalMetricReferenceInput,
                      MetricDefinitionBindingInput, MetricPromotionInput,
                      MetricVersionApprovalInput, DbtChangeSetInput,
@@ -734,9 +734,9 @@ def create_app(database_url=None, data_dir=None, mode=None):
         contract = {key: value for key, value in contract_record.items()
                     if key not in {'id', 'created_at', 'version_number', 'project_id'}}
         suffix = Path(file.filename).suffix.lower() if file.filename else ''
-        if suffix not in {'.csv', '.parquet'}:
-            raise DomainError('UNSUPPORTED_FORMAT', 'Flat ingestion accepts CSV or Parquet extracts.')
-        if ((suffix == '.csv' and contract['null_policy'] == 'native_null') or
+        if suffix not in {'.csv', '.parquet', '.xlsx'}:
+            raise DomainError('UNSUPPORTED_FORMAT', 'Upload a CSV, Parquet or Excel (.xlsx) file. Older .xls files must be saved as .xlsx first.')
+        if ((suffix in ('.csv', '.xlsx') and contract['null_policy'] == 'native_null') or
                 (suffix == '.parquet' and contract['null_policy'] != 'native_null')):
             raise DomainError('INVALID_CONTRACT', 'The approved NULL policy does not match the source format.')
         if not 1 <= len(name) <= 160:
@@ -857,8 +857,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
         if execution_mode != 'isolated':
             raise DomainError('ISOLATION_REQUIRED', 'Source previews require the local isolated runner.')
         suffix = Path(file.filename).suffix.lower() if file.filename else ''
-        if suffix not in {'.csv', '.parquet'}:
-            raise DomainError('UNSUPPORTED_FORMAT', 'Preview accepts CSV or Parquet extracts.')
+        if suffix not in {'.csv', '.parquet', '.xlsx'}:
+            raise DomainError('UNSUPPORTED_FORMAT', 'Preview accepts CSV, Parquet or Excel (.xlsx) files.')
         content = await file.read(25 * 1024 * 1024 + 1)
         if not content or len(content) > 25 * 1024 * 1024:
             raise DomainError('UPLOAD_LIMIT', 'Dataset must contain 1 byte to 25 MiB.', 413)
@@ -2088,6 +2088,48 @@ def create_app(database_url=None, data_dir=None, mode=None):
         )
         result = collector.collect(selection, project_id=pid)
         return store.get_extraction(result['extraction_id'], project_id=pid)
+
+    @app.post('/api/v1/projects/{pid}/sources/{kind}/extract', status_code=202)
+    def extract_warehouse_source(pid: str, kind: str, payload: WarehouseExtractionInput, request: Request):
+        """Snowflake or BigQuery: read one table over the vendor REST API into a CSV, then queue the
+        normal isolated import, which validates every row against the contract like an upload."""
+        from services.supervisor.collector import CollectorError
+        from services.supervisor.warehouse_rest import extract_to_csv, selection_for_contract
+        if kind not in ('snowflake', 'bigquery'):
+            raise DomainError('NOT_FOUND', 'Choose snowflake or bigquery.', 404)
+        auth = get_auth_context(request, store)
+        verify_project_access(store, pid, auth, allowed_roles=('owner', 'analyst'))
+        if execution_mode != 'isolated':
+            raise DomainError('ISOLATION_REQUIRED', 'Warehouse datasets require the local isolated runner.')
+        contract_record = store.flat_contract(payload.contract_id)
+        verify_object_access(store, contract_record, auth, allowed_roles=('owner', 'analyst'))
+        contract = {key: value for key, value in contract_record.items()
+                    if key not in {'id', 'created_at', 'version_number', 'project_id'}}
+        body = payload.model_dump(exclude={'contract_id', 'snapshot_name', 'schema_name'})
+        body['schema'] = payload.schema_name
+        stage = data_dir / 'uploads' / f'{uuid4()}.csv'
+        stage.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            try:
+                selection = selection_for_contract(contract, kind, body)
+                rows = extract_to_csv(selection, stage)
+            except CollectorError as error:
+                raise DomainError(error.code, error.message, 422 if error.code != 'AUTHENTICATION_FAILED' else 401) from None
+            store.check_storage_quota(pid, stage.stat().st_size, data_dir)
+            source_hash = hashlib.sha256(stage.read_bytes()).hexdigest()
+            label = (f'{payload.database}.{payload.schema_name}.{payload.table}' if kind == 'snowflake'
+                     else f'{payload.project}.{payload.dataset}.{payload.table}')
+            metadata = {'flat_contract': contract, 'warehouse_source': {
+                'kind': kind, 'table': label, 'rows_read': rows, 'sample_rows': payload.sample_rows,
+                'cutoff': {'column': payload.cutoff_column, 'value': payload.cutoff_value} if payload.cutoff_column else None,
+                'read_at': datetime.now(timezone.utc).isoformat()}}
+            queued = store.queue_import(stage, source_hash, payload.snapshot_name, metadata, project_id=pid)
+            if queued['reused']:
+                stage.unlink(missing_ok=True)
+            return queued
+        except Exception:
+            stage.unlink(missing_ok=True)
+            raise
 
     @app.get('/api/v1/projects/{pid}/extractions/{id}')
     def get_postgres_extraction(pid: str, id: str, request: Request):

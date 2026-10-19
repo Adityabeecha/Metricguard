@@ -644,3 +644,27 @@ class InvestigationDraftUpdateInput(Input):
     version_token: str | None = Field(default=None, max_length=128)
 
 
+
+
+class WarehouseExtractionInput(Input):
+    """Snowflake or BigQuery extraction of one table into a single-table dataset (see warehouse_rest)."""
+    contract_id: str
+    snapshot_name: str = Field(min_length=1, max_length=160)
+    token: str = Field(min_length=8, max_length=8192, repr=False)
+    table: str = Field(min_length=1, max_length=128)
+    # Snowflake
+    account: str | None = Field(default=None, max_length=128)
+    database: str | None = Field(default=None, max_length=128)
+    schema_name: str | None = Field(default=None, max_length=128)
+    warehouse: str | None = Field(default=None, max_length=128)
+    role: str | None = Field(default=None, max_length=128)
+    token_type: Literal['PROGRAMMATIC_ACCESS_TOKEN', 'OAUTH'] = 'PROGRAMMATIC_ACCESS_TOKEN'
+    # BigQuery
+    project: str | None = Field(default=None, max_length=64)
+    dataset: str | None = Field(default=None, max_length=1024)
+    location: str | None = Field(default=None, max_length=32)
+    # Both
+    sample_rows: int | None = Field(default=None, ge=1, le=5_000_000)
+    cutoff_column: str | None = Field(default=None, max_length=128)
+    cutoff_type: Literal['date', 'timestamp'] | None = None
+    cutoff_value: str | None = Field(default=None, max_length=32)

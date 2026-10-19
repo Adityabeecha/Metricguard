@@ -83,7 +83,8 @@ const NEEDS_VALUE = (op: FilterOp) => op !== 'is_null' && op !== 'is_not_null';
 
 /** Two-table datasets: the original one-lookup format (v1) accepts only =, IN and blank tests. */
 export function operatorsFor(type: ValueType, relational: boolean, relationalVersion = 2): FilterOp[] {
-  if (relational) return relationalVersion === 1 ? ['eq', 'in', 'is_null', 'is_not_null'] : ['eq', 'neq', 'in', 'not_in', 'is_null', 'is_not_null'];
+  // Two-table columns are text; ranges compare by character order (right for ISO dates and codes).
+  if (relational) return relationalVersion === 1 ? ['eq', 'in', 'is_null', 'is_not_null'] : ['eq', 'neq', 'in', 'not_in', 'gt', 'gte', 'lt', 'lte', 'is_null', 'is_not_null'];
   if (type === 'boolean') return ['eq', 'neq', 'is_null', 'is_not_null'];
   if (type === 'date' || type === 'timestamp') return ['eq', 'neq', 'in', 'not_in', 'gt', 'gte', 'lt', 'lte', 'is_null', 'is_not_null'];
   return ['eq', 'neq', 'in', 'not_in', 'is_null', 'is_not_null'];

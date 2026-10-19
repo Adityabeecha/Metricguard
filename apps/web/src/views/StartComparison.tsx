@@ -434,7 +434,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
             <div className="report-actions" style={{ marginTop: 8 }}>
               <button className="button secondary small" onClick={() => onNavigate('data', undefined, { add: '1' })}><UploadCloud size={14} /> Upload one table</button>
               <button className="button secondary small" aria-expanded={showTwoTable} onClick={() => setShowTwoTable(v => !v)}><Database size={14} /> Upload two connected tables</button>
-              <button className="button secondary small" aria-expanded={showWarehouse} onClick={() => setShowWarehouse(v => !v)}><Database size={14} /> Use a PostgreSQL table</button>
+              <button className="button secondary small" aria-expanded={showWarehouse} onClick={() => setShowWarehouse(v => !v)}><Database size={14} /> Use a warehouse table (PostgreSQL, Snowflake, BigQuery)</button>
             </div>
           </div>
           {showWarehouse && (

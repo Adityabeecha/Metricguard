@@ -217,3 +217,29 @@ COUNT(DISTINCT) on 1M rows is still 54–69 s and was not changed.
 - Web: 82 / 82; build OK.
 
 **Score after this pass:** about **8 / 10**. What remains is mainly running comparisons concurrently, and connectors beyond CSV, Parquet and PostgreSQL.
+
+## Fourth pass: the last open bad points (2026-10-19)
+
+| Bad point | Status | What changed |
+|---|---|---|
+| 1–5 | Done (third pass) | — |
+| 6. App slow during big jobs | Done | Warm reads during two parallel heavy comparisons: evidence pages p50 0.05 s / p95 0.84 s; workspace p50 0.14 s / p95 1.4 s. The one remaining cost is deliberate: the first read of a very large evidence file after a restart verifies the whole file once. |
+| 7. Two-table filters | Done | Added `<`, `<=`, `>`, `>=` on text lookup columns (ISO dates, codes). DuckDB and the Python verifier compare by the same code-point order; NULL never matches. Tested with non-ASCII values. |
+| 8. One comparison at a time | Done | `scripts\mg.ps1 start -Workers N` (1–4, default 2) starts N supervisors on one queue. Claims are compare-and-set leases; a race test with 4 workers and 40 runs claims each run exactly once. A briefly locked database is retried instead of stopping a worker. |
+| 9. Excel | Done, live | Standard-library `.xlsx` reader (`packages/metricguard_core/xlsx.py`), run inside the isolated runner, first worksheet. Exact values; dates become ISO dates. Formulas without a saved result, error cells and merged cells are refused with the cell named. Live: preview, import and an exact comparison through Docker. |
+| 9. Snowflake, BigQuery | Built and tested against fakes; **not run against a live account** | REST APIs over `httpx`, no new packages (`services/supervisor/warehouse_rest.py`). Every value is converted to text in SQL; rows become a CSV that the normal isolated import validates row by row. The token is used once, never stored, and redacted from errors. Tested: paging and async polling, schema mismatch, unsafe identifiers, token redaction, and the route through to a validated snapshot. |
+
+**Stress run with 2 workers:** every check passes, 10.5 minutes in total.
+
+| Check | Before | After |
+|---|---|---|
+| Burst of 8 comparisons | 203 s | 99.5 s |
+| Reads during the burst, p95 | 5.4 s | 3.6 s, 0 errors |
+| AVG / rate / share, 1M rows | 32 / 17 / 36 s | 25 / 12 / 23 s |
+
+**Tests:**
+
+- Backend: 740 passed, 0 failed, 0 skipped (with PostgreSQL), plus the files rerun after the last fixes: 36 + 10 passed.
+- Web: 82 / 82; build OK.
+
+**Not verified:** Snowflake and BigQuery against real accounts. The first live use should start with a sample.

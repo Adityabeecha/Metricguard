@@ -5,6 +5,7 @@
 .EXAMPLE
   .\scripts\mg.ps1 start            # build what is missing, start API + supervisor, open nothing
   .\scripts\mg.ps1 start -Seed      # ...and load the two demo investigations
+  .\scripts\mg.ps1 start -Workers 3 # run up to 3 comparisons at the same time (default 2)
   .\scripts\mg.ps1 status
   .\scripts\mg.ps1 stop
 
@@ -20,7 +21,10 @@ param(
   [string]$DataDir = 'data\demo-app',
   [switch]$Seed,
   [switch]$RequireKey,
-  [switch]$NoDocker
+  [switch]$NoDocker,
+  # Comparisons that run at the same time. Each isolated runner may use up to 1 GiB of
+  # Docker memory, so keep this within what Docker Desktop is given.
+  [ValidateRange(1, 4)][int]$Workers = 2
 )
 
 $ErrorActionPreference = 'Stop'
@@ -94,9 +98,11 @@ function Show-Status {
   }
   if ($state) {
     $api = if (Test-Pid $state.api_pid) { "running (PID $($state.api_pid))" } else { 'not running' }
-    $sup = if (Test-Pid $state.supervisor_pid) { "running (PID $($state.supervisor_pid))" } else { 'not running' }
+    $pids = @(Get-SupervisorPids $state)
+    $alive = @($pids | Where-Object { Test-Pid $_ })
+    $sup = if (-not $pids.Count) { 'not started' } elseif ($alive.Count -eq $pids.Count) { "$($alive.Count) worker(s) running (PID $($alive -join ', '))" } else { "$($alive.Count) of $($pids.Count) worker(s) running" }
     Write-Step "API: $api"
-    Write-Step "Supervisor (comparison engine): $sup"
+    Write-Step "Comparison engine: $sup"
     Write-Step "Data directory: $($state.data_dir)"
     Write-Step "Logs: $($state.log_dir)"
   } else {
@@ -112,15 +118,25 @@ function Show-Status {
   Write-Step "Docker: $(Test-Docker)"
 }
 
+function Get-SupervisorPids($state) {
+  # Older state files record a single supervisor_pid.
+  if ($state.PSObject.Properties.Name -contains 'supervisor_pids' -and $state.supervisor_pids) { return @($state.supervisor_pids) }
+  if ($state.supervisor_pid) { return @($state.supervisor_pid) }
+  return @()
+}
+
 function Stop-App {
   $state = Get-State
   if (-not $state) { Write-Host 'Nothing to stop (no running instance recorded).'; return }
-  foreach ($name in 'supervisor_pid', 'api_pid') {
-    $id = $state.$name
+  foreach ($id in @(Get-SupervisorPids $state)) {
     if (Test-Pid $id) {
       Stop-Process -Id ([int]$id) -Force -ErrorAction SilentlyContinue
-      Write-Step "Stopped $($name -replace '_pid','') (PID $id)"
+      Write-Step "Stopped comparison worker (PID $id)"
     }
+  }
+  if (Test-Pid $state.api_pid) {
+    Stop-Process -Id ([int]$state.api_pid) -Force -ErrorAction SilentlyContinue
+    Write-Step "Stopped api (PID $($state.api_pid))"
   }
   Remove-Item -LiteralPath $StateFile -Force -ErrorAction SilentlyContinue
   Write-Host 'MetricGuard stopped. Your data is kept.'
@@ -203,14 +219,19 @@ function Start-App {
   $api = Start-Process -FilePath $Python -ArgumentList '-m', 'uvicorn', 'services.api.app:app', '--host', '127.0.0.1', '--port', "$Port" `
     -WorkingDirectory $Root -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput (Join-Path $logs 'api.out.log') -RedirectStandardError (Join-Path $logs 'api.err.log')
-  $supervisorPid = $null
+  $supervisorPids = @()
   if ($docker -eq 'running') {
-    $sup = Start-Process -FilePath $Python -ArgumentList '-m', 'services.supervisor.worker' `
-      -WorkingDirectory $Root -WindowStyle Hidden -PassThru `
-      -RedirectStandardOutput (Join-Path $logs 'supervisor.out.log') -RedirectStandardError (Join-Path $logs 'supervisor.err.log')
-    $supervisorPid = $sup.Id
+    # Each worker claims queued jobs with a compare-and-set lease, so several can share one queue.
+    foreach ($n in 1..$Workers) {
+      $suffix = if ($n -eq 1) { '' } else { "-$n" }
+      $sup = Start-Process -FilePath $Python -ArgumentList '-m', 'services.supervisor.worker' `
+        -WorkingDirectory $Root -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $logs "supervisor$suffix.out.log") -RedirectStandardError (Join-Path $logs "supervisor$suffix.err.log")
+      $supervisorPids += $sup.Id
+    }
   }
-  [pscustomobject]@{ api_pid = $api.Id; supervisor_pid = $supervisorPid; port = $Port; data_dir = $data; log_dir = $logs; started_at = (Get-Date).ToString('o') } |
+  $supervisorPid = if ($supervisorPids.Count) { $supervisorPids[0] } else { $null }
+  [pscustomobject]@{ api_pid = $api.Id; supervisor_pid = $supervisorPid; supervisor_pids = $supervisorPids; workers = $Workers; port = $Port; data_dir = $data; log_dir = $logs; started_at = (Get-Date).ToString('o') } |
     ConvertTo-Json | Set-Content -LiteralPath $StateFile -Encoding UTF8
 
   $deadline = (Get-Date).AddSeconds(45)
@@ -222,7 +243,7 @@ function Start-App {
   }
   if (-not $health) { Fail "The API did not answer within 45 seconds. See $(Join-Path $logs 'api.err.log')." }
   Write-Step "API ready (PID $($api.Id))"
-  if ($supervisorPid) { Write-Step "Comparison engine supervisor started (PID $supervisorPid)" }
+  if ($supervisorPids.Count) { Write-Step "Comparison engine started: $($supervisorPids.Count) worker(s) can run comparisons at the same time (PID $($supervisorPids -join ', '))" }
 
   if ($Seed) {
     Write-Host 'Loading demo investigations'

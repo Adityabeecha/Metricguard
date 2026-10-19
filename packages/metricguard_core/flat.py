@@ -407,7 +407,16 @@ def _ingest_flat(source, destination, contract, preparation, folder, sinks):
         _error('immutable_snapshot', 'Snapshot destination already exists')
     if source.stat().st_size > MAX_FLAT_BYTES:
         _error('file_too_large', f'Extract exceeds {MAX_FLAT_BYTES // (1024 * 1024)} MiB')
-    source_hash = file_hash(source)
+    uploaded, source_hash = source, file_hash(source)  # the uploaded file itself, also for Excel
+    if source.suffix.lower() == '.xlsx':
+        if contract['null_policy'] != 'blank_nullable':
+            _error('invalid_contract', 'Excel files use blank cells for missing values (blank_nullable)')
+        from .xlsx import xlsx_to_csv
+        converted = folder / 'from_xlsx.csv'
+        xlsx_to_csv(source, converted)
+        if converted.stat().st_size > MAX_FLAT_BYTES:
+            _error('file_too_large', f'Extract exceeds {MAX_FLAT_BYTES // (1024 * 1024)} MiB')
+        source = converted
     if ver in (6, 8):
         amount_specs = contract['decimal_columns']
         columns = [contract['row_key'], *[c['name'] for c in amount_specs], *contract['categories']]
@@ -546,7 +555,7 @@ def _ingest_flat(source, destination, contract, preparation, folder, sinks):
     else:
         _error('invalid_schema', 'Only CSV and Parquet extracts are supported')
     rows.close()
-    if file_hash(source) != source_hash: _error('source_changed', 'Source changed during validation')
+    if file_hash(uploaded) != source_hash: _error('source_changed', 'Source changed during validation')
 
     schema = flat_schema(contract)
     try:
@@ -562,7 +571,7 @@ def _ingest_flat(source, destination, contract, preparation, folder, sinks):
                 duplicate = con.execute(f'SELECT {key} FROM snapshot GROUP BY {key} HAVING COUNT(*) > 1 LIMIT 1').fetchone()
                 if duplicate is not None:
                     _error('invalid_row', f'Missing or duplicate row key {duplicate[0]!r}')
-        if file_hash(source) != source_hash: _error('source_changed', 'Source changed during loading')
+        if file_hash(uploaded) != source_hash: _error('source_changed', 'Source changed during loading')
         manifest = {'mode': 'flat_snapshot', 'policy': POLICY, 'execution_policy': 'flat_snapshot_v1', 'contract_version': ver,
                     'contract_hash': contract['contract_hash'], 'contract': contract,
                     'row_count': len(rows), 'schema': schema, 'primary_key': contract['row_key'],

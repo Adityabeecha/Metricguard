@@ -431,3 +431,35 @@ def test_star_not_equal_and_not_in_follow_sql_null_rules(tmp_path):
         for row in result['evidence']:
             validator.add(row)
         validator.finish(result)
+
+
+def test_star_text_ranges_agree_between_sql_and_evidence(tmp_path):
+    """<, <=, >, >= on text lookup columns (ISO dates, codes): the database and the verifier agree, NULL never matches."""
+    from packages.metricguard_core.relational import context_for
+    from packages.metricguard_core.relational_compare import compare_relational
+    from packages.metricguard_core.relational_evidence import RelationalEvidenceValidator
+    contract = deepcopy(CONTRACT)
+    contract['dimensions'][0]['categories'] = ['segment', 'since']
+    customers = [['customer_id', 'segment', 'since'], ['C1', 'retail', '2026-09-01'], ['C2', 'Ünited', '2025-12-31']]
+    database, contract, manifest = _snapshot(tmp_path, contract, {'fact': ORDERS, 'customer': customers, 'product': PRODUCTS})
+    baseline = parse_relational('SELECT SUM(o.amount) FROM orders o', contract)
+    cases = {
+        # C1 (O1 100, O3 30) joined since 2026-09-01; O4 (no customer) and O5 (unknown) have NULL `since`.
+        "c.since >= '2026-01-01'": '130.00',
+        "c.since < '2026-01-01'": '60.00',  # C2: O2 50 + O6 10
+        # Code-point order: 'retail' and 'Ünited' both sort after 'Z', so every matched customer: 100 + 50 + 30 + 10.
+        "c.segment > 'Z'": '190.00',
+        "c.segment <= 'retail' AND c.since > '2026-08-31'": '130.00',
+    }
+    for condition, expected in cases.items():
+        target = parse_relational('SELECT SUM(o.amount) FROM orders o LEFT JOIN customers c ON o.customer_id = c.customer_id '
+                                  f'WHERE {condition}', contract)
+        result = compare_relational(database, baseline, target, context_for(contract))
+        assert result['target_value'] == expected, condition
+        context = {'contract': contract, 'manifest': manifest, 'baseline': baseline, 'target': target}
+        with RelationalEvidenceValidator(context, include_join_evidence=True) as validator:
+            for row in result['evidence']:
+                validator.add(row)
+            validator.finish(result)
+    with pytest.raises(CoreError):  # a range needs the column on the left and one text value
+        parse_relational("SELECT SUM(o.amount) FROM orders o WHERE '2026' < o.status", contract)

@@ -1,6 +1,7 @@
 """Entrypoint executed only inside the fixed analytical runner image."""
 
 import json
+import tempfile
 from pathlib import Path
 
 from services.supervisor.evidence_artifact import aggregate_contexts, write_artifact
@@ -126,11 +127,12 @@ def ingest_job(input_dir=Path('/job/input'), output_dir=Path('/job/output')):
         (output_dir / 'manifest.json').write_bytes(encoded)
         return manifest
     csv_source, parquet_source = input_dir / 'source.csv', input_dir / 'source.parquet'
-    if csv_source.is_file() == parquet_source.is_file():
+    xlsx_source = input_dir / 'source.xlsx'  # single-table datasets only
+    sources = [path for path in (csv_source, parquet_source, xlsx_source) if path.is_file()]
+    if len(sources) != 1 or (sources[0] == xlsx_source and 'flat_contract' not in metadata):
         raise ValueError('INGEST_INPUT_INVALID')
     if 'flat_contract' in metadata:
-        manifest = ingest_flat(csv_source if csv_source.is_file() else parquet_source,
-                               database, metadata['flat_contract'], metadata.get('flat_preparation'))
+        manifest = ingest_flat(sources[0], database, metadata['flat_contract'], metadata.get('flat_preparation'))
     elif 'contract' in metadata:
         if not isinstance(metadata.get('mapping'), dict):
             raise ValueError('MAPPED_INPUT_INVALID')
@@ -153,9 +155,23 @@ def preview_job(input_dir=Path('/job/input'), output_dir=Path('/job/output')):
 
     input_dir, output_dir = Path(input_dir), Path(output_dir)
     csv_source, parquet_source = input_dir / 'source.csv', input_dir / 'source.parquet'
-    if csv_source.is_file() == parquet_source.is_file():
+    xlsx_source = input_dir / 'source.xlsx'
+    if sum(path.is_file() for path in (csv_source, parquet_source, xlsx_source)) != 1:
         raise ValueError('PREVIEW_INPUT_INVALID')
-    preview = preview_source(csv_source if csv_source.is_file() else parquet_source)
+    if xlsx_source.is_file():
+        # Excel is converted here, inside the isolated runner, then previewed as CSV.
+        from packages.metricguard_core.xlsx import xlsx_to_csv
+        converted = Path(tempfile.mkdtemp()) / 'source.csv'
+        sheet, _ = xlsx_to_csv(xlsx_source, converted)
+        # The converted CSV's first complete lines (bounded) let the browser infer types as for a CSV upload.
+        with converted.open('rb') as stream:
+            head = stream.read(40 * 1024)
+        head = head if len(head) < 40 * 1024 else head[:head.rfind(b'\n') + 1]
+        # source_hash identifies the uploaded workbook (the supervisor checks it), not the converted CSV.
+        preview = {**preview_source(converted), 'source_hash': file_hash(xlsx_source), 'source_format': 'xlsx', 'sheet_name': sheet,
+                   'csv_head': head.decode('utf-8', errors='strict')}
+    else:
+        preview = preview_source(csv_source if csv_source.is_file() else parquet_source)
     output_dir.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(preview, ensure_ascii=False, allow_nan=False).encode('utf-8')
     if len(encoded) > 64 * 1024:

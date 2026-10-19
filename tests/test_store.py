@@ -93,3 +93,30 @@ def test_baseline_decision_supersedes_only_matching_scope_and_keeps_history(tmp_
     assert len(records) == 2
     assert next(r for r in records if r['id'] == first['id'])['superseded_by'] == second['id']
     assert second['superseded_by'] is None
+
+
+def test_parallel_workers_never_claim_the_same_comparison(tmp_path):
+    """scripts\mg.ps1 -Workers N starts N supervisors on one SQLite queue; each run is claimed once."""
+    from concurrent.futures import ThreadPoolExecutor
+    from sqlalchemy.exc import OperationalError
+    from services.api.store import Store
+    store = make_store(tmp_path)
+    request = seed_request(store)
+    queued = {store.queue(request, f'parallel-{i}', 'isolated')['id'] for i in range(40)}
+
+    def worker(name):
+        own = Store(f"sqlite:///{tmp_path / 'app.db'}")  # its own engine, like a separate process
+        claimed = []
+        while True:
+            try:
+                run = own.claim(name)
+            except OperationalError:
+                continue  # the real worker loop retries a briefly locked database
+            if run is None:
+                return claimed
+            claimed.append(run['id'])
+
+    with ThreadPoolExecutor(4) as pool:
+        results = list(pool.map(worker, ['w1', 'w2', 'w3', 'w4']))
+    everything = [run for claimed in results for run in claimed]
+    assert sorted(everything) == sorted(queued)  # every run claimed, none twice

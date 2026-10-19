@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -336,7 +337,7 @@ class Supervisor:
                     error_path = output_dir / 'error.json'
                     if error_path.is_file() and error_path.stat().st_size <= 8192:
                         detail = json.loads(error_path.read_text(encoding='utf-8'))
-                        if (detail.get('code') in {'invalid_schema', 'invalid_row', 'invalid_csv',
+                        if (detail.get('code') in {'invalid_schema', 'invalid_row', 'invalid_csv', 'invalid_xlsx',
                                 'invalid_parquet', 'too_many_rows', 'file_too_large', 'preview_too_large'} and
                                 isinstance(detail.get('message'), str) and len(detail['message']) <= 500):
                             raise IngestValidationError(detail['code'].upper(), detail['message'])
@@ -608,7 +609,8 @@ def isolated_ingest(source, destination, metadata, launcher=None, job_root=Path(
     source, destination, job_root = Path(source), Path(destination), Path(job_root)
     suffix = source.suffix.lower()
     relational = 'relational_contract' in metadata
-    if suffix not in ({'.zip'} if relational else {'.csv', '.parquet'}):
+    allowed = {'.zip'} if relational else {'.csv', '.parquet', '.xlsx'} if 'flat_contract' in metadata else {'.csv', '.parquet'}
+    if suffix not in allowed:
         raise ValueError('UNSUPPORTED_FORMAT')
     sidecar_destination = destination.with_name(destination.name + '.manifest.json')
     if destination.exists() or sidecar_destination.exists():
@@ -653,7 +655,7 @@ def isolated_ingest(source, destination, metadata, launcher=None, job_root=Path(
             if error_path.is_file() and error_path.stat().st_size <= 8192:
                 try:
                     detail = json.loads(error_path.read_text(encoding='utf-8'))
-                    if detail.get('code') in {'invalid_schema', 'invalid_row', 'invalid_csv', 'invalid_parquet',
+                    if detail.get('code') in {'invalid_schema', 'invalid_row', 'invalid_csv', 'invalid_xlsx', 'invalid_parquet',
                             'too_many_rows', 'invalid_metadata', 'invalid_contract', 'invalid_mapping',
                             'file_too_large', 'unsupported_format', 'scale_mismatch', 'unsupported_precision',
                             'identical_operands', 'arithmetic_overflow', 'invalid_bundle', 'invalid_keys',
@@ -695,7 +697,9 @@ def isolated_ingest(source, destination, metadata, launcher=None, job_root=Path(
                 raise ValueError('INGEST_MANIFEST_MISMATCH')
         elif manifest.get('schema') != SCHEMA:
             raise ValueError('INGEST_MANIFEST_MISMATCH')
-        declared = {key: value for key, value in metadata.items() if key not in {'contract', 'mapping', 'flat_contract', 'relational_contract'}}
+        # warehouse_source is lineage shown with the import (where the CSV came from); the runner never sees or checks it.
+        declared = {key: value for key, value in metadata.items()
+                    if key not in {'contract', 'mapping', 'flat_contract', 'relational_contract', 'warehouse_source'}}
         if any(manifest.get(key) != value for key, value in declared.items()) or manifest.get('source_hash') != file_hash(source):
             raise ValueError('INGEST_MANIFEST_MISMATCH')
         if 'contract' in metadata and (manifest.get('contract_hash') != metadata['contract']['contract_hash'] or
@@ -723,9 +727,18 @@ def main():
     store = Store(database_url)
     supervisor = Supervisor(store, DockerLauncher(), job_root,
                             worker_id=f'local-{os.getpid()}', data_dir=data_dir)
+    from sqlalchemy.exc import OperationalError
     while True:
-        store.worker_seen(supervisor.worker_id)
-        if not supervisor.run_once():
+        # Several workers may share one queue (scripts\mg.ps1 -Workers); a briefly locked
+        # SQLite file is retried rather than ending this worker. Leases recover any claim.
+        try:
+            store.worker_seen(supervisor.worker_id)
+            worked = supervisor.run_once()
+        except OperationalError as exc:
+            print(f'{supervisor.worker_id}: database busy, retrying ({exc.__class__.__name__})', file=sys.stderr, flush=True)
+            worked = False
+            time.sleep(1)
+        if not worked:
             time.sleep(0.25)
 
 

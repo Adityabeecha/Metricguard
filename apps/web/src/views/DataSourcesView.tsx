@@ -21,6 +21,7 @@ import {
 import { api, type Bootstrap, type Snapshot, type SnapshotImport } from '../api';
 import { inferMeaning, parseCsvText, type ParsedCsvPreview } from '../csvInference';
 import { DIRECT_TWO_TABLE_LIMIT, PrepareTwoTable } from './PrepareTwoTable';
+import { WarehouseSource } from './WarehouseSource';
 import { humanizeError, type HumanizedError } from '../errorUtils';
 import { ROLE_LABEL, summarizeDataset } from '../datasetSummary';
 import { useDialog } from '../useDialog';
@@ -77,13 +78,6 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
   const [minuendColumn, setMinuendColumn] = useState('');
   const [subtrahendColumn, setSubtrahendColumn] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
-
-  // PostgreSQL Source Form
-  const [pgUri, setPgUri] = useState('');
-  const [pgSchema, setPgSchema] = useState('public');
-  const [pgTable, setPgTable] = useState('');
-  const [pgCutoffCol, setPgCutoffCol] = useState('created_at');
-  const [pgCutoffVal, setPgCutoffVal] = useState(new Date().toISOString().slice(0, 10));
 
   // Validation State (Step 3)
   const [validationProgress, setValidationProgress] = useState('');
@@ -221,22 +215,43 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
     setExtraAmounts([]); setExtraUnits({}); setMinuendColumn(''); setSubtrahendColumn('');
     setCategoryTypeOverrides({});
     setValidationError(null);
-    const cleanName = file.name.replace(/\.(csv|parquet)$/i, '');
+    const cleanName = file.name.replace(/\.(csv|parquet|xlsx)$/i, '');
     setSnapshotName(cleanName);
 
     const isParquet = file.name.toLowerCase().endsWith('.parquet');
+    const isExcel = file.name.toLowerCase().endsWith('.xlsx');
     setNullPolicy(isParquet ? 'native_null' : 'blank_nullable');
 
-    if (isParquet) {
-      // Parquet extract: preview via server preview endpoint
+    if (isParquet || isExcel) {
+      // Parquet and Excel are read inside the isolated runner; wait for its preview.
       setBusy(true);
-      setValidationProgress('Analyzing Parquet schema…');
+      setValidationProgress(isExcel ? 'Reading the first worksheet…' : 'Analyzing Parquet schema…');
       try {
         const form = new FormData();
         form.append('file', file);
         form.append('project_id', projectId);
-        const record = await api.previewDataset(form, projectId);
-        if (record.preview) {
+        let record = await api.previewDataset(form, projectId);
+        for (let waited = 0; !record.preview && ['queued', 'running'].includes(record.state) && waited < 120; waited++) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          record = await api.datasetPreview(record.id);
+        }
+        if (!record.preview) {
+          throw new Error(record.error?.message || 'The file could not be previewed. Check that the comparison engine is running.');
+        }
+        if (isExcel && record.preview.csv_head) {
+          // The runner converted the sheet exactly; infer columns from its first rows as for a CSV.
+          const parsed = parseCsvText(record.preview.csv_head, 25);
+          setFilePreview(parsed);
+          const inf = inferMeaning(parsed.headers, parsed.observed_types, parsed.sample_rows, file.name, parsed.key_issues);
+          setConfirmedKey(inf.rowKey);
+          setConfirmedMeasure(inf.measure);
+          setConfirmedCategories(inf.categories);
+          setConfirmedUnit(inf.unit || '');
+          setUnitSource(inf.unitSource);
+          setConfirmedMeaning(inf.meaning);
+          setScale(inf.scale);
+          if (record.preview.sheet_name) setValidationProgress(`Using the first worksheet, “${record.preview.sheet_name}”.`);
+        } else if (record.preview) {
           const inf = inferMeaning(
             record.preview.headers,
             Object.fromEntries(Object.entries(record.preview.declared_types).map(([k, v]) => [k, ({VARCHAR: 'string', BOOLEAN: 'boolean', DATE: 'date', TIMESTAMP: 'timestamp'} as Record<string, string>)[v || ''] || (v || '').toLowerCase()])),
@@ -553,46 +568,6 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
       setSelectedSnapshotId(updated.snapshots[updated.snapshots.length - 1].id);
     }
   };
-
-  // Execute PostgreSQL Extraction
-  const handleExtractPostgres = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!pgUri || !pgTable) return;
-    setStep('validating');
-    setBusy(true);
-    setValidationProgress('Connecting to PostgreSQL source and preparing extract…');
-    setValidationError(null);
-
-    try {
-      const payload = {
-        source_uri: pgUri,
-        schema_name: pgSchema || 'public',
-        table_name: pgTable,
-        columns: ['*'],
-        cutoff_column: pgCutoffCol || 'created_at',
-        cutoff_value: pgCutoffVal || new Date().toISOString().slice(0, 10),
-        snapshot_name: snapshotName || `${pgTable} snapshot`,
-        row_limit: 100_000,
-      };
-
-      await api.post(`/projects/${encodeURIComponent(projectId)}/sources/postgres/extract`, payload);
-      const updated = await refresh();
-      if (updated?.snapshots?.length) {
-        const newest = updated.snapshots.at(-1);
-        if (newest) {
-          setCreatedSnapshot(newest);
-          setSelectedSnapshotId(newest.id);
-        }
-      }
-      setStep('success');
-    } catch (err: unknown) {
-      setValidationError(humanizeError(err));
-      setStep('error');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const getSourceTypeBadge = (s: Snapshot) => {
     const isParquet = s.name.endsWith('.parquet') || (s.manifest as { format?: string })?.format === 'parquet';
     if (s.execution_policy === 'relational_snapshot_v1') return <span className="source-tag csv">{summarizeDataset(s, data).tables.length || 2} tables</span>;
@@ -1049,14 +1024,14 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                       className={`source-type-btn ${sourceType === 'file' ? 'active' : ''}`}
                       onClick={() => setSourceType('file')}
                     >
-                      <FileSpreadsheet size={16} /> File extract (CSV / Parquet)
+                      <FileSpreadsheet size={16} /> File (CSV, Parquet or Excel)
                     </button>
                     <button
                       type="button"
                       className={`source-type-btn ${sourceType === 'postgres' ? 'active' : ''}`}
                       onClick={() => setSourceType('postgres')}
                     >
-                      <Database size={16} /> PostgreSQL table
+                      <Database size={16} /> Warehouse table (PostgreSQL, Snowflake, BigQuery)
                     </button>
                   </div>
 
@@ -1075,7 +1050,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                         </span>
                         <input
                           type="file"
-                          accept=".csv,.parquet,text/csv,application/vnd.apache.parquet"
+                          accept=".csv,.parquet,.xlsx,text/csv,application/vnd.apache.parquet,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                           onChange={(e) => {
                             const f = e.target.files?.[0];
                             if (f) void handleFilePicked(f);
@@ -1124,60 +1099,9 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                       )}
                     </>
                   ) : (
-                    /* PostgreSQL Form */
-                    <form className="form-stack" onSubmit={handleExtractPostgres}>
-                      <label>
-                        PostgreSQL Connection URI
-                        <input
-                          required
-                          type="password"
-                          placeholder="postgresql://user:password@localhost:5432/dbname"
-                          value={pgUri}
-                          onChange={(e) => setPgUri(e.target.value)}
-                        />
-                      </label>
-                      <div className="form-grid two">
-                        <label>
-                          Schema name
-                          <input
-                            required
-                            value={pgSchema}
-                            onChange={(e) => setPgSchema(e.target.value)}
-                          />
-                        </label>
-                        <label>
-                          Table name
-                          <input
-                            required
-                            placeholder="e.g. orders"
-                            value={pgTable}
-                            onChange={(e) => setPgTable(e.target.value)}
-                          />
-                        </label>
-                      </div>
-                      <div className="form-grid two">
-                        <label>
-                          Cutoff timestamp column
-                          <input
-                            required
-                            value={pgCutoffCol}
-                            onChange={(e) => setPgCutoffCol(e.target.value)}
-                          />
-                        </label>
-                        <label>
-                          Cutoff date (YYYY-MM-DD)
-                          <input
-                            required
-                            type="date"
-                            value={pgCutoffVal}
-                            onChange={(e) => setPgCutoffVal(e.target.value)}
-                          />
-                        </label>
-                      </div>
-                      <button className="button primary" type="submit" disabled={busy || !pgUri || !pgTable}>
-                        Extract and create snapshot <ArrowRight size={15} />
-                      </button>
-                    </form>
+                    /* Warehouse table: PostgreSQL, Snowflake or BigQuery (asks its own dataset questions). */
+                    <WarehouseSource workspaceId={projectId} refresh={refresh}
+                      onCreated={(id) => { setShowAddModal(false); setSelectedSnapshotId(id); }} />
                   )}
                 </div>
               )}

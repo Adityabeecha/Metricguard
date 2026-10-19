@@ -43,6 +43,7 @@ test('large snapshots allow every aggregate except on subtraction and CASE datas
 test('"is not" and "is none of" are offered except on the original one-lookup two-table format', () => {
   assert.deepEqual(operatorsFor('string', true, 1), ['eq', 'in', 'is_null', 'is_not_null']);
   for (const version of [2, 3]) assert.ok(operatorsFor('string', true, version).includes('not_in') && operatorsFor('string', true, version).includes('neq'));
+  for (const op of ['gt', 'gte', 'lt', 'lte']) assert.ok(operatorsFor('string', true, 2).includes(op));
   assert.ok(operatorsFor('string', false).includes('not_in'));
   const contract = { version: 5, measure: 'amount', categories: ['status'], dimension_types: { status: 'string' } };
   assert.equal(buildFlatSql(contract, { filters: [{ column: 'status', op: 'not_in', value: 'void, refunded' }] }),

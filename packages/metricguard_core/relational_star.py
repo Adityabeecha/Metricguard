@@ -42,6 +42,16 @@ def byte_limit(c):
     return 512 * 1024 * 1024 if c['version'] == 3 else MAX_BYTES
 
 MAX_DIMENSIONS = 4
+
+# Text ranges (for example ISO dates or codes stored as text). DuckDB compares VARCHAR by
+# byte, and UTF-8 byte order equals Python's code-point order, so both sides agree exactly.
+RANGE_OPS = ('gt', 'gte', 'lt', 'lte')
+RANGE_SQL = {'gt': '>', 'gte': '>=', 'lt': '<', 'lte': '<='}
+RANGE_NODES = {exp.GT: 'gt', exp.GTE: 'gte', exp.LT: 'lt', exp.LTE: 'lte'}
+
+
+def compare_text(value, op, bound):
+    return {'gt': value > bound, 'gte': value >= bound, 'lt': value < bound, 'lte': value <= bound}[op]
 NULL_MARKER = '__METRICGUARD_RELATIONAL_NULL_54ce__'
 
 
@@ -166,9 +176,9 @@ def validate_ir(ir, contract):
         if allowed is None or pred['column'] not in allowed:
             fail('invalid_ir', 'Predicates may reference only registered categories of the fact or joined lookup tables.')
         values, op = pred['values'], pred['op']
-        if (op not in ('eq', 'neq', 'in', 'not_in', 'is_null', 'is_not_null') or not isinstance(values, list) or
+        if (op not in ('eq', 'neq', 'in', 'not_in', 'is_null', 'is_not_null', *RANGE_OPS) or not isinstance(values, list) or
                 any(not isinstance(v, str) or len(v) > 256 or '\x00' in v for v in values) or
-                (op in ('eq', 'neq') and len(values) != 1) or (op in ('in', 'not_in') and not 1 <= len(values) <= 20) or
+                (op in ('eq', 'neq', *RANGE_OPS) and len(values) != 1) or (op in ('in', 'not_in') and not 1 <= len(values) <= 20) or
                 (op in ('is_null', 'is_not_null') and values) or values != sorted(set(values))):
             fail('invalid_ir', 'Invalid bounded string predicate values.')
     if predicates != sorted(predicates, key=digest) or len({digest(p) for p in predicates}) != len(predicates):
@@ -267,6 +277,8 @@ def parse(raw_sql, contract):
             op, literals = 'eq', [node.expression]
         elif isinstance(node, exp.NEQ):
             op, literals = 'neq', [node.expression]
+        elif type(node) in RANGE_NODES:
+            op, literals = RANGE_NODES[type(node)], [node.expression]
         elif isinstance(node, exp.In) and not node.args.get('query') and not node.args.get('unnest'):
             op, literals = 'in', node.expressions
         elif (isinstance(node, exp.Not) and isinstance(node.this, exp.In) and not node.this.args.get('query')
@@ -277,7 +289,7 @@ def parse(raw_sql, contract):
         elif isinstance(node, exp.Not) and isinstance(node.this, exp.Is) and isinstance(node.this.expression, exp.Null):
             op, literals, col = 'is_not_null', [], node.this.this
         else:
-            fail('unsupported_sql', 'Filters support AND over =, <>, IN, NOT IN, IS NULL or IS NOT NULL on text columns.')
+            fail('unsupported_sql', 'Filters support AND over =, <>, <, <=, >, >=, IN, NOT IN, IS NULL or IS NOT NULL on text columns.')
         role, name = column(col)
         allowed = c['fact']['categories'] if role == 'fact' else roles[role]['categories']
         if name not in allowed:
@@ -310,8 +322,8 @@ def compile_predicates(ir, contract):
         col = ('f' if p['table'] == 'fact' else alias(p['table'])) + '.' + quote(p['column'])
         if p['op'] in ('is_null', 'is_not_null'):
             parts.append(col + (' IS NULL' if p['op'] == 'is_null' else ' IS NOT NULL'))
-        elif p['op'] in ('eq', 'neq'):
-            parts.append(col + (' = ?' if p['op'] == 'eq' else ' <> ?')); params.extend(p['values'])
+        elif p['op'] in ('eq', 'neq', *RANGE_OPS):
+            parts.append(f"{col} {RANGE_SQL.get(p['op'], '=' if p['op'] == 'eq' else '<>')} ?"); params.extend(p['values'])
         else:
             # SQL semantics, matched by includes(): a NULL value satisfies neither IN nor NOT IN.
             parts.append(col + (' IN (' if p['op'] == 'in' else ' NOT IN (') + ','.join('?' for _ in p['values']) + ')')
@@ -335,6 +347,8 @@ def includes(ir, matched, fact_values, dimension_values):
             accepted = value is not None
         elif p['op'] in ('neq', 'not_in'):
             accepted = value is not None and value not in p['values']
+        elif p['op'] in RANGE_OPS:
+            accepted = value is not None and compare_text(value, p['op'], p['values'][0])
         else:
             accepted = value is not None and value in p['values']
         if not accepted:
@@ -828,6 +842,8 @@ def predicate_states(ir, row, contract):
             state = 'unknown'
         elif op in ('neq', 'not_in'):
             state = 'true' if value not in predicate['values'] else 'false'
+        elif op in RANGE_OPS:
+            state = 'true' if compare_text(value, op, predicate['values'][0]) else 'false'
         else:
             state = 'true' if value in predicate['values'] else 'false'
         items.append({'table': role, 'field': tables[role] + '.' + column, 'column': column, 'op': op,
