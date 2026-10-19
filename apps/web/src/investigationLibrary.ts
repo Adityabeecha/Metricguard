@@ -110,7 +110,44 @@ export function filterLibraryItems(items: LibraryItem[], f: { query: string; kin
     if (f.kind !== 'all' && item.kind !== f.kind) return false;
     if (f.status !== 'all' && item.status !== f.status) return false;
     if (!q) return true;
-    return [item.title, item.datasetName, item.currentLabel, item.proposedLabel, ...item.metricNames]
+    return [caseNumber(item.id), item.title, item.datasetName, item.currentLabel, item.proposedLabel, ...item.metricNames]
       .some(text => text.toLowerCase().includes(q));
   });
+}
+
+/** A short, stable case number for an investigation, draft or run: MG-3F2A. */
+export function caseNumber(id: string): string {
+  return `MG-${id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 4).toUpperCase()}`;
+}
+
+/** The stamp a case carries in lists. */
+export const STAMP: Record<LibraryStatus, { label: string; tone: 'sealed' | 'draft' | 'running' | 'failed' }> = {
+  saved: { label: 'Sealed', tone: 'sealed' },
+  draft: { label: 'Draft', tone: 'draft' },
+  running: { label: 'Running', tone: 'running' },
+  refused: { label: 'Failed', tone: 'failed' },
+};
+
+type RunLike = { id: string; created_at: string; purpose?: string; snapshot_id: string; baseline_version_id: string; target_version_id: string;
+  result?: { baseline_value?: string | null; target_value?: string | null; delta_target_minus_baseline?: string | null } | null };
+
+/**
+ * Comparisons with a difference nobody has explained yet: newest first, one per
+ * (current, proposed, dataset) pair, excluding runs already saved in a case and replays.
+ */
+export function unexplainedRuns<R extends RunLike>(runs: R[], investigations: Array<{ run_id: string; baseline_version_id?: string; target_version_id?: string; snapshot_id?: string }>): R[] {
+  const savedRunIds = new Set(investigations.map(i => i.run_id));
+  const savedPairs = new Set(investigations.map(i => `${i.baseline_version_id}|${i.target_version_id}|${i.snapshot_id}`));
+  const seen = new Set<string>();
+  return [...runs]
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+    .filter(r => {
+      const res = r.result;
+      if (!res || savedRunIds.has(r.id) || /replay/.test(r.purpose || '')) return false;
+      const pair = `${r.baseline_version_id}|${r.target_version_id}|${r.snapshot_id}`;
+      if (savedPairs.has(pair) || seen.has(pair)) return false;
+      seen.add(pair);
+      const defined = res.baseline_value != null && res.target_value != null && res.delta_target_minus_baseline != null;
+      return !defined || /[1-9]/.test(res.delta_target_minus_baseline || '');
+    });
 }

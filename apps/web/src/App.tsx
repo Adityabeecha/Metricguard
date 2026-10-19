@@ -3,10 +3,9 @@ import {
   Database,
   FileCode2,
   GitCompareArrows,
-  Layers3,
-  LayoutDashboard,
+  FilePlus2,
+  FolderOpen,
   Menu,
-  PlayCircle,
   Settings,
   X,
 } from 'lucide-react';
@@ -14,7 +13,8 @@ import { api, ApiError, hasApiCredential, type Bootstrap, type Run } from './api
 import { GateScreen, restoreSession, WorkspaceChooser } from './AuthScreens';
 import { chooseWorkspaceAfterConnect, classifyLoadError, readReloadEnded, type GateState } from './authState';
 import { ConnectionControl, describeAuthError, useIdentityEpoch } from './identity';
-import { Dashboard } from './Dashboard';
+import { ThemeSwitch } from './ThemeSwitch';
+import { Logo } from './Logo';
 import { ErrorBoundary } from './ErrorBoundary';
 import {
   buildRouteUrl,
@@ -33,12 +33,11 @@ import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 
 
 const NAV_ITEMS: Array<{ id: Page; label: string; icon: React.ReactNode }> = [
-  { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={17} /> },
-  { id: 'start', label: 'Start a comparison', icon: <PlayCircle size={17} /> },
+  { id: 'investigations', label: 'Cases', icon: <FolderOpen size={17} /> },
+  { id: 'start', label: 'New comparison', icon: <FilePlus2 size={17} /> },
+  { id: 'data', label: 'Datasets', icon: <Database size={17} /> },
   { id: 'metrics', label: 'Metrics', icon: <FileCode2 size={17} /> },
-  { id: 'data', label: 'Data Sources', icon: <Database size={17} /> },
   { id: 'changes', label: 'Changes', icon: <GitCompareArrows size={17} /> },
-  { id: 'investigations', label: 'Investigations', icon: <Layers3 size={17} /> },
 ];
 
 export function App() {
@@ -207,14 +206,21 @@ export function App() {
     navigate({ workspaceId: newWorkspaceId, page: 'dashboard' });
   };
 
+  // The old Dashboard and Investigations pages are both Cases now; their links keep working.
+  const navPage = route.page === 'dashboard' ? 'investigations' : route.page;
   const activeNavLabel =
-    NAV_ITEMS.find((item) => item.id === route.page)?.label ||
-    (route.page === 'settings' ? 'Settings' : 'Dashboard');
+    NAV_ITEMS.find((item) => item.id === navPage)?.label ||
+    (route.page === 'settings' ? 'Settings' : 'Cases');
+  const navCounts: Partial<Record<Page, number>> = data ? {
+    investigations: (data.investigations || []).length,
+    data: (data.snapshots || []).length,
+    metrics: (data.metrics || []).length,
+  } : {};
 
   const runnerReady = data ? (data.mode === 'demo' ? true : Boolean(data.runner_available)) : true;
   // Investigations: no id → unified library; saved id → report; 'new' or edit=1 → guided flow.
   const invId = route.query.investigationId;
-  const showLibrary = route.page === 'investigations' && !invId;
+  const showLibrary = (route.page === 'investigations' && !invId) || route.page === 'dashboard';
   const showReport = route.page === 'investigations' && !!invId && invId !== 'new' && route.query.edit !== '1';
   const showEditor = route.page === 'investigations' && !!invId && !showReport;
   const openRun = (run: Run) => navigate({ page: 'investigations', query: { investigationId: run.id } });
@@ -244,8 +250,8 @@ export function App() {
     return (
       <div className="signed-out-shell">
         <header className="signed-out-brand">
-          <div className="brand-mark"><Layers3 size={18} /></div>
-          <strong>metricguard</strong>
+          <Logo size={30} />
+          <strong>MetricGuard</strong>
         </header>
         <main id="main-content">
           <GateScreen state={gate} workspaceId={route.workspaceId} onRetry={() => void refresh()} onChooseWorkspace={() => setChooserOpen(true)} />
@@ -262,12 +268,9 @@ export function App() {
       {/* Sidebar matching Final v3 */}
       <aside className={`sidebar ${mobileMenuOpen ? 'open' : ''}`}>
         <div className="brand">
-          <div className="brand-mark">
-            <Layers3 size={18} />
-          </div>
+          <Logo size={30} />
           <div>
-            <strong>metricguard</strong>
-            <small>RECONCILIATION STUDIO</small>
+            <strong>MetricGuard</strong>
           </div>
           <button
             type="button"
@@ -291,7 +294,7 @@ export function App() {
         <div className="nav-label">NAVIGATION</div>
         <nav aria-label="Main navigation">
           {NAV_ITEMS.map((item) => {
-            const isActive = route.page === item.id;
+            const isActive = navPage === item.id;
             return (
               <button
                 type="button"
@@ -301,7 +304,7 @@ export function App() {
               >
                 {item.icon}
                 <span>{item.label}</span>
-                {isActive && <span className="nav-dot" />}
+                {navCounts[item.id] != null && <span className="nav-count">{navCounts[item.id]}</span>}
               </button>
             );
           })}
@@ -318,10 +321,9 @@ export function App() {
             <span>Settings</span>
           </button>
 
-          {/* System status pill in BLUE (strictly no green) */}
-          <div className={`status-indicator ${runnerReady ? 'ready' : 'warning'}`}>
+          <div className={`status-indicator ${runnerReady ? 'ready' : 'warning'}`} role="status">
             <span className="status-dot" />
-            <span>{runnerReady ? 'System ready' : 'Processing unavailable'}</span>
+            <span>{runnerReady ? 'Engine ready' : 'Comparison engine not running'}</span>
           </div>
         </div>
       </aside>
@@ -344,11 +346,8 @@ export function App() {
           </div>
 
           <div className="topbar-right">
+            <ThemeSwitch compact />
             <ConnectionControl workspaceId={route.workspaceId} />
-            <span className={`topbar-status ${runnerReady ? 'ready' : 'warning'}`}>
-              <span className="status-dot" />
-              {runnerReady ? 'System ready' : 'Processing unavailable'}
-            </span>
             <span className="avatar">MG</span>
           </div>
         </header>
@@ -376,17 +375,6 @@ export function App() {
             />
           ) : (
             <>
-              {route.page === 'dashboard' && (
-                <Dashboard
-                  key={route.workspaceId}
-                  data={data}
-                  refresh={refresh}
-                  onNavigate={(page, tab, query) => navigate({ page, tab, query })}
-                  onOpenRun={openRun}
-                  onSelectCandidate={(c) => startWith({ left: c.left_version_id, right: c.right_version_id })}
-                />
-              )}
-
               {route.page === 'metrics' && (
                 <MetricsView
                   key={route.workspaceId}
@@ -442,6 +430,7 @@ export function App() {
                   data={data}
                   workspaceId={route.workspaceId}
                   onStart={() => navigate({ page: 'start' })}
+                  onOpenRun={openRun}
                   onOpen={(item) => item.source === 'saved'
                     ? navigate({ page: 'investigations', query: { investigationId: item.id } })
                     : startWith({ from: item.id })}

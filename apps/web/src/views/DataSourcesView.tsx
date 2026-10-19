@@ -589,18 +589,15 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
       {/* Page Heading */}
       <div className="page-heading">
         <div>
-          <div className="eyebrow">
-            IMMUTABLE EVIDENCE <span className="eyebrow-line" />
-          </div>
-          <h1>Data Sources</h1>
-          <p>Validated dataset extracts, snapshot contracts, schema inspections, and import activity.</p>
+          <h1>Datasets</h1>
+          <p>Frozen, validated data that comparisons read.</p>
         </div>
         <div className="heading-actions">
-          <button className="button secondary" onClick={() => void refresh()} title="Refresh data sources">
+          <button className="button secondary" onClick={() => void refresh()} title="Refresh datasets">
             <RefreshCw size={15} /> Refresh
           </button>
           <button className="button primary" onClick={openAddModal}>
-            <Plus size={16} /> Add data source
+            <Plus size={16} /> Add dataset
           </button>
         </div>
       </div>
@@ -620,14 +617,14 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
           <div className="empty-badge-icon">
             <Database size={26} />
           </div>
-          <h2>No data sources in this workspace</h2>
+          <h2>No datasets yet</h2>
           <p>
             MetricGuard compares SQL metric logic against immutable evidence snapshots.
             Add a CSV or Parquet extract to validate types, establish your comparison baseline,
             and begin reconciliation.
           </p>
           <button className="button primary" onClick={openAddModal}>
-            <Plus size={16} /> Add data source <ArrowRight size={16} />
+            <Plus size={16} /> Add dataset <ArrowRight size={16} />
           </button>
         </section>
       ) : (
@@ -704,7 +701,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
 
                     <div className="source-card-meta">
                       <span className="meta-stat">
-                        <strong>{snap.row_count?.toLocaleString() || '0'}</strong> rows
+                        <strong>{snap.row_count?.toLocaleString('en-US') || '0'}</strong> rows
                       </span>
                       <span className="meta-sep">·</span>
                       <span className="meta-stat">
@@ -732,7 +729,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
 
               {filteredSnapshots.length === 0 && (
                 <div className="empty-filter-state">
-                  <p>No data sources match the current filter.</p>
+                  <p>No datasets match this filter.</p>
                 </div>
               )}
             </div>
@@ -750,7 +747,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                   </div>
                   <h2>{activeSnapshot.name}</h2>
                   <p className="detail-subtitle">
-                    Immutable snapshot · {activeSnapshot.row_count?.toLocaleString()} verified rows
+                    Immutable snapshot · {activeSnapshot.row_count?.toLocaleString('en-US')} verified rows
                   </p>
                 </div>
                 <div className="detail-status-pill">
@@ -763,7 +760,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
               <div className="summary-stat-grid">
                 <div className="stat-box">
                   <span className="stat-label">TOTAL ROWS</span>
-                  <strong className="stat-num">{activeSnapshot.row_count?.toLocaleString()}</strong>
+                  <strong className="stat-num">{activeSnapshot.row_count?.toLocaleString('en-US')}</strong>
                 </div>
                 <div className="stat-box">
                   <span className="stat-label">{activeSummary?.kind === 'relational' ? 'KEYS (FACT · DIMENSION)' : 'ROW KEY'}</span>
@@ -1119,8 +1116,8 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                     <div
                       className="inferred-schema-card"
                       style={{
-                        background: '#FFFFFF',
-                        border: '1px solid #E2E8F0',
+                        background: 'var(--panel)',
+                        border: '1px solid var(--line)',
                         borderRadius: 8,
                         padding: '14px 16px',
                         marginBottom: 20,
@@ -1139,19 +1136,19 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                             style={{
                               fontSize: 13,
                               fontWeight: 700,
-                              color: '#0F172A',
+                              color: 'var(--ink)',
                               display: 'flex',
                               alignItems: 'center',
                               gap: 8,
                             }}
                           >
-                            <Database size={15} style={{ color: '#245BFF' }} />
+                            <Database size={15} style={{ color: 'var(--link)' }} />
                             <span>Inferred Logical Schema</span>
                             <span className="badge neutral" style={{ fontSize: 12, fontWeight: 500 }}>
                               {filePreview.headers.length} columns detected · {filePreview.totalRowsSampled} {selectedFile?.name.toLowerCase().endsWith('.parquet') ? 'sample rows' : (selectedFile?.size || 0) > 25 * 1024 * 1024 ? 'rows checked from the beginning of the file; all rows are validated during import' : 'rows checked'}
                             </span>
                           </div>
-                          <p style={{ margin: '3px 0 0', fontSize: 12, color: '#64748B' }}>
+                          <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--muted)' }}>
                             Dates require YYYY-MM-DD; booleans require true/false. Timestamps require YYYY-MM-DDTHH:mm:ss with up to 6 fractional digits, without a timezone. Overrides are validated at import.
                           </p>
                         </div>
@@ -1160,7 +1157,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                       <div className="table-scroll" style={{ maxHeight: 220, overflowY: 'auto' }}>
                         <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                           <thead>
-                            <tr style={{ borderBottom: '1px solid #CBD5E1', textAlign: 'left', color: '#475569' }}>
+                            <tr style={{ borderBottom: '1px solid var(--line-strong)', textAlign: 'left', color: 'var(--text-2)' }}>
                               <th style={{ padding: '6px 8px', fontWeight: 600 }}>Column</th>
                               <th style={{ padding: '6px 8px', fontWeight: 600 }}>Logical Type</th>
                               <th style={{ padding: '6px 8px', fontWeight: 600 }}>Contract Role</th>
@@ -1181,13 +1178,13 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                               const sampleVal = filePreview.sample_rows.find((r) => r[col] !== null)?.[col];
 
                               let roleLabel = 'Unregistered (Excluded)';
-                              let roleStyle: React.CSSProperties = { color: '#94A3B8', fontSize: 12 };
+                              let roleStyle: React.CSSProperties = { color: 'var(--faint)', fontSize: 12 };
                               if (isKey) {
                                 roleLabel = 'Row Key (Unique)';
                                 roleStyle = {
-                                  background: '#EFF6FF',
-                                  color: '#245BFF',
-                                  border: '1px solid #BFDBFE',
+                                  background: 'var(--tint)',
+                                  color: 'var(--link)',
+                                  border: '1px solid var(--line-strong)',
                                   padding: '2px 7px',
                                   borderRadius: 4,
                                   fontWeight: 600,
@@ -1197,9 +1194,9 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                               } else if (isMinuend) {
                                 roleLabel = `Minuend Decimal (${confirmedUnit || 'units'})`;
                                 roleStyle = {
-                                  background: '#EFF6FF',
-                                  color: '#245BFF',
-                                  border: '1px solid #BFDBFE',
+                                  background: 'var(--tint)',
+                                  color: 'var(--link)',
+                                  border: '1px solid var(--line-strong)',
                                   padding: '2px 7px',
                                   borderRadius: 4,
                                   fontWeight: 600,
@@ -1209,9 +1206,9 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                               } else if (isSubtrahend) {
                                 roleLabel = `Subtrahend Decimal (${confirmedUnit || 'units'})`;
                                 roleStyle = {
-                                  background: '#EFF6FF',
-                                  color: '#245BFF',
-                                  border: '1px solid #BFDBFE',
+                                  background: 'var(--tint)',
+                                  color: 'var(--link)',
+                                  border: '1px solid var(--line-strong)',
                                   padding: '2px 7px',
                                   borderRadius: 4,
                                   fontWeight: 600,
@@ -1221,9 +1218,9 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                               } else if (isMeasure) {
                                 roleLabel = `Sum Measure (${confirmedUnit || 'units'})`;
                                 roleStyle = {
-                                  background: '#EFF6FF',
-                                  color: '#245BFF',
-                                  border: '1px solid #BFDBFE',
+                                  background: 'var(--tint)',
+                                  color: 'var(--link)',
+                                  border: '1px solid var(--line-strong)',
                                   padding: '2px 7px',
                                   borderRadius: 4,
                                   fontWeight: 600,
@@ -1233,9 +1230,9 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                               } else if (isCategory) {
                                 roleLabel = 'Categorical Dimension';
                                 roleStyle = {
-                                  background: '#F1F5F9',
-                                  color: '#334155',
-                                  border: '1px solid #CBD5E1',
+                                  background: 'var(--panel-2)',
+                                  color: 'var(--text-2)',
+                                  border: '1px solid var(--line-strong)',
                                   padding: '2px 7px',
                                   borderRadius: 4,
                                   fontWeight: 500,
@@ -1245,13 +1242,13 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                               }
 
                               return (
-                                <tr key={col} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                                <tr key={col} style={{ borderBottom: '1px solid var(--line)' }}>
                                   <td
                                     style={{
                                       padding: '6px 8px',
-                                      fontFamily: 'monospace',
+                                      fontFamily: 'var(--font-mono)',
                                       fontWeight: 600,
-                                      color: '#0F172A',
+                                      color: 'var(--ink)',
                                     }}
                                   >
                                     {col}
@@ -1269,10 +1266,10 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                                           fontSize: 12,
                                           padding: '2px 6px',
                                           borderRadius: 4,
-                                          border: '1px solid #CBD5E1',
-                                          background: '#FFFFFF',
-                                          color: '#1E293B',
-                                          fontFamily: 'monospace',
+                                          border: '1px solid var(--line-strong)',
+                                          background: 'var(--panel)',
+                                          color: 'var(--ink)',
+                                          fontFamily: 'var(--font-mono)',
                                         }}
                                       >
                                         <option value="string">Text (VARCHAR)</option>
@@ -1286,16 +1283,16 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                                           style={{
                                             fontSize: 12,
                                             padding: '2px 6px',
-                                            background: '#F8FAFC',
-                                            border: '1px solid #E2E8F0',
+                                            background: 'var(--panel-2)',
+                                            border: '1px solid var(--line)',
                                             borderRadius: 4,
-                                            color: '#1E293B',
-                                            fontFamily: 'monospace',
+                                            color: 'var(--ink)',
+                                            fontFamily: 'var(--font-mono)',
                                           }}
                                         >
                                           {declType}
                                         </code>
-                                        <span style={{ fontSize: 12, color: '#64748B', marginLeft: 6 }}>
+                                        <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 6 }}>
                                           ({obsType})
                                         </span>
                                       </>
@@ -1307,7 +1304,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                                   <td
                                     style={{
                                       padding: '6px 8px',
-                                      color: (nullCount ?? 0) > 0 ? '#D97706' : '#64748B',
+                                      color: (nullCount ?? 0) > 0 ? 'var(--warn)' : 'var(--muted)',
                                       fontSize: 12,
                                     }}
                                   >
@@ -1316,15 +1313,15 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                                   <td
                                     style={{
                                       padding: '6px 8px',
-                                      fontFamily: 'monospace',
-                                      color: '#475569',
+                                      fontFamily: 'var(--font-mono)',
+                                      color: 'var(--text-2)',
                                       fontSize: 12,
                                     }}
                                   >
                                     {sampleVal !== undefined ? (
                                       String(sampleVal)
                                     ) : (
-                                      <span style={{ color: '#94A3B8' }}>NULL</span>
+                                      <span style={{ color: 'var(--faint)' }}>NULL</span>
                                     )}
                                   </td>
                                 </tr>
@@ -1428,7 +1425,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                         />
                         {!confirmedUnit && (
                           <div style={{ marginTop: '6px', display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-                            <span style={{ fontSize: '12px', color: '#667085' }}>Common units:</span>
+                            <span style={{ fontSize: '12px', color: 'var(--muted)' }}>Common units:</span>
                             {['USD', 'EUR', 'INR', 'GBP', 'count'].map((u) => (
                               <button
                                 key={u}
@@ -1446,7 +1443,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                           </div>
                         )}
                         {!confirmedUnit && (
-                          <small className="field-hint" style={{ color: '#D97706' }}>
+                          <small className="field-hint" style={{ color: 'var(--warn)' }}>
                             Required. Example: INR, USD, points or count. MetricGuard never converts between units.
                           </small>
                         )}
@@ -1526,8 +1523,8 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                     {enableSubtraction && (
                       <div
                         style={{
-                          background: '#F8FAFC',
-                          border: '1px solid #E2E8F0',
+                          background: 'var(--panel-2)',
+                          border: '1px solid var(--line)',
                           borderRadius: 6,
                           padding: 12,
                           marginTop: 8,
@@ -1571,7 +1568,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                             </select>
                           </label>
                         </div>
-                        <div style={{ marginTop: 8, fontSize: 12, color: '#334155' }}>
+                        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)' }}>
                           <strong>Expression:</strong>{' '}
                           <code>
                             {minuendColumn || '<operand A>'} - {subtrahendColumn || '<operand B>'} ({confirmedUnit || 'units'})
@@ -1703,12 +1700,12 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                   </div>
                   <h3>Snapshot ready</h3>
                   <p>
-                    Validated <strong>{(createdSnapshot?.row_count ?? filePreview?.totalRowsSampled ?? 0).toLocaleString()} rows</strong> and created
+                    Validated <strong>{(createdSnapshot?.row_count ?? filePreview?.totalRowsSampled ?? 0).toLocaleString('en-US')} rows</strong> and created
                     an immutable analytical snapshot.
                   </p>
                   <div className="snapshot-summary-pill-row">
                     <span><strong>Snapshot:</strong> {createdSnapshot?.name || snapshotName || selectedFile?.name}</span>
-                    <span><strong>Rows:</strong> {(createdSnapshot?.row_count ?? filePreview?.totalRowsSampled ?? 0).toLocaleString()}</span>
+                    <span><strong>Rows:</strong> {(createdSnapshot?.row_count ?? filePreview?.totalRowsSampled ?? 0).toLocaleString('en-US')}</span>
                     <span><strong>Key:</strong> {confirmedKey || 'Not declared'}</span>
                     <span><strong>Amount:</strong> {enableSubtraction ? `${minuendColumn} − ${subtrahendColumn}` : enableMulti ? [confirmedMeasure, ...multiExtras].join(", ") : confirmedMeasure || "Not declared"}</span>
                     <span><strong>Unit:</strong> {confirmedUnit || 'Not declared'}</span>

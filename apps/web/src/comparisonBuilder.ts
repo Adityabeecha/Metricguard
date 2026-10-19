@@ -13,7 +13,7 @@ export function aggregateRowLimitReason(rowCount: number, contractVersion?: numb
 
 /** Lookup tables of a relational contract, the same shape for contract v1 (one) and v2 (several). */
 function lookupsOf(contract: RelationalContract): RelationalLookup[] {
-  if (contract.version === 2) return contract.dimensions || [];
+  if (contract.version !== 1) return contract.dimensions || [];
   return [{ role: 'dimension', table: contract.dimension.table, key: contract.dimension.key, grain: contract.dimension.grain,
             categories: contract.dimension.categories, fact_foreign_key: contract.relationship.fact_foreign_key }];
 }
@@ -21,7 +21,7 @@ function lookupsOf(contract: RelationalContract): RelationalLookup[] {
 /** Relational datasets with several lookup tables (contract v2): each lookup is joined INNER, LEFT, or not at all. */
 export function starLookups(contract: FlatContract | RelationalContract): RelationalLookup[] {
   const relational = contract as RelationalContract;
-  return relational.mode === 'relational_snapshot' && relational.version === 2 ? lookupsOf(relational) : [];
+  return relational.mode === 'relational_snapshot' && relational.version !== 1 ? lookupsOf(relational) : [];
 }
 
 export type LookupJoin = 'left' | 'inner' | 'none';
@@ -170,7 +170,7 @@ export function flatFilterColumns(contract: FlatContract): FilterColumn[] {
 }
 
 export function relationalFilterColumns(contract: RelationalContract): FilterColumn[] {
-  const star = contract.version === 2;
+  const star = contract.version !== 1;
   return [
     ...contract.fact.categories.map(c => ({ id: `fact.${c}`, label: `${contract.fact.table}.${c}`, column: c, side: 'fact' as const, type: 'string' as const })),
     ...lookupsOf(contract).flatMap(d => d.categories.map(c => ({
@@ -303,7 +303,7 @@ function describeFilter(f: Filter, columns: FilterColumn[]): string {
 
 export function buildRelationalSql(contract: RelationalContract, form: CalculationForm): string {
   const columns = relationalFilterColumns(contract);
-  if (contract.version === 2) {
+  if (contract.version !== 1) {
     const joins = lookupJoins(contract, form);
     const lookups = lookupsOf(contract);
     const alias = (role: string) => `l${lookups.findIndex(d => d.role === role) + 1}`;

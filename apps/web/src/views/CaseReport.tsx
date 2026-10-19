@@ -2,7 +2,7 @@ import { resultUnit } from '../resultSummary';
 import { useEffect, useState } from 'react';
 import { ArrowLeft, Download, Pencil, RefreshCw } from 'lucide-react';
 import { api, ApiError, versionName, type Bootstrap, type InvestigationDetail, type Run } from '../api';
-import { KIND_LABEL } from '../investigationLibrary';
+import { caseNumber, KIND_LABEL } from '../investigationLibrary';
 import { ResultReport } from './ResultReport';
 
 const pending = (state?: string) => state === 'queued' || state === 'running' || state === 'pending';
@@ -60,7 +60,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
           <span>This investigation could not be opened: {problem}</span>
           <button className="button secondary small" onClick={() => setAttempt(a => a + 1)}>Try again</button>
         </div>
-        <button className="button secondary" onClick={onBack}><ArrowLeft size={15} /> All investigations</button>
+        <button className="button secondary" onClick={onBack}><ArrowLeft size={15} /> Cases</button>
       </div>
     );
   }
@@ -96,30 +96,28 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
     <div className="view-container guided-page">
       <div className="page-heading">
         <div>
-          <div className="eyebrow">SAVED INVESTIGATION · {KIND_LABEL[kind].toUpperCase()} <span className="eyebrow-line" /></div>
           <h1>{detail.title}</h1>
-          <p>Recorded by {detail.actor_label} on {new Date(detail.created_at).toLocaleString()} · dataset “{detail.snapshot.name}”{unit && ` · ${unit}`}</p>
+          <p><span className="case-no">{caseNumber(detail.id)}</span> · {KIND_LABEL[kind]} · recorded by {detail.actor_label}, {new Date(detail.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}{unit && ` · ${unit}`}</p>
         </div>
         <div className="heading-actions">
-          <button className="button secondary" onClick={onBack}><ArrowLeft size={15} /> All investigations</button>
+          <button className="button secondary" onClick={onBack}><ArrowLeft size={15} /> Cases</button>
           <button className="button secondary" onClick={() => onEdit(relational)}><Pencil size={15} /> Edit comparison</button>
         </div>
       </div>
 
-      <section className="guided-card" aria-labelledby="conclusion-title">
-        <h2 id="conclusion-title">Conclusion</h2>
-        <p className="lead" style={{ whiteSpace: 'pre-wrap' }}>{detail.decision}</p>
-      </section>
-
-      <section className="guided-card" aria-labelledby="result-title">
-        <h2 id="result-title">Result</h2>
+      <section aria-label="Result">
         {detail.run.result ? (
           <ResultReport run={detail.run} unit={declaredUnit} relational={relational}
             baselineLabel={versionName(defs, detail.baseline_version_id)} targetLabel={versionName(defs, detail.target_version_id)}
             baselineSql={detail.baseline_version.raw_sql} targetSql={detail.target_version.raw_sql}
-            snapshot={detail.snapshot} versions={defs.flatMap(d => d.versions)} />
+            snapshot={detail.snapshot} versions={defs.flatMap(d => d.versions)}
+            caseId={detail.id} sealStatus={pending(replay?.state) || replaying ? 'verifying' : replay?.result ? (same ? 'intact' : 'broken') : null}
+            note={<div className="case-conclusion"><h2>Conclusion</h2><p style={{ whiteSpace: 'pre-wrap' }}>{detail.decision}</p></div>} />
         ) : (
+          <>
+          <div className="case-conclusion"><h2>Conclusion</h2><p style={{ whiteSpace: 'pre-wrap' }}>{detail.decision}</p></div>
           <p className="disabled-reason">The saved run has no result ({detail.run.state}{detail.run.error?.message ? `: ${detail.run.error.message}` : ''}).</p>
+          </>
         )}
         <div className="report-actions">
           <button className="button secondary small" onClick={() => void api.download(`/comparisons/${encodeURIComponent(detail.run.id)}/export?format=html`, `metricguard-${detail.run.id}.html`).catch(e => setReplayProblem(e instanceof Error ? e.message : String(e)))}>

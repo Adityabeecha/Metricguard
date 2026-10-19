@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>MetricGuard · Graphite Console</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;font-family:Geist,sans-serif;background:#16181C;color:#E6E8EB;display:grid;grid-template-columns:56px 340px 1fr}
+.icons{border-right:1px solid #2A2E35;display:flex;flex-direction:column;align-items:center;padding-top:16px;gap:18px}
+.icons span{width:28px;height:28px;border-radius:6px;background:#22262D}.icons .on{background:#4FD1C5}
+.side{border-right:1px solid #2A2E35;padding:16px;font-size:13px}
+.h{font:500 11px 'Geist Mono';letter-spacing:.1em;color:#8A9099;text-transform:uppercase;margin:14px 0 8px}
+.box{background:#1C1F24;border:1px solid #2A2E35;border-radius:6px;padding:10px 12px;margin-bottom:8px}
+.box code{font:12px 'Geist Mono';color:#4FD1C5;display:block;margin-top:6px;white-space:pre-wrap}
+main{padding:16px 24px}
+.bar{display:flex;align-items:center;gap:10px;border-bottom:1px solid #2A2E35;padding-bottom:12px}
+.bar h1{font-size:16px;font-weight:600}.bar .id{font:12px 'Geist Mono';color:#8A9099}
+.bar button{margin-left:auto;font:500 13px Geist;background:#4FD1C5;color:#0E1114;border:0;border-radius:5px;padding:7px 12px}
+.bar .g{margin-left:0;background:#22262D;color:#E6E8EB}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid #2A2E35;border-radius:6px;margin:16px 0}
+.kpis div{padding:14px 16px;border-right:1px solid #2A2E35}.kpis div:last-child{border:0}
+.kpis small{font:11px 'Geist Mono';color:#8A9099;text-transform:uppercase;letter-spacing:.08em}
+.kpis b{display:block;font:500 28px 'Geist Mono';margin-top:6px}.kpis .d b{color:#F6AD55}
+.msg{font-size:15px;color:#C5C9CE;margin-bottom:14px}
+table{width:100%;border-collapse:collapse;font-size:13px;border:1px solid #2A2E35}
+th{font:500 11px 'Geist Mono';color:#8A9099;text-align:left;padding:9px 12px;border-bottom:1px solid #2A2E35;background:#1C1F24}
+td{padding:9px 12px;border-bottom:1px solid #22262D}td.n{font-family:'Geist Mono';text-align:right}td.o{color:#F6AD55}
+.ok{font:12px 'Geist Mono';color:#4FD1C5;margin-top:12px}
+</style></head><body>
+<nav class="icons"><span class="on"></span><span></span><span></span><span></span><span></span></nav>
+<aside class="side">
+  <div class="h">Dataset</div><div class="box">Demo sales orders · 8 rows<br><span style="color:#8A9099">sales_amount · INR</span></div>
+  <div class="h">Current</div><div class="box">All orders<code>SELECT SUM(sales_amount)
+FROM snapshot</code></div>
+  <div class="h">Proposed</div><div class="box">Completed orders<code>SELECT SUM(sales_amount)
+FROM snapshot
+WHERE status = 'completed'</code></div>
+  <div class="h">Runs</div><div class="box">MG-0142 · succeeded · 0.4 s</div>
+</aside>
+<main>
+  <div class="bar"><h1>Completed orders only</h1><span class="id">MG-0142</span><button class="g">Replay</button><button>Save conclusion</button></div>
+  <div class="kpis"><div><small>Current</small><b>750.75</b></div><div><small>Proposed</small><b>410.75</b></div><div class="d"><small>Change INR</small><b>−340.00</b></div><div><small>Unexplained</small><b>0.00</b></div></div>
+  <p class="msg">3 records account for the whole difference.</p>
+  <table><tr><th>RECORD</th><th>REASON</th><th style="text-align:right">CURRENT</th><th style="text-align:right">PROPOSED</th><th style="text-align:right">CHANGE</th></tr>
+  <tr><td>ORD-1004</td><td>status = cancelled · left filter</td><td class="n">120.00</td><td class="n">0.00</td><td class="n o">−120.00</td></tr>
+  <tr><td>ORD-1006</td><td>status = pending · left filter</td><td class="n">180.00</td><td class="n">0.00</td><td class="n o">−180.00</td></tr>
+  <tr><td>ORD-1008</td><td>status = refunded · left filter</td><td class="n">40.00</td><td class="n">0.00</td><td class="n o">−40.00</td></tr></table>
+  <div class="ok">✓ evidence verified · replay identical · sha256 2b7d…08aa</div>
+</main>
+</body></html>

@@ -34,7 +34,7 @@ export function PrepareTwoTable({ snapshot, contract, onPrepared }: Props) {
   const [done, setDone] = useState<Prepared | null>(null);
 
   if (contract.version === 1) {
-    return <p className="disabled-reason">This dataset uses the original one-lookup format, which cannot be prepared. Upload it again as two connected tables to compare more than {DIRECT_TWO_TABLE_LIMIT.toLocaleString()} facts.</p>;
+    return <p className="disabled-reason">This dataset uses the original one-lookup format, which cannot be prepared. Upload it again as two connected tables to compare more than {DIRECT_TWO_TABLE_LIMIT.toLocaleString('en-US')} facts.</p>;
   }
   const usable = fields.filter(f => f.role === 'fact' || joins[f.role] !== 'skip');
   const selected = chosen.filter(id => usable.some(f => f.id === id));
@@ -61,7 +61,7 @@ export function PrepareTwoTable({ snapshot, contract, onPrepared }: Props) {
   if (done) {
     return (
       <div className="guided-explain" role="status">
-        <b>Ready: “{done.snapshot.name}”</b> ({done.snapshot.row_count.toLocaleString()} rows). Filter on{' '}
+        <b>Ready: “{done.snapshot.name}”</b> ({done.snapshot.row_count.toLocaleString('en-US')} rows). Filter on{' '}
         {Object.entries(done.column_mapping).map(([source, column], i) => (
           <span key={source}>{i ? ', ' : ''}<code>{column}</code>{column !== source.split('.')[1] && <> (from {source})</>}</span>
         ))}. The amount column is <code>amount</code>.

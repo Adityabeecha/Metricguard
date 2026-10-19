@@ -370,9 +370,9 @@ export function ChangesView({
   if (loadingDiff) {
     return (
       <div className="panel" style={{ padding: '60px 20px', textAlign: 'center' }}>
-        <RefreshCw className="spinning" size={28} color="#245BFF" />
+        <RefreshCw className="spinning" size={28} color="var(--link)" />
         <h3 style={{ marginTop: '12px', fontSize: '16px', fontWeight: 700 }}>Loading change analysis</h3>
-        <p style={{ color: '#667085', fontSize: '13px' }}>Retrieving revision diff and evidence metrics…</p>
+        <p style={{ color: 'var(--muted)', fontSize: '13px' }}>Retrieving revision diff and evidence metrics…</p>
       </div>
     );
   }
@@ -381,7 +381,7 @@ export function ChangesView({
     return (
       <div className="panel" style={{ padding: '30px 20px' }}>
         <div className="changes-edge-banner warning-amber" role="alert" style={{ marginBottom: '16px' }}>
-          <AlertTriangle size={18} color="#D97706" />
+          <AlertTriangle size={18} color="var(--warn)" />
           <div>
             <strong>Failed to load change report</strong>
             <div>{diffLoadError}</div>
@@ -439,9 +439,9 @@ export function ChangesView({
               <span>{targetLabel}</span>
             </div>
             <div className="changes-snapshot-pill">
-              <Layers3 size={13} color="#245BFF" />
+              <Layers3 size={13} color="var(--link)" />
               <span>Snapshot: <strong>{snapName}</strong></span>
-              {snap?.row_count && <small style={{ color: '#667085' }}>({snap.row_count.toLocaleString()} rows)</small>}
+              {snap?.row_count && <small style={{ color: 'var(--muted)' }}>({snap.row_count.toLocaleString('en-US')} rows)</small>}
             </div>
           </div>
 
@@ -484,7 +484,7 @@ export function ChangesView({
         {/* Edge banner for CI exit code precedence */}
         {activeDiff.exit_code === 2 && (
           <div className="changes-edge-banner warning-amber" role="alert">
-            <AlertTriangle size={18} color="#D97706" style={{ flexShrink: 0, marginTop: '1px' }} />
+            <AlertTriangle size={18} color="var(--warn)" style={{ flexShrink: 0, marginTop: '1px' }} />
             <div>
               <strong>CI Exit Code 2 (Refusal Precedence)</strong>
               <div>
@@ -498,7 +498,7 @@ export function ChangesView({
         {/* Edge banner when all affected metrics are refused */}
         {allRefused && (
           <div className="changes-edge-banner warning-amber" role="alert">
-            <ShieldAlert size={18} color="#D97706" style={{ flexShrink: 0, marginTop: '1px' }} />
+            <ShieldAlert size={18} color="var(--warn)" style={{ flexShrink: 0, marginTop: '1px' }} />
             <div>
               <strong>All affected metrics were refused deterministic evaluation</strong>
               <div>
@@ -512,7 +512,7 @@ export function ChangesView({
         {/* Edge banner when zero drift across all declared metrics */}
         {!hasMaterial && !hasRefusals && activeDiff.counts.total_declared_metrics_affected > 0 && (
           <div className="changes-edge-banner info-blue" role="status">
-            <CheckCircle2 size={18} color="#245BFF" style={{ flexShrink: 0, marginTop: '1px' }} />
+            <CheckCircle2 size={18} color="var(--link)" style={{ flexShrink: 0, marginTop: '1px' }} />
             <div>
               <strong>Analyzed with verified exact agreement</strong>
               <div>
@@ -527,10 +527,10 @@ export function ChangesView({
         <section style={{ marginBottom: '24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
             <div>
-              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#101828' }}>
+              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: 'var(--ink)' }}>
                 Affected business metrics ({activeDiff.counts.total_declared_metrics_affected})
               </h2>
-              <p style={{ margin: '2px 0 0', fontSize: '13px', color: '#667085' }}>
+              <p style={{ margin: '2px 0 0', fontSize: '13px', color: 'var(--muted)' }}>
                 Evaluated against reference snapshot <strong>{snapName}</strong> holding underlying customer transactions constant.
               </p>
             </div>
@@ -710,7 +710,7 @@ export function ChangesView({
                           : 'This metric has no approved version.'}
                       </span>
                       <div className="impact-box-footer">
-                        <ShieldCheck size={13} color="#245BFF" />
+                        <ShieldCheck size={13} color="var(--link)" />
                         <span>
                           {m.has_approved_baseline
                             ? approvedDelta == null
@@ -743,7 +743,7 @@ export function ChangesView({
                         introduced by this revision relative to baseline
                       </span>
                       <div className="impact-box-footer">
-                        <GitCommit size={13} color="#245BFF" />
+                        <GitCommit size={13} color="var(--link)" />
                         <span>Exact decimal difference evaluated without live DB mutations</span>
                       </div>
                     </div>
@@ -799,10 +799,10 @@ export function ChangesView({
         {activeDiff.coverage && (
           <section className="coverage-section">
             <div>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#101828' }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: 'var(--ink)' }}>
                 Coverage Analysis
               </h3>
-              <p style={{ margin: '2px 0 0', fontSize: '13px', color: '#667085' }}>
+              <p style={{ margin: '2px 0 0', fontSize: '13px', color: 'var(--muted)' }}>
                 How much of this revision did MetricGuard actually analyze against immutable evidence?
               </p>
             </div>
@@ -828,11 +828,11 @@ export function ChangesView({
                     }}
                   />
                 </div>
-                <div style={{ fontSize: '12px', color: '#475467' }}>
+                <div style={{ fontSize: '12px', color: 'var(--text-2)' }}>
                   <strong>{activeDiff.coverage.declared_metrics.analyzable}</strong> of{' '}
                   <strong>{activeDiff.coverage.declared_metrics.total_affected}</strong> affected business metrics analyzable.
                   {activeDiff.coverage.declared_metrics.refused > 0 && (
-                    <span style={{ color: '#D97706', display: 'block', marginTop: '2px' }}>
+                    <span style={{ color: 'var(--warn)', display: 'block', marginTop: '2px' }}>
                       ({activeDiff.coverage.declared_metrics.refused} refused)
                     </span>
                   )}
@@ -859,7 +859,7 @@ export function ChangesView({
                 </div>
                 <div className="coverage-tier-row">
                   <span>Supported executable</span>
-                  <strong style={{ color: '#245BFF' }}>
+                  <strong style={{ color: 'var(--link)' }}>
                     {activeDiff.coverage.structural.supported_executable_resources_count}
                   </strong>
                 </div>
@@ -878,9 +878,9 @@ export function ChangesView({
                     <div className="coverage-tier-row" key={tier}>
                       <span style={{ textTransform: 'capitalize' }}>
                         {tier === 'critical' ? (
-                          <strong style={{ color: '#D92D20' }}>Critical</strong>
+                          <strong style={{ color: 'var(--danger)' }}>Critical</strong>
                         ) : tier === 'important' ? (
-                          <strong style={{ color: '#245BFF' }}>Important</strong>
+                          <strong style={{ color: 'var(--link)' }}>Important</strong>
                         ) : (
                           tier
                         )}
@@ -891,7 +891,7 @@ export function ChangesView({
                             {item.analyzable}/{item.affected} ({item.coverage_pct}%)
                           </strong>
                         ) : (
-                          <span style={{ color: '#98A2B3' }}>0 affected</span>
+                          <span style={{ color: 'var(--faint)' }}>0 affected</span>
                         )}
                       </span>
                     </div>
@@ -939,7 +939,7 @@ export function ChangesView({
           {showResourcesPanel && (
             <div>
               {loadingChangeSet ? (
-                <div style={{ padding: '20px', textAlign: 'center', color: '#667085' }}>
+                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--muted)' }}>
                   Loading changed resource details…
                 </div>
               ) : changeSet && changeSet.resources.length > 0 ? (
@@ -960,7 +960,7 @@ export function ChangesView({
                         <tr key={res.unique_id}>
                           <td>
                             <strong>{res.name}</strong>
-                            <div style={{ fontSize: '12px', color: '#667085' }}>{res.unique_id}</div>
+                            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>{res.unique_id}</div>
                           </td>
                           <td>
                             <span className="badge neutral">{res.change_category}</span>
@@ -971,7 +971,7 @@ export function ChangesView({
                                 {res.metric.display_name}
                               </span>
                             ) : (
-                              <span style={{ color: '#98A2B3', fontSize: '12px' }}>Undeclared</span>
+                              <span style={{ color: 'var(--faint)', fontSize: '12px' }}>Undeclared</span>
                             )}
                           </td>
                           <td>
@@ -979,7 +979,7 @@ export function ChangesView({
                               {res.new_support_state || 'unknown'}
                             </span>
                           </td>
-                          <td style={{ fontSize: '12px', color: '#667085' }}>
+                          <td style={{ fontSize: '12px', color: 'var(--muted)' }}>
                             {res.new_diagnostics?.[0] || res.summary_label || 'None'}
                           </td>
                         </tr>
@@ -988,7 +988,7 @@ export function ChangesView({
                   </tbody>
                 </table>
               ) : (
-                <div style={{ padding: '20px', textAlign: 'center', color: '#667085' }}>
+                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--muted)' }}>
                   {activeDiff.undeclared_resources?.length
                     ? `${activeDiff.undeclared_resources.length} undeclared resources changed.`
                     : 'All changed resources map to analyzed business metrics.'}
@@ -1034,8 +1034,8 @@ export function ChangesView({
               <div className="modal-body">
                 {loadingMarkdown ? (
                   <div style={{ padding: '30px', textAlign: 'center' }}>
-                    <RefreshCw className="spinning" size={24} color="#245BFF" />
-                    <p style={{ marginTop: '8px', color: '#667085', fontSize: '13px' }}>Generating Markdown report…</p>
+                    <RefreshCw className="spinning" size={24} color="var(--link)" />
+                    <p style={{ marginTop: '8px', color: 'var(--muted)', fontSize: '13px' }}>Generating Markdown report…</p>
                   </div>
                 ) : (
                   <pre className="markdown-preview-box" style={{ margin: 0 }}>{markdownContent}</pre>
@@ -1074,13 +1074,8 @@ export function ChangesView({
       {/* Page Heading (04.1) */}
       <div className="page-heading">
         <div>
-          <div className="eyebrow">
-            CHANGE RECONCILIATION <span className="eyebrow-line" />
-          </div>
           <h1>Changes</h1>
-          <p>
-            Before releasing a metric definition or code change, observe exactly which business metrics move, by how much, against the same immutable evidence.
-          </p>
+          <p>See which metrics a definition or code change moves, before it ships.</p>
         </div>
         <div className="heading-actions">
           <button className="button primary" onClick={handleOpenRunModal}>
@@ -1096,7 +1091,7 @@ export function ChangesView({
       {rawDiffs.length > 0 && (
         <div className="catalog-toolbar" style={{ marginBottom: '16px' }}>
           <div className="search-field">
-            <Search size={15} color="#667085" />
+            <Search size={15} color="var(--muted)" />
             <input
               type="text"
               placeholder="Filter by commit SHA, branch, snapshot, or outcome…"
@@ -1196,10 +1191,10 @@ export function ChangesView({
                     <div className="queue-row-metric" style={{ minWidth: '220px', textAlign: 'left' }}>
                       <div style={{ display: 'flex', gap: '12px', fontSize: '12px' }}>
                         <span><strong>{diff.counts.total_declared_metrics_affected}</strong> affected</span>
-                        <span style={{ color: diff.counts.material_metrics > 0 ? '#D92D20' : '#475467' }}>
+                        <span style={{ color: diff.counts.material_metrics > 0 ? 'var(--danger)' : 'var(--text-2)' }}>
                           <strong>{diff.counts.material_metrics}</strong> material
                         </span>
-                        <span style={{ color: diff.counts.refused_metrics > 0 ? '#D97706' : '#475467' }}>
+                        <span style={{ color: diff.counts.refused_metrics > 0 ? 'var(--warn)' : 'var(--text-2)' }}>
                           <strong>{diff.counts.refused_metrics}</strong> refused
                         </span>
                       </div>
@@ -1222,7 +1217,7 @@ export function ChangesView({
             </div>
           ) : (
             <div className="empty-state" style={{ padding: '36px 20px', textAlign: 'center' }}>
-              <p style={{ margin: 0, color: '#667085', fontSize: '13px' }}>
+              <p style={{ margin: 0, color: 'var(--muted)', fontSize: '13px' }}>
                 No analyzed changes match the selected outcome filter or search query.
               </p>
             </div>
@@ -1268,7 +1263,7 @@ export function ChangesView({
                   {res && (
                     <div className="queue-row-metric">
                       <span>DELTA</span>
-                      <strong style={{ color: hasDelta ? '#D92D20' : '#245BFF' }}>
+                      <strong style={{ color: hasDelta ? 'var(--danger)' : 'var(--link)' }}>
                         {defined ? formatDelta(resultDisplayValue(res, delta), resultUnit(res, snap?.unit_label || snap?.currency || '')) : 'Unavailable'}
                       </strong>
                     </div>
@@ -1326,13 +1321,13 @@ export function ChangesView({
 
             {loadingRevisions ? (
               <div className="modal-body" style={{ padding: '36px', textAlign: 'center' }}>
-                <RefreshCw className="spinning" size={24} color="#245BFF" />
-                <p style={{ marginTop: '8px', color: '#667085', fontSize: '13px' }}>Loading workspace revisions…</p>
+                <RefreshCw className="spinning" size={24} color="var(--link)" />
+                <p style={{ marginTop: '8px', color: 'var(--muted)', fontSize: '13px' }}>Loading workspace revisions…</p>
               </div>
             ) : revisions.length < 2 ? (
               <div className="modal-body" style={{ padding: '20px' }}>
                 <div className="changes-edge-banner warning-amber">
-                  <AlertTriangle size={18} color="#D97706" style={{ flexShrink: 0 }} />
+                  <AlertTriangle size={18} color="var(--warn)" style={{ flexShrink: 0 }} />
                   <div>
                     <strong>At least two revisions are required</strong>
                     <div style={{ marginTop: '4px', fontSize: '12px' }}>
@@ -1368,7 +1363,7 @@ export function ChangesView({
                 <div className="modal-body">
                   {runError && (
                     <div className="changes-edge-banner warning-amber" role="alert" style={{ marginBottom: '14px' }}>
-                      <AlertTriangle size={16} color="#D97706" />
+                      <AlertTriangle size={16} color="var(--warn)" />
                       <span>{runError}</span>
                     </div>
                   )}
@@ -1430,7 +1425,7 @@ export function ChangesView({
                     >
                       {snapshots.map((s) => (
                         <option key={s.id} value={s.id}>
-                          {s.name} ({s.row_count.toLocaleString()} rows · {s.unit_label || s.currency || 'records'})
+                          {s.name} ({s.row_count.toLocaleString('en-US')} rows · {s.unit_label || s.currency || 'records'})
                         </option>
                       ))}
                     </select>
@@ -1480,10 +1475,10 @@ export function ChangesView({
                     </button>
 
                     {showAdvancedThresholds && (
-                      <div style={{ marginTop: '10px', background: '#F8F9FC', padding: '12px', borderRadius: '6px', border: '1px solid #E4E7EC' }}>
+                      <div style={{ marginTop: '10px', background: 'var(--panel-2)', padding: '12px', borderRadius: '6px', border: '1px solid var(--line)' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                           <div>
-                            <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#475467', marginBottom: '4px' }}>
+                            <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: 'var(--text-2)', marginBottom: '4px' }}>
                               ABSOLUTE THRESHOLD (₹)
                             </label>
                             <input
@@ -1497,7 +1492,7 @@ export function ChangesView({
                             />
                           </div>
                           <div>
-                            <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#475467', marginBottom: '4px' }}>
+                            <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: 'var(--text-2)', marginBottom: '4px' }}>
                               RELATIVE THRESHOLD (%)
                             </label>
                             <input

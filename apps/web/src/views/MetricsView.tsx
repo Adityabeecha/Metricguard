@@ -502,7 +502,7 @@ export function MetricsView({
             <div className="metric-detail-active-binding-text">
               {activeDef ? (
                 <>
-                  <ShieldCheck size={16} color="#245BFF" />
+                  <ShieldCheck size={16} color="var(--link)" />
                   <span>
                     Active implementation: <strong>{activeDef.name}</strong> ·{' '}
                     <span className="mono-cell">v{activeVersion?.version_number || 1}</span>{' '}
@@ -602,7 +602,7 @@ export function MetricsView({
                     <span className="source-badge">{activeDef.source_label}</span>
                   </div>
                   <div className="implementation-card-actions">
-                    <span className="badge font-semibold" style={{ background: '#EAF0FF', color: '#245BFF' }}>
+                    <span className="badge font-semibold" style={{ background: 'var(--tint)', color: 'var(--link)' }}>
                       Approved baseline v{activeVersion.version_number}
                     </span>
                   </div>
@@ -615,7 +615,7 @@ export function MetricsView({
                   </div>
                   <div className="implementation-meta-item">
                     <span className="meta-label">Support State</span>
-                    <span className="meta-value font-semibold" style={{ color: supportInfo.isAnalyzable ? '#245BFF' : '#D97706' }}>
+                    <span className="meta-value font-semibold" style={{ color: supportInfo.isAnalyzable ? 'var(--link)' : 'var(--warn)' }}>
                       {supportInfo.label}
                     </span>
                   </div>
@@ -636,8 +636,8 @@ export function MetricsView({
                 )}
               </div>
             ) : (
-              <div className="empty-card" style={{ padding: '24px', textAlign: 'center', background: '#FFFFFF', border: '1px dashed #E4E7EC', borderRadius: '8px' }}>
-                <p style={{ margin: '0 0 12px', color: '#667085' }}>No active implementation currently bound to this metric.</p>
+              <div className="empty-card" style={{ padding: '24px', textAlign: 'center', background: 'var(--panel)', border: '1px dashed var(--line)', borderRadius: '8px' }}>
+                <p style={{ margin: '0 0 12px', color: 'var(--muted)' }}>No active implementation currently bound to this metric.</p>
                 <button
                   type="button"
                   className="button secondary"
@@ -724,7 +724,7 @@ export function MetricsView({
                 );
               })
             ) : (
-              <div style={{ padding: '16px', background: '#FFFFFF', border: '1px solid #E4E7EC', borderRadius: '6px', color: '#667085', fontSize: '13px' }}>
+              <div style={{ padding: '16px', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '6px', color: 'var(--muted)', fontSize: '13px' }}>
                 No candidate implementations currently pending review.
               </div>
             )}
@@ -825,7 +825,7 @@ export function MetricsView({
                 </div>
               ))
             ) : (
-              <div className="empty-card" style={{ padding: '24px', textAlign: 'center', background: '#FFFFFF' }}>
+              <div className="empty-card" style={{ padding: '24px', textAlign: 'center', background: 'var(--panel)' }}>
                 <p className="muted-text">No recorded versions found for this metric.</p>
               </div>
             )}
@@ -893,17 +893,17 @@ export function MetricsView({
                       </div>
                     </div>
 
-                    <div style={{ fontSize: '13px', color: '#475467' }}>
+                    <div style={{ fontSize: '13px', color: 'var(--text-2)' }}>
                       Explanation: {bridgeLabel} ({res.explanation_status}). Open the existing comparison to inspect its bounded evidence.
                     </div>
                   </div>
                 );
               })
             ) : (
-              <div className="empty-card" style={{ padding: '36px', textAlign: 'center', background: '#FFFFFF', border: '1px solid #E4E7EC', borderRadius: '8px' }}>
-                <TrendingUp size={32} color="#245BFF" style={{ margin: '0 auto 12px' }} />
-                <h4 style={{ margin: '0 0 6px', fontSize: '16px', color: '#101828' }}>No candidate impact evaluations recorded yet</h4>
-                <p style={{ margin: '0 0 16px', color: '#667085', fontSize: '13px', maxWidth: '420px', marginLeft: 'auto', marginRight: 'auto' }}>
+              <div className="empty-card" style={{ padding: '36px', textAlign: 'center', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px' }}>
+                <TrendingUp size={32} color="var(--link)" style={{ margin: '0 auto 12px' }} />
+                <h4 style={{ margin: '0 0 6px', fontSize: '16px', color: 'var(--ink)' }}>No candidate impact evaluations recorded yet</h4>
+                <p style={{ margin: '0 0 16px', color: 'var(--muted)', fontSize: '13px', maxWidth: '420px', marginLeft: 'auto', marginRight: 'auto' }}>
                   Evaluate candidate definitions against the approved baseline across a validated data snapshot to detect material drift before deployment.
                 </p>
                 {activeVersion && onComparePair && (
@@ -936,7 +936,7 @@ export function MetricsView({
             </div>
 
             {loadingDetail && (
-              <div style={{ padding: '12px', color: '#667085', fontSize: '13px' }}>
+              <div style={{ padding: '12px', color: 'var(--muted)', fontSize: '13px' }}>
                 Loading transition history…
               </div>
             )}
@@ -970,7 +970,7 @@ export function MetricsView({
                 </div>
               ))
             ) : !loadingDetail ? (
-              <div style={{ padding: '20px', background: '#FFFFFF', border: '1px solid #E4E7EC', borderRadius: '6px', fontSize: '13px', color: '#667085' }}>
+              <div style={{ padding: '20px', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '6px', fontSize: '13px', color: 'var(--muted)' }}>
                 No state transition events recorded for this metric yet.
               </div>
             ) : null}
@@ -1026,7 +1026,7 @@ export function MetricsView({
               <form onSubmit={handleAddImplementation} style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0, margin: 0 }}>
                 <div className="modal-body" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label" style={{ fontSize: '13px', fontWeight: 600, color: '#344054', marginBottom: 6 }}>
+                    <label className="form-label" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>
                       Definition source
                     </label>
                     <div style={{ display: 'flex', gap: '16px', marginTop: '6px' }}>
@@ -1055,7 +1055,7 @@ export function MetricsView({
 
                   {implChoice === 'existing' ? (
                     <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label" htmlFor="impl-existing-def" style={{ fontSize: '13px', fontWeight: 600, color: '#344054', marginBottom: 6 }}>
+                      <label className="form-label" htmlFor="impl-existing-def" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>
                         Choose definition
                       </label>
                       {unassignedDefinitions.length > 0 ? (
@@ -1071,7 +1071,7 @@ export function MetricsView({
                           {definitionOptions(true)}
                         </select>
                       ) : (
-                        <p className="muted-text font-small" style={{ margin: '4px 0 0', color: '#667085' }}>
+                        <p className="muted-text font-small" style={{ margin: '4px 0 0', color: 'var(--muted)' }}>
                           No unassigned definitions currently available. Choose "Import new SQL query" instead.
                         </p>
                       )}
@@ -1079,7 +1079,7 @@ export function MetricsView({
                   ) : (
                     <>
                       <div className="form-group" style={{ marginBottom: 0 }}>
-                        <label className="form-label" htmlFor="impl-sql-name" style={{ fontSize: '13px', fontWeight: 600, color: '#344054', marginBottom: 6 }}>
+                        <label className="form-label" htmlFor="impl-sql-name" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>
                           Definition name
                         </label>
                         <input
@@ -1094,7 +1094,7 @@ export function MetricsView({
                         />
                       </div>
                       <div className="form-group" style={{ marginBottom: 0 }}>
-                        <label className="form-label" htmlFor="impl-raw-sql" style={{ fontSize: '13px', fontWeight: 600, color: '#344054', marginBottom: 6 }}>
+                        <label className="form-label" htmlFor="impl-raw-sql" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>
                           Raw SQL query
                         </label>
                         <textarea
@@ -1105,11 +1105,11 @@ export function MetricsView({
                           value={implRawSql}
                           onChange={(e) => setImplRawSql(e.target.value)}
                           required
-                          style={{ width: '100%', fontFamily: 'monospace', fontSize: '12px' }}
+                          style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: '12px' }}
                         />
                       </div>
                       <div className="form-group" style={{ marginBottom: 0 }}>
-                        <label className="form-label" htmlFor="impl-time-col" style={{ fontSize: '13px', fontWeight: 600, color: '#344054', marginBottom: 6 }}>
+                        <label className="form-label" htmlFor="impl-time-col" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>
                           Time column (optional)
                         </label>
                         <input
@@ -1126,7 +1126,7 @@ export function MetricsView({
                   )}
 
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label" htmlFor="impl-status" style={{ fontSize: '13px', fontWeight: 600, color: '#344054', marginBottom: 6 }}>
+                    <label className="form-label" htmlFor="impl-status" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>
                       Binding role
                     </label>
                     <select
@@ -1142,7 +1142,7 @@ export function MetricsView({
                   </div>
                 </div>
 
-                <div className="modal-footer" style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', gap: '10px', background: '#F8F9FC', borderTop: '1px solid #E4E7EC' }}>
+                <div className="modal-footer" style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', gap: '10px', background: 'var(--panel-2)', borderTop: '1px solid var(--line)' }}>
                   <button
                     type="button"
                     className="button secondary"
@@ -1187,19 +1187,19 @@ export function MetricsView({
                 </button>
               </div>
 
-              <div style={{ padding: '16px 20px', fontSize: '13px', color: '#344054' }}>
+              <div style={{ padding: '16px 20px', fontSize: '13px', color: 'var(--text-2)' }}>
                 <p style={{ margin: '0 0 12px' }}>
                   Are you sure you want to promote <strong>{promoteCandidateTarget.defName}</strong> as the active implementation for this metric?
                 </p>
-                <div style={{ background: '#F8F9FC', padding: '10px 14px', borderRadius: '6px', border: '1px solid #E4E7EC' }}>
+                <div style={{ background: 'var(--panel-2)', padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--line)' }}>
                   <div>Target version: <span className="mono-cell font-semibold">{promoteCandidateTarget.versionId.slice(0, 10)}…</span></div>
-                  <div style={{ marginTop: '4px', color: '#667085', fontSize: '12px' }}>
+                  <div style={{ marginTop: '4px', color: 'var(--muted)', fontSize: '12px' }}>
                     An immutable state transition record will be generated automatically.
                   </div>
                 </div>
               </div>
 
-              <div className="modal-actions" style={{ padding: '12px 20px', background: '#F8F9FC', borderTop: '1px solid #E4E7EC' }}>
+              <div className="modal-actions" style={{ padding: '12px 20px', background: 'var(--panel-2)', borderTop: '1px solid var(--line)' }}>
                 <button
                   type="button"
                   className="button secondary"
@@ -1231,11 +1231,8 @@ export function MetricsView({
       {/* Page Heading */}
       <div className="page-heading">
         <div>
-          <div className="eyebrow">
-            METRIC CATALOG <span className="eyebrow-line" />
-          </div>
           <h1>Metrics</h1>
-          <p>Declared business metrics, implementation bindings, and approved baseline lifecycles.</p>
+          <p>Business metrics, their approved calculations and baselines.</p>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
           <button
@@ -1330,12 +1327,12 @@ export function MetricsView({
 
                   <div className="metric-row-meta">
                     <span className="metric-row-meta-item">
-                      <FileCode2 size={14} color="#667085" />
+                      <FileCode2 size={14} color="var(--muted)" />
                       Active: {support.definition ? support.definition.name : 'None (Unbound)'}
                     </span>
                     {support.version && (
                       <span className="metric-row-meta-item">
-                        <CheckCircle2 size={14} color="#245BFF" />
+                        <CheckCircle2 size={14} color="var(--link)" />
                         Approved v{support.version.version_number}
                       </span>
                     )}
@@ -1378,10 +1375,10 @@ export function MetricsView({
             );
           })
         ) : (
-          <div className="empty-card" style={{ padding: '36px 20px', textAlign: 'center', background: '#FFFFFF', border: '1px solid #E4E7EC', borderRadius: '8px' }}>
-            <Layers size={32} color="#245BFF" style={{ margin: '0 auto 12px' }} />
-            <h4 style={{ margin: '0 0 6px', fontSize: '16px', color: '#101828' }}>No declared metrics match filters</h4>
-            <p style={{ margin: '0 0 16px', color: '#667085', fontSize: '13px' }}>
+          <div className="empty-card" style={{ padding: '36px 20px', textAlign: 'center', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px' }}>
+            <Layers size={32} color="var(--link)" style={{ margin: '0 auto 12px' }} />
+            <h4 style={{ margin: '0 0 6px', fontSize: '16px', color: 'var(--ink)' }}>No declared metrics match filters</h4>
+            <p style={{ margin: '0 0 16px', color: 'var(--muted)', fontSize: '13px' }}>
               Declare business metrics with explicit importance levels and assign query definitions below.
             </p>
             <button
@@ -1465,7 +1462,7 @@ export function MetricsView({
             })}
           </div>
         ) : (
-          <div style={{ padding: '16px', background: '#FFFFFF', border: '1px solid #E4E7EC', borderRadius: '6px', color: '#667085', fontSize: '13px' }}>
+          <div style={{ padding: '16px', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '6px', color: 'var(--muted)', fontSize: '13px' }}>
             {!unassignedDefinitions.length ? 'No unassigned calculations. Calculations bound to metrics appear in metric details.'
               : calculationQuery.trim() ? 'No saved calculations match this search. Clear the search to browse all calculations.'
               : 'No calculations in this group. Switch groups to see the others.'}
@@ -1510,7 +1507,7 @@ export function MetricsView({
               <form onSubmit={handleCreateMetric} style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0, margin: 0 }}>
                 <div className="modal-body" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label" htmlFor="create-metric-name" style={{ fontSize: '13px', fontWeight: 600, color: '#344054', marginBottom: 6 }}>
+                    <label className="form-label" htmlFor="create-metric-name" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>
                       Metric name
                     </label>
                     <input
@@ -1527,7 +1524,7 @@ export function MetricsView({
                   </div>
 
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label" htmlFor="create-metric-importance" style={{ fontSize: '13px', fontWeight: 600, color: '#344054', marginBottom: 6 }}>
+                    <label className="form-label" htmlFor="create-metric-importance" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>
                       Importance
                     </label>
                     <select
@@ -1545,7 +1542,7 @@ export function MetricsView({
                   </div>
 
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label" htmlFor="create-metric-def" style={{ fontSize: '13px', fontWeight: 600, color: '#344054', marginBottom: 6 }}>
+                    <label className="form-label" htmlFor="create-metric-def" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>
                       Initial implementation (optional)
                     </label>
                     <select
@@ -1558,13 +1555,13 @@ export function MetricsView({
                       <option value="">None (Leave unbound for now)</option>
                       {definitionOptions(false)}
                     </select>
-                    <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#667085' }}>
+                    <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--muted)' }}>
                       You can attach or change implementations at any time from the metric detail view.
                     </p>
                   </div>
                 </div>
 
-                <div className="modal-footer" style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', gap: '10px', background: '#F8F9FC', borderTop: '1px solid #E4E7EC' }}>
+                <div className="modal-footer" style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', gap: '10px', background: 'var(--panel-2)', borderTop: '1px solid var(--line)' }}>
                   <button
                     type="button"
                     className="button secondary"

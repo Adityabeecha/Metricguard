@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { resultUnit, resultDisplayValue } from './resultSummary.ts';
 import { buildLibraryItems } from './investigationLibrary.ts';
+import { parseThemeChoice, resolveTheme } from './themeChoice.ts';
 import { aggregateRowLimitReason, buildFlatSql, operatorsFor } from './comparisonBuilder.ts';
 
 test('summary units follow the aggregate, including secondary amounts and historical currency', () => {
@@ -56,4 +57,27 @@ test('a draft whose comparison failed shows as failed, with the reason', () => {
   const [item] = buildLibraryItems(data, [{ id: 'd1', comparison_run_id: 'r1', status: 'running' }]);
   assert.equal(item.status, 'refused');
   assert.equal(item.problem, 'Temporary evidence storage is full');
+});
+
+test('prepared-format (v3) two-table datasets are read like v2, not as the one-lookup format', async () => {
+  const { summarizeDataset } = await import('./datasetSummary.ts');
+  const { relationalFilterColumns } = await import('./comparisonBuilder.ts');
+  const contract = { id: 'c3', version: 3, mode: 'relational_snapshot', policy: 'relational-star-prepared-v1', name: 'Star large',
+    contract_hash: 'h3', fact: { table: 'orders', key: 'order_id', grain: 'order', categories: ['status'] },
+    dimensions: [{ role: 'customer', table: 'customers', key: 'customer_id', grain: 'customer', categories: ['segment'], fact_foreign_key: 'customer_id' }],
+    measure: { column: 'amount', precision: 14, scale: 2 }, measure_meaning: 'Order amount', unit_label: 'INR',
+    values_comparable: true, scope: 'entire_supplied_snapshot', null_policy: 'blank_nullable' };
+  const snapshot = { id: 's3', name: 'Star large', row_count: 500000, contract_hash: 'h3', execution_policy: 'relational_snapshot_v1' };
+  const summary = summarizeDataset(snapshot, { flat_contracts: [], relational_contracts: [contract] });
+  assert.ok(summary.filterColumns.some(c => c.includes('segment')));
+  assert.ok(relationalFilterColumns(contract).some(c => c.column === 'segment'));
+});
+
+test('theme choice: unknown stored values fall back to system, and system follows the operating system', () => {
+  assert.equal(parseThemeChoice('dark'), 'dark');
+  assert.equal(parseThemeChoice(null), 'system');
+  assert.equal(parseThemeChoice('sepia'), 'system');
+  assert.equal(resolveTheme('system', true), 'dark');
+  assert.equal(resolveTheme('system', false), 'light');
+  assert.equal(resolveTheme('light', true), 'light');
 });

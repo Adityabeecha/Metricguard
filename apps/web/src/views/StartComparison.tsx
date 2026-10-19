@@ -7,6 +7,7 @@ import {
   RATIO_AGGREGATES, amountColumns, lookupJoins, starLookups, type Aggregate, type LookupJoin, type CalculationForm, type Filter, type FilterColumn,
 } from '../comparisonBuilder';
 import { summarizeDataset } from '../datasetSummary';
+import { groupDigits } from '../resultSummary';
 import { classifyInvestigationError, type ClassifiedInvestigationError } from '../investigationUtils';
 import type { Page } from '../router';
 import { ResultReport } from './ResultReport';
@@ -77,6 +78,13 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     return flat ? [{ snapshot, flat }] : [];
   }), [data.snapshots, data.flat_contracts, data.relational_contracts]);
 
+  const [datasetQuery, setDatasetQuery] = useState('');
+  const visibleChoices = useMemo(() => {
+    const q = datasetQuery.trim().toLowerCase();
+    return [...choices]
+      .sort((a, b) => (b.snapshot.created_at || '').localeCompare(a.snapshot.created_at || ''))
+      .filter(c => !q || c.snapshot.name.toLowerCase().includes(q));
+  }, [choices, datasetQuery]);
   const choice = choices.find(c => c.snapshot.id === snapshotId) || null;
   const contract = choice?.flat || choice?.relational || null;
   const relational = Boolean(choice?.relational);
@@ -340,25 +348,20 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   return (
     <div className="guided-page">
       <div className="page-heading">
-        <div>
-          <div className="eyebrow">START A COMPARISON <span className="eyebrow-line" /></div>
-          <h1>Compare two calculations of the same metric</h1>
-          <p>Choose a dataset, describe the current and proposed calculations, see exactly which records explain the difference, and save your explanation.</p>
-        </div>
+        <h1>New comparison</h1>
         <div className="heading-actions">
-          <button className="button secondary" onClick={() => onNavigate('investigations')}>Open saved investigation</button>
+          <button className="button secondary" onClick={() => onNavigate('investigations')}>Cases</button>
         </div>
       </div>
 
-      <ol className="stage-track" aria-label="Comparison stages">
+      <nav className="step-rail" aria-label="Comparison steps">
         {STAGES.map((s, i) => (
-          <li key={s.title} className={i === stage ? 'current' : i < stage ? 'done' : ''} aria-current={i === stage ? 'step' : undefined}>
-            <button type="button" disabled={!canEnter(i)} onClick={() => setStage(i)}>
-              <b>{i + 1}. {s.title}</b>{s.hint}
-            </button>
-          </li>
+          <button type="button" key={s.title} className={`step ${i < stage ? 'done' : ''}`} aria-current={i === stage ? 'step' : undefined}
+            disabled={!canEnter(i)} onClick={() => setStage(i)} title={s.hint}>
+            <span className="n">{i + 1}</span>{s.title}
+          </button>
         ))}
-      </ol>
+      </nav>
 
       {!engineReady && (
         <div className="alert error" role="status">
@@ -379,28 +382,33 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
 
       {stage === 0 && (
         <section className="guided-card" aria-labelledby="stage-data">
-          <h2 id="stage-data">1. Choose data</h2>
-          <p className="lead">Pick the frozen dataset both calculations will read. The same records are used for both, so any difference comes from the calculations alone.</p>
+          <h2 id="stage-data">Choose data</h2>
           {choices.length === 0 ? (
-            <div className="guided-explain">No datasets are ready yet. Upload one below; it will appear here once validated.</div>
+            <div className="guided-explain">No datasets yet. Upload one below; it appears here once validated.</div>
           ) : (
-            <div className="dataset-options" role="group" aria-label="Datasets">
-              {choices.map(c => {
-                const s = summarizeDataset(c.snapshot, data);
-                return (
-                  <button key={c.snapshot.id} type="button" className="dataset-option" aria-pressed={c.snapshot.id === snapshotId} onClick={() => setSnapshotId(c.snapshot.id)}>
-                    <strong>{c.snapshot.name}</strong>
-                    <span>{s.kindLabel} · {c.snapshot.row_count.toLocaleString()} {c.relational ? 'fact records' : 'rows'}</span>
-                    <span>Totals <code>{s.measureLabel}</code> in {s.unitLabel}</span>
-                    {s.filterColumns.length > 0 && <span>Filter by: {s.filterColumns.join(', ')}</span>}
-                  </button>
-                );
-              })}
-            </div>
+            <>
+              <div className="picker-toolbar">
+                <input type="search" aria-label="Search datasets" placeholder={`Search ${choices.length} datasets`} value={datasetQuery} onChange={e => setDatasetQuery(e.target.value)} />
+              </div>
+              <div className="dataset-list" role="group" aria-label="Datasets, newest first">
+                {visibleChoices.map(c => {
+                  const s = summarizeDataset(c.snapshot, data);
+                  return (
+                    <button key={c.snapshot.id} type="button" className="dataset-row" aria-pressed={c.snapshot.id === snapshotId} onClick={() => setSnapshotId(c.snapshot.id)}>
+                      <strong>{c.snapshot.name}</strong>
+                      <span className="rows">{groupDigits(String(c.snapshot.row_count))} {c.relational ? 'facts' : 'rows'}</span>
+                      <span className="added">{c.snapshot.created_at ? new Date(c.snapshot.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''} · {c.snapshot.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 6)}</span>
+                      <span className="detail">{s.kindLabel} · totals <code>{s.measureLabel}</code> in {s.unitLabel}{s.filterColumns.length > 0 ? ` · filter by ${s.filterColumns.join(', ')}` : ''}</span>
+                    </button>
+                  );
+                })}
+                {visibleChoices.length === 0 && <p className="disabled-reason">No dataset matches “{datasetQuery}”.</p>}
+              </div>
+            </>
           )}
           {summary && (
             <div className="guided-explain">
-              <b>You will compare calculations over {summary.measureLabel}</b> ({summary.measureMeaning || 'amount'}, unit {summary.unitLabel}) over {choice!.snapshot.row_count.toLocaleString()} records.
+              <b>You will compare calculations over {summary.measureLabel}</b> ({summary.measureMeaning || 'amount'}, unit {summary.unitLabel}) over {groupDigits(String(choice!.snapshot.row_count))} records.
               {summary.joinLabel && <> Records link to the dimension through {summary.joinLabel}.</>}
               <details style={{ marginTop: 8 }}>
                 <summary>Advanced details</summary>
@@ -410,7 +418,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
           )}
           {choice?.relational && choice.snapshot.row_count > DIRECT_TWO_TABLE_LIMIT && (
             <div role="note">
-              <p className="disabled-reason">Two-table comparisons run directly on up to {DIRECT_TWO_TABLE_LIMIT.toLocaleString()} facts; this dataset has {choice.snapshot.row_count.toLocaleString()}. Prepare it once below, then compare the prepared copy.</p>
+              <p className="disabled-reason">Two-table comparisons run directly on up to {groupDigits(String(DIRECT_TWO_TABLE_LIMIT))} facts; this dataset has {groupDigits(String(choice.snapshot.row_count))}. Prepare it once below, then compare the prepared copy.</p>
               <PrepareTwoTable key={choice.snapshot.id} snapshot={choice.snapshot} contract={choice.relational}
                 onPrepared={async id => { await refresh(); setSnapshotId(id); }} />
             </div>
@@ -422,19 +430,17 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
             </button>
           </div>
           {!choice && <span id="need-data" className="sr-only">Choose a dataset to continue.</span>}
-          <div className="guided-explain">
-            <b>Did the metric change between two data loads?</b> Run one calculation on an earlier and a later load of the same dataset (for example September and October) to see which records were added, removed or changed.
-            <div className="report-actions" style={{ marginTop: 8 }}>
-              <button className="button secondary small" aria-expanded={showLoads} onClick={() => setShowLoads(v => !v)}>Compare two data loads</button>
-            </div>
+          <div className="side-question">
+            <span>Did the metric change between two data loads?</span>
+            <button className="button secondary small" aria-expanded={showLoads} onClick={() => setShowLoads(v => !v)}>Compare two data loads</button>
           </div>
           {showLoads && <SnapshotChange data={data} refresh={refresh} />}
-          <div className="guided-explain">
-            <b>Need new data?</b> Upload a CSV or Parquet file and answer a few questions: which column identifies each row, which amount to total, its unit, and which columns you want to filter on.
-            <div className="report-actions" style={{ marginTop: 8 }}>
+          <div className="side-question">
+            <span>Need new data?</span>
+            <div className="report-actions">
               <button className="button secondary small" onClick={() => onNavigate('data', undefined, { add: '1' })}><UploadCloud size={14} /> Upload one table</button>
               <button className="button secondary small" aria-expanded={showTwoTable} onClick={() => setShowTwoTable(v => !v)}><Database size={14} /> Upload two connected tables</button>
-              <button className="button secondary small" aria-expanded={showWarehouse} onClick={() => setShowWarehouse(v => !v)}><Database size={14} /> Use a warehouse table (PostgreSQL, Snowflake, BigQuery)</button>
+              <button className="button secondary small" aria-expanded={showWarehouse} onClick={() => setShowWarehouse(v => !v)}><Database size={14} /> Warehouse table</button>
             </div>
           </div>
           {showWarehouse && (

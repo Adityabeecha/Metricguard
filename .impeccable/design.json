@@ -1,0 +1,467 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-19T00:00:00Z",
+  "title": "Design System: MetricGuard",
+  "extensions": {
+    "colorMeta": {
+      "seal": {
+        "role": "primary",
+        "displayName": "Seal Blue",
+        "canonical": "#2557D6",
+        "oklch": "oklch(53.1% 0.193 25.1)",
+        "tonalRamp": [
+          "#220000",
+          "#4A0206",
+          "#790C14",
+          "#B1031B",
+          "#D83C3D",
+          "#F86B65",
+          "#FBADA6",
+          "#FEE9E7"
+        ],
+        "note": "Seal, primary action and active marker only."
+      },
+      "seal-strong": {
+        "role": "primary",
+        "displayName": "Pressed Seal",
+        "canonical": "#1C45B0",
+        "oklch": "oklch(46.0% 0.168 25.1)",
+        "tonalRamp": [
+          "#220000",
+          "#4C0004",
+          "#7D000F",
+          "#A82428",
+          "#CE4A47",
+          "#F56E67",
+          "#FEABA4",
+          "#FEE9E7"
+        ]
+      },
+      "kraft": {
+        "role": "secondary",
+        "displayName": "Kraft",
+        "canonical": "#8A6A3F",
+        "oklch": "oklch(54.6% 0.072 73.5)",
+        "tonalRamp": [
+          "#160700",
+          "#351F00",
+          "#56390A",
+          "#76572C",
+          "#97774C",
+          "#BA986C",
+          "#E1BE90",
+          "#FFEBD3"
+        ],
+        "note": "Build value; darker than the direction contract's planned #B48A57."
+      },
+      "link": {
+        "role": "tertiary",
+        "displayName": "Ballpoint Blue",
+        "canonical": "#2F4BA0",
+        "oklch": "oklch(44.1% 0.142 266.8)",
+        "tonalRamp": [
+          "#020036",
+          "#081467",
+          "#1E3689",
+          "#3957AD",
+          "#5778D1",
+          "#769AF6",
+          "#ABC3FB",
+          "#E7EEFF"
+        ]
+      },
+      "rail": {
+        "role": "neutral",
+        "displayName": "Locker Charcoal",
+        "canonical": "#22262A",
+        "oklch": "oklch(26.6% 0.009 248.2)",
+        "tonalRamp": [
+          "#080C0F",
+          "#212428",
+          "#3C4045",
+          "#5A5E63",
+          "#797E83",
+          "#9A9FA4",
+          "#BFC5CA",
+          "#EAEFF5"
+        ]
+      },
+      "ground": {
+        "role": "neutral",
+        "displayName": "Label Stock",
+        "canonical": "#F2F1EC",
+        "oklch": "oklch(95.8% 0.007 97.4)",
+        "tonalRamp": [
+          "#0C0B08",
+          "#252420",
+          "#41403C",
+          "#5E5E59",
+          "#7E7D79",
+          "#9F9E9A",
+          "#C5C4BF",
+          "#EFEEEA"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#1D2023",
+        "oklch": "oklch(24.2% 0.007 248.1)",
+        "tonalRamp": [
+          "#090B0E",
+          "#212427",
+          "#3D4043",
+          "#5A5E62",
+          "#7A7E81",
+          "#9B9FA3",
+          "#C0C5C9",
+          "#EBEFF3"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted",
+        "canonical": "#5B6065",
+        "oklch": "oklch(48.6% 0.010 248.0)",
+        "tonalRamp": [
+          "#080C0F",
+          "#202529",
+          "#3C4045",
+          "#595E63",
+          "#797E83",
+          "#9A9FA5",
+          "#BFC5CA",
+          "#E9EFF5"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#E1DDD3",
+        "oklch": "oklch(89.8% 0.014 88.7)",
+        "tonalRamp": [
+          "#0E0B05",
+          "#27241C",
+          "#433F37",
+          "#615D55",
+          "#817D74",
+          "#A29E95",
+          "#C8C4BA",
+          "#F2EEE4"
+        ]
+      },
+      "ok": {
+        "role": "state",
+        "displayName": "Verified Green",
+        "canonical": "#2E7D4F",
+        "oklch": "oklch(52.9% 0.106 154.6)",
+        "tonalRamp": [
+          "#001004",
+          "#022C16",
+          "#0B4D2A",
+          "#1C6F42",
+          "#429060",
+          "#65B281",
+          "#8BD9A5",
+          "#C6FFD8"
+        ]
+      },
+      "warn": {
+        "role": "state",
+        "displayName": "Amber",
+        "canonical": "#9A5B0B",
+        "oklch": "oklch(53.1% 0.117 63.8)",
+        "tonalRamp": [
+          "#190500",
+          "#381C00",
+          "#5E3400",
+          "#864F09",
+          "#AD6C26",
+          "#D18E4B",
+          "#F9B371",
+          "#FFEAD8"
+        ]
+      },
+      "danger": {
+        "role": "state",
+        "displayName": "Brick",
+        "canonical": "#A8261D",
+        "oklch": "oklch(48.1% 0.168 29.0)",
+        "tonalRamp": [
+          "#220000",
+          "#4C0000",
+          "#7D0102",
+          "#A8261D",
+          "#CE4C3E",
+          "#F56F5F",
+          "#FEAC9F",
+          "#FDE9E6"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Answer Figure",
+        "purpose": "The answer figure on a result only."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Page and case titles."
+      },
+      "title": {
+        "displayName": "Section Title",
+        "purpose": "Section headings."
+      },
+      "body-lead": {
+        "displayName": "Answer Sentence",
+        "purpose": "The one-sentence answer under the figure."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Descriptions, conclusions, table cells."
+      },
+      "label": {
+        "displayName": "Narrow Caps Label",
+        "purpose": "Register column headers, stacked-card cell labels, stamps, the seal strip. Never above a heading."
+      },
+      "figure": {
+        "displayName": "Mono Figure",
+        "purpose": "Every figure, hash, count and case number."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-1",
+        "value": "0 1px 2px rgba(29, 32, 35, 0.06)",
+        "purpose": "Resting seal card and new resting panels."
+      },
+      {
+        "name": "shadow-2",
+        "value": "0 6px 18px -6px rgba(29, 32, 35, 0.18)",
+        "purpose": "Raised overlays."
+      },
+      {
+        "name": "primary-press",
+        "value": "0 1px 2px rgba(28, 69, 176, 0.25)",
+        "purpose": "Seal-red primary button only."
+      },
+      {
+        "name": "drawer",
+        "value": "10px 0 30px rgba(29, 32, 35, 0.3)",
+        "purpose": "Mobile rail drawer, only while open."
+      },
+      {
+        "name": "focus-halo",
+        "value": "0 0 0 3px rgba(47, 75, 160, 0.12)",
+        "purpose": "Input focus, with ballpoint border."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "All state transitions: 0.12 to 0.15s on controls, 0.4s on the seal strip colour."
+      },
+      {
+        "name": "seal-check",
+        "value": "scaleX(0) to scaleX(1), 1.2s ease-out, origin left",
+        "purpose": "Green fill sweeping the seal strip during replay; off under prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "stack",
+        "value": "760px",
+        "purpose": "Registers stack into cards; padding tightens; breadcrumbs hide; tab edge fade."
+      },
+      {
+        "name": "drawer",
+        "value": "900px",
+        "purpose": "Rail becomes an off-canvas drawer."
+      },
+      {
+        "name": "case-header",
+        "value": "1100px",
+        "purpose": "Seal card drops below the answer."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one seal-blue action per area.",
+      "html": "<button class=\"ds-btn-primary\">Save conclusion</button>",
+      "css": ".ds-btn-primary { font: 600 13px var(--font-ui); min-height: 36px; padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--seal); background: var(--seal); color: #fff; box-shadow: 0 1px 2px rgba(28, 69, 176, 0.25); cursor: pointer; transition: background-color 0.15s var(--ease-out), border-color 0.15s var(--ease-out); } .ds-btn-primary:hover { background: var(--seal-strong); border-color: var(--seal-strong); } .ds-btn-primary:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Every other action.",
+      "html": "<button class=\"ds-btn-secondary\">Edit comparison</button>",
+      "css": ".ds-btn-secondary { font: 600 13px var(--font-ui); min-height: 36px; padding: 0 14px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); cursor: pointer; transition: background-color 0.15s var(--ease-out), border-color 0.15s var(--ease-out); } .ds-btn-secondary:hover { background: var(--panel-2); border-color: var(--faint); } .ds-btn-secondary:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Text field with ballpoint focus and a seal caret.",
+      "html": "<input class=\"ds-input\" type=\"search\" placeholder=\"Search cases\">",
+      "css": ".ds-input { font: 400 13px var(--font-ui); height: 36px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel); color: var(--ink); caret-color: var(--seal); transition: border-color 0.15s ease, box-shadow 0.15s ease; } .ds-input:focus { outline: none; border-color: var(--link); box-shadow: 0 0 0 3px rgba(47, 75, 160, 0.12); }"
+    },
+    {
+      "name": "Rail Navigation",
+      "kind": "nav",
+      "refersTo": "nav-rail",
+      "description": "Charcoal locker rail; seal mark on the current item.",
+      "html": "<nav class=\"ds-rail\"><a class=\"ds-nav-item ds-active\" href=\"#\">Cases<span class=\"ds-count\">15</span></a><a class=\"ds-nav-item\" href=\"#\">New comparison</a><a class=\"ds-nav-item\" href=\"#\">Datasets<span class=\"ds-count\">19</span></a></nav>",
+      "css": ".ds-rail { width: 232px; background: var(--rail); padding: 14px; display: grid; gap: 2px; } .ds-nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--radius); color: var(--rail-muted); font: 500 14px var(--font-ui); text-decoration: none; transition: background-color 0.15s var(--ease-out), color 0.15s var(--ease-out); } .ds-nav-item:hover { background: rgba(255, 255, 255, 0.06); color: #fff; } .ds-nav-item.ds-active { background: var(--rail-2); color: #fff; box-shadow: inset 3px 0 0 var(--seal); } .ds-nav-item:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; } .ds-count { margin-left: auto; font: 500 11px var(--font-mono); color: var(--rail-muted); } .ds-active .ds-count { color: #fff; }"
+    },
+    {
+      "name": "Filter Chips",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Pill filters; pressed fills ink.",
+      "html": "<div class=\"ds-chips\"><button class=\"ds-chip\" aria-pressed=\"true\">All<span class=\"ds-n\">15</span></button><button class=\"ds-chip\" aria-pressed=\"false\">Open<span class=\"ds-n\">4</span></button></div>",
+      "css": ".ds-chips { display: flex; gap: 6px; } .ds-chip { font: 600 12px var(--font-ui); padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--panel); color: var(--text-2); cursor: pointer; } .ds-chip[aria-pressed=\"true\"] { background: var(--ink); border-color: var(--ink); color: #fff; } .ds-chip:hover { border-color: var(--faint); } .ds-chip:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; } .ds-n { font-family: var(--font-mono); font-weight: 500; margin-left: 4px; opacity: 0.8; }"
+    },
+    {
+      "name": "Status Stamps",
+      "kind": "chip",
+      "refersTo": "stamp-sealed",
+      "description": "State as an inked custody stamp.",
+      "html": "<span class=\"ds-stamp ds-sealed\">Sealed</span> <span class=\"ds-stamp ds-draft\">Draft</span> <span class=\"ds-stamp ds-open\">Open</span> <span class=\"ds-stamp ds-failed\">Failed</span>",
+      "css": ".ds-stamp { display: inline-flex; align-items: center; font: 700 10.5px var(--font-label); letter-spacing: 0.12em; text-transform: uppercase; padding: 3px 7px; border-radius: 3px; border: 1px solid currentColor; } .ds-sealed { color: var(--ok); background: var(--ok-tint); } .ds-draft { color: var(--kraft); background: var(--kraft-tint); } .ds-open { color: var(--warn); background: var(--warn-tint); } .ds-failed { color: var(--danger); background: var(--danger-tint); }"
+    },
+    {
+      "name": "Evidence Seal",
+      "kind": "custom",
+      "refersTo": "seal-card",
+      "description": "Signature: perforated seal-blue strip with the case number and frozen hashes; hover previews the intact state.",
+      "html": "<aside class=\"ds-seal\"><div class=\"ds-seal-strip\"><span>Sealed</span><span class=\"ds-seal-no\">MG-56A9</span></div><dl><dt>Dataset</dt><dd>2ee8…f5b5</dd><dt>Evidence</dt><dd>36c8…2365</dd><dt>Sealed</dt><dd>17 Oct 2026, 21:15</dd></dl><div class=\"ds-seal-status\">Verified on publication · replay to re-check</div></aside>",
+      "css": ".ds-seal { position: relative; width: 320px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px 18px 14px; box-shadow: var(--shadow-1); overflow: hidden; } .ds-seal-strip { position: relative; display: flex; justify-content: space-between; align-items: center; margin: -18px -18px 14px; padding: 9px 18px 11px; background: var(--seal); color: #fff; font: 700 12px var(--font-label); letter-spacing: 0.14em; text-transform: uppercase; transition: background-color 0.4s var(--ease-out); } .ds-seal:hover .ds-seal-strip { background: var(--ok); } .ds-seal-strip::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: radial-gradient(circle at 5px 4px, var(--panel) 2px, transparent 2.5px) 0 0 / 10px 4px repeat-x; } .ds-seal-no { font: 700 13px var(--font-mono); letter-spacing: 0.02em; } .ds-seal dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 12px; } .ds-seal dt { color: var(--muted); } .ds-seal dd { margin: 0; font-family: var(--font-mono); } .ds-seal-status { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line-strong); font: 600 13px var(--font-ui); color: var(--muted); }"
+    },
+    {
+      "name": "Answer Figure",
+      "kind": "custom",
+      "refersTo": "",
+      "description": "The answer: 64px mono figure, unit, one sentence.",
+      "html": "<div class=\"ds-answer\"><div class=\"ds-fig\"><span class=\"ds-big\">−55.00</span><span class=\"ds-unit\">points</span></div><p>The proposed calculation is 55.00 points lower than the current calculation.</p></div>",
+      "css": ".ds-answer .ds-fig { display: flex; align-items: baseline; gap: 12px; } .ds-answer .ds-big { font: 700 clamp(40px, 5vw, 64px)/1 var(--font-mono); letter-spacing: -0.03em; color: var(--ink); font-variant-numeric: tabular-nums; } .ds-answer .ds-unit { font: 500 18px var(--font-mono); color: var(--muted); } .ds-answer p { font: 400 18px/1.45 var(--font-ui); max-width: 64ch; margin: 10px 0 0; color: var(--ink); }"
+    },
+    {
+      "name": "Result Tabs",
+      "kind": "nav",
+      "refersTo": "tab-count",
+      "description": "Underline tabs with a seal active mark; hidden scrollbar and edge fade.",
+      "html": "<div class=\"ds-tabs-wrap\"><div class=\"ds-tabs\"><button class=\"ds-tab ds-on\">Records <span class=\"ds-tc\">3</span></button><button class=\"ds-tab\">Breakdown</button><button class=\"ds-tab\">Definitions</button><button class=\"ds-tab\">What is uncertain</button></div></div>",
+      "css": ".ds-tabs-wrap { position: relative; } .ds-tabs-wrap::after { content: ''; position: absolute; top: 0; right: 0; bottom: 1px; width: 28px; pointer-events: none; background: linear-gradient(90deg, transparent, var(--ground)); } .ds-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; } .ds-tabs::-webkit-scrollbar { display: none; } .ds-tab { flex: none; scroll-snap-align: start; margin-bottom: -1px; background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 14px; font: 600 14px var(--font-ui); color: var(--muted); white-space: nowrap; display: inline-flex; gap: 8px; align-items: center; cursor: pointer; } .ds-tab:hover { color: var(--ink); } .ds-tab.ds-on { color: var(--ink); border-bottom-color: var(--seal); } .ds-tab:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; } .ds-tc { font: 500 11px var(--font-mono); background: var(--tint); color: var(--text-2); padding: 1px 6px; border-radius: 999px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Chain of Custody",
+    "overview": "MetricGuard is a case file, not a dashboard. Every comparison result is handled like forensic evidence: it carries a case number (MG-XXXX), it is sealed with the hashes of the frozen inputs, and a replay either keeps the seal intact or breaks it. The screen leads with the answer, a large mono figure and one plain sentence, and puts the record-level evidence directly beneath it in tabbed registers.\n\nThe material world is a charcoal locker rail on a warm label-stock ground with white panels. Colour is scarce and committed: seal blue marks the seal, the primary action and where you are; kraft brown marks case numbers and draft tags; ballpoint blue marks links and focus; green, amber and brick are state only. Every figure, hash and case number is set in JetBrains Mono with tabular numerals, so numbers read as recorded facts rather than decoration. Density is that of a working register: 36px controls, 8px row gaps, hairline warm borders.\n\nThe system refuses the category default for analytics tools: navy sidebar, blue buttons, small caps labels stacked over paragraphs of explanation over cards. Headings speak for themselves.",
+    "keyCharacteristics": [
+      "The answer owns the first viewport: 64px mono figure, one sentence, then the current and proposed pair.",
+      "The evidence seal is the signature: a perforated tape strip with the case number, turning green when a replay matches.",
+      "Seal blue is rare. If more than three things on a screen are seal blue, something is wrong.",
+      "Every number is mono, tabular, and carries its unit and exact value.",
+      "Registers (tables) become stacked cards on phones; nothing scrolls sideways."
+    ],
+    "rules": [
+      {
+        "name": "The Seal Is Rare Rule",
+        "body": "Seal blue is reserved for the seal, the primary action and the active marker. It never signals state, never colours a number, and never fills a decorative surface.",
+        "section": "colors"
+      },
+      {
+        "name": "The Ink Deltas Rule",
+        "body": "Signed deltas are ink, JetBrains Mono, tabular and right-aligned, with U+2212 (−) for negatives. Direction is carried by the sign, never by red or green.",
+        "section": "colors"
+      },
+      {
+        "name": "The State Only Rule",
+        "body": "Green, amber and brick appear only on stamps, seal status, alerts and refusals. A positive number is not \"good\" and is never green.",
+        "section": "colors"
+      },
+      {
+        "name": "The Mono Facts Rule",
+        "body": "Every figure, hash, timestamp in the seal and case number is JetBrains Mono with tabular numerals. Prose never is.",
+        "section": "typography"
+      },
+      {
+        "name": "The Heading Speaks Rule",
+        "body": "No eyebrow or kicker labels above headings. A heading stands alone; context goes in the one line of muted metadata beneath it (case number, kind, author, time, unit).",
+        "section": "typography"
+      },
+      {
+        "name": "The Answer First Rule",
+        "body": "On a result, the figure and its sentence are the first content in the viewport. Evidence, definitions and actions come after.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat Paper Rule",
+        "body": "Surfaces are flat at rest. Hierarchy comes from white on label stock and hairlines; never add a shadow to make a card \"pop\".",
+        "section": "elevation"
+      },
+      {
+        "name": "The No Side Stripe Rule",
+        "body": "No coloured side stripes on cards, rows, alerts or callouts. Emphasis comes from a stamp, a figure or a full border, never from a coloured left edge. The rail's 3px inset seal mark on the current nav item is a position marker, not a decorative stripe, and is the only edge mark in the system.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "**Do** reserve seal blue (#2557D6) for the seal, the primary action and the active marker.",
+      "**Do** set signed deltas in ink, JetBrains Mono, tabular and right-aligned, with U+2212 (−) for negatives.",
+      "**Do** put the case number (MG-XXXX, kraft mono) in the metadata line under a case title and on every case row.",
+      "**Do** stack registers into labelled cards below 760px so no key or figure column is clipped.",
+      "**Do** hide the scrollbar on tab rows and add the edge fade where they overflow.",
+      "**Do** use stamps for state: Sealed, Draft, Running, Failed, Open.",
+      "**Do** reference the :root custom properties; a new colour is a new token, not a raw hex."
+    ],
+    "donts": [
+      "**Don't** use seal blue for state, errors, warnings or negative numbers.",
+      "**Don't** colour deltas red or green.",
+      "**Don't** add coloured side stripes to cards, rows, alerts or callouts.",
+      "**Don't** put eyebrow or kicker labels above headings.",
+      "**Don't** add shadows to make panels pop; the system is flat paper.",
+      "**Don't** set figures, hashes or case numbers in the UI face.",
+      "**Don't** let a table force horizontal page scroll on a phone."
+    ]
+  },
+  "themes": {
+    "choices": [
+      "light",
+      "dark",
+      "system"
+    ],
+    "default": "system",
+    "storageKey": "mg-theme",
+    "attribute": "data-theme",
+    "dark": {
+      "ground": "#131619",
+      "panel": "#1B1F23",
+      "panel-2": "#22272C",
+      "ink": "#E7E9EB",
+      "text-2": "#C5CACF",
+      "muted": "#9AA1A8",
+      "line": "#2C3237",
+      "line-strong": "#3B4248",
+      "rail": "#0E1012",
+      "seal": "#3466E0",
+      "seal-strong": "#4A78E6",
+      "kraft": "#C9A574",
+      "link": "#8FADF5",
+      "ok": "#5DBE88",
+      "warn": "#E0A64C",
+      "danger": "#EE857B"
+    }
+  },
+  "logo": {
+    "component": "apps/web/src/Logo.tsx",
+    "favicon": "apps/web/public/favicon.svg",
+    "description": "seal-blue guard shield with a rising metric line over a perforated seal edge"
+  }
+}

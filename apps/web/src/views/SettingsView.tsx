@@ -3,6 +3,7 @@ import { type Bootstrap } from '../api';
 import { Evaluation } from '../Evaluation';
 import { MetadataImports } from '../MetadataImports';
 import { Terminal } from 'lucide-react';
+import { ThemeSwitch } from '../ThemeSwitch';
 
 interface SettingsViewProps {
   data: Bootstrap;
@@ -64,15 +65,8 @@ export function SettingsView({
     <div>
       <div className="page-heading">
         <div>
-          <div className="eyebrow">
-            WORKSPACE SETTINGS <span className="eyebrow-line" />
-          </div>
           <h1>Settings</h1>
-          <p>
-            {developerMode
-              ? 'Workspace configuration, metadata integrations, and developer evaluation tools.'
-              : 'Workspace configuration, analytical context, and metadata integrations.'}
-          </p>
+
         </div>
       </div>
 
@@ -104,6 +98,13 @@ export function SettingsView({
 
       {currentTab === 'system' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Appearance</h2>
+              <p>System follows your computer's light or dark setting. Saved in this browser.</p>
+            </div>
+            <div style={{ padding: '16px 20px' }}><ThemeSwitch /></div>
+          </section>
           <div className="two-col">
             <section className="panel">
               <div className="panel-header">
@@ -114,13 +115,13 @@ export function SettingsView({
                 <div className="form-stack">
                   <div>
                     <label className="form-label">Workspace name</label>
-                    <strong style={{ fontSize: '14px', display: 'block', marginTop: '2px', color: '#101828' }}>
+                    <strong style={{ fontSize: '14px', display: 'block', marginTop: '2px', color: 'var(--ink)' }}>
                       {data.project.name}
                     </strong>
                   </div>
                   <div>
                     <label className="form-label">Workspace ID</label>
-                    <code style={{ fontSize: '12px', background: '#F8F9FC', padding: '3px 8px', borderRadius: '4px', border: '1px solid #E4E7EC', color: '#344054' }}>
+                    <code style={{ fontSize: '12px', background: 'var(--panel-2)', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--line)', color: 'var(--text-2)' }}>
                       {data.project.id}
                     </code>
                   </div>
@@ -150,7 +151,7 @@ export function SettingsView({
                   </div>
                   <div>
                     <label className="form-label">Processing capability</label>
-                    <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#344054' }}>
+                    <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'var(--text-2)' }}>
                       Secure processing: Available
                     </p>
                   </div>
@@ -169,13 +170,13 @@ export function SettingsView({
               <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
                 <div style={{ maxWidth: '640px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Terminal size={16} color="#245BFF" />
-                    <strong style={{ fontSize: '13px', color: '#101828' }}>
+                    <Terminal size={16} color="var(--link)" />
+                    <strong style={{ fontSize: '13px', color: 'var(--ink)' }}>
                       Developer tooling enabled via external configuration
                     </strong>
                     <span className="badge ready">Active</span>
                   </div>
-                  <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#667085', lineHeight: 1.4 }}>
+                  <p style={{ margin: '4px 0 0', fontSize: '12px', color: 'var(--muted)', lineHeight: 1.4 }}>
                     Engineering release evidence, synthetic test fixtures, and internal Python benchmarks are available in the dedicated tab above.
                   </p>
                 </div>

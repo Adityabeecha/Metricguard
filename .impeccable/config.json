@@ -1,0 +1,53 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "apps/web/src/seal.css"
+        ],
+        "createdAt": "2026-10-19T05:15:00.161Z",
+        "reason": "Direction contract (Chain of Custody, chosen by the user on the decision page): the perforated tamper-tape strip across the top of the evidence seal is the signature move, not a side accent"
+      },
+      {
+        "rule": "cream-palette",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/*.html"
+        ],
+        "createdAt": "2026-10-19T05:19:03.239Z",
+        "reason": "Decision-round sketches (throwaway first-viewport thumbnails for the direction choice), not shipped UI; the built app is checked separately and is clean"
+      },
+      {
+        "rule": "skipped-heading",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/*.html"
+        ],
+        "createdAt": "2026-10-19T05:19:03.296Z",
+        "reason": "Decision-round sketches (throwaway first-viewport thumbnails for the direction choice), not shipped UI; the built app is checked separately and is clean"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/*.html"
+        ],
+        "createdAt": "2026-10-19T05:19:03.354Z",
+        "reason": "Decision-round sketches (throwaway first-viewport thumbnails for the direction choice), not shipped UI; the built app is checked separately and is clean"
+      },
+      {
+        "rule": "overused-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/*.html"
+        ],
+        "createdAt": "2026-10-19T05:19:03.409Z",
+        "reason": "Decision-round sketches (throwaway first-viewport thumbnails for the direction choice), not shipped UI; the built app is checked separately and is clean"
+      }
+    ]
+  }
+}

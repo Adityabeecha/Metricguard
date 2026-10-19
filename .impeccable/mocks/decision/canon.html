@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>MetricGuard · Category standard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;font-family:Inter,sans-serif;background:#F6F9FC;color:#0A2540}
+header{height:60px;background:#fff;border-bottom:1px solid #E3E8EE;display:flex;align-items:center;gap:28px;padding:0 32px;font-size:14px}
+header b{font-size:16px}header span{color:#425466}header .on{color:#635BFF;font-weight:600}
+header button{margin-left:auto;background:#635BFF;color:#fff;border:0;border-radius:6px;padding:9px 14px;font:600 14px Inter}
+main{max-width:1180px;margin:28px auto}
+h1{font-size:24px;font-weight:600;margin-bottom:4px}.sub{color:#425466;font-size:14px;margin-bottom:22px}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:22px}
+.card{background:#fff;border:1px solid #E3E8EE;border-radius:10px;padding:18px;box-shadow:0 1px 2px rgba(10,37,64,.05)}
+.card small{color:#697386;font-size:13px}.card b{display:block;font-size:26px;font-weight:600;margin-top:6px}.card.d b{color:#DF1B41}
+.panel{background:#fff;border:1px solid #E3E8EE;border-radius:10px}
+.panel h2{font-size:16px;padding:16px 18px;border-bottom:1px solid #E3E8EE}
+table{width:100%;border-collapse:collapse;font-size:14px}th{text-align:left;color:#697386;font-weight:500;padding:12px 18px;border-bottom:1px solid #E3E8EE}
+td{padding:12px 18px;border-bottom:1px solid #F0F3F7}td.n{text-align:right;font-variant-numeric:tabular-nums}
+.pill{background:#FCEFF2;color:#C0123C;border-radius:999px;padding:2px 8px;font-size:12px}
+</style></head><body>
+<header><b>MetricGuard</b><span class="on">Investigations</span><span>Datasets</span><span>Metrics</span><span>Changes</span><button>New comparison</button></header>
+<main>
+<h1>Completed orders only</h1><p class="sub">Demo sales orders · all orders vs completed orders</p>
+<div class="cards"><div class="card"><small>Current</small><b>750.75 INR</b></div><div class="card"><small>Proposed</small><b>410.75 INR</b></div><div class="card d"><small>Change</small><b>−340.00 INR</b></div><div class="card"><small>Unexplained</small><b>0.00</b></div></div>
+<div class="panel"><h2>3 records explain the difference</h2>
+<table><tr><th>Record</th><th>Status</th><th style="text-align:right">Current</th><th style="text-align:right">Proposed</th><th style="text-align:right">Change</th></tr>
+<tr><td>ORD-1004</td><td><span class="pill">cancelled</span></td><td class="n">120.00</td><td class="n">0.00</td><td class="n">−120.00</td></tr>
+<tr><td>ORD-1006</td><td><span class="pill">pending</span></td><td class="n">180.00</td><td class="n">0.00</td><td class="n">−180.00</td></tr>
+<tr><td>ORD-1008</td><td><span class="pill">refunded</span></td><td class="n">40.00</td><td class="n">0.00</td><td class="n">−40.00</td></tr></table></div>
+</main>
+</body></html>

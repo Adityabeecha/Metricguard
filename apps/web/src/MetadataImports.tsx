@@ -61,16 +61,16 @@ function FileUploadControl({
       <label
         className="form-label"
         htmlFor={id}
-        style={{ fontSize: 13, fontWeight: 600, color: '#344054', marginBottom: 6 }}
+        style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}
       >
         {label}
       </label>
       <div
         style={{
-          border: '1px solid #D0D5DD',
+          border: '1px solid var(--line-strong)',
           borderRadius: 6,
           padding: '8px 12px',
-          background: '#FFFFFF',
+          background: 'var(--panel)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -90,11 +90,11 @@ function FileUploadControl({
           <span
             style={{
               fontSize: 13,
-              color: file ? '#101828' : '#667085',
+              color: file ? 'var(--ink)' : 'var(--muted)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
-              fontFamily: file ? 'monospace' : 'inherit',
+              fontFamily: file ? 'var(--font-mono)' : 'inherit',
             }}
           >
             {file ? file.name : 'No file selected'}
@@ -124,7 +124,7 @@ function FileUploadControl({
         style={{ display: 'none' }}
       />
       {helperText && (
-        <p style={{ margin: '6px 0 0', fontSize: 12, color: '#667085' }}>
+        <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--muted)' }}>
           {helperText}
         </p>
       )}
@@ -178,7 +178,7 @@ export function MetadataImports({
         <section className="panel">
           <div className="panel-header">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Layers size={18} color="#245BFF" />
+              <Layers size={18} color="var(--link)" />
               <h2 style={{ margin: 0 }}>dbt</h2>
             </div>
             <p>Version-aware models, metrics, compiled SQL presence, and lineage.</p>
@@ -209,7 +209,7 @@ export function MetadataImports({
         <section className="panel">
           <div className="panel-header">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Database size={18} color="#245BFF" />
+              <Database size={18} color="var(--link)" />
               <h2 style={{ margin: 0 }}>Power BI TMDL</h2>
             </div>
             <p>Bounded tables, measures, columns, and relationships from TMDL definitions.</p>

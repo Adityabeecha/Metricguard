@@ -5,7 +5,7 @@ import type { FlatContract, RelationalContract, RelationalLookup, Snapshot } fro
 
 /** Lookup tables of a relational contract, the same shape for contract v1 (one) and v2 (several). */
 export function lookupsOf(contract: RelationalContract): RelationalLookup[] {
-  if (contract.version === 2) return contract.dimensions || [];
+  if (contract.version !== 1) return contract.dimensions || [];
   return [{ role: 'dimension', table: contract.dimension.table, key: contract.dimension.key, grain: contract.dimension.grain,
             categories: contract.dimension.categories, fact_foreign_key: contract.relationship.fact_foreign_key }];
 }

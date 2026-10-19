@@ -121,12 +121,12 @@ export function SnapshotChange({ data, refresh }: Props) {
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                 <label>Earlier load (baseline)
                   <select value={baselineId} onChange={e => { setBaselineId(e.target.value); setRun(null); }}>
-                    {group.snapshots.map(s => <option key={s.id} value={s.id}>{label(s)} · {s.row_count.toLocaleString()} records</option>)}
+                    {group.snapshots.map(s => <option key={s.id} value={s.id}>{label(s)} · {s.row_count.toLocaleString('en-US')} records</option>)}
                   </select>
                 </label>
                 <label>Later load (target)
                   <select value={targetId} onChange={e => { setTargetId(e.target.value); setRun(null); }}>
-                    {group.snapshots.map(s => <option key={s.id} value={s.id}>{label(s)} · {s.row_count.toLocaleString()} records</option>)}
+                    {group.snapshots.map(s => <option key={s.id} value={s.id}>{label(s)} · {s.row_count.toLocaleString('en-US')} records</option>)}
                   </select>
                 </label>
               </div>
@@ -163,7 +163,7 @@ export function SnapshotChange({ data, refresh }: Props) {
             <thead><tr><th>What happened to the record</th><th>Records</th><th>Contribution to the change</th></tr></thead>
             <tbody>
               {KINDS.filter(k => summary[k]?.records).map(k => (
-                <tr key={k}><td>{CHANGE_LABEL[k]}</td><td>{summary[k].records.toLocaleString()}</td><td>{summary[k].delta}</td></tr>
+                <tr key={k}><td>{CHANGE_LABEL[k]}</td><td>{summary[k].records.toLocaleString('en-US')}</td><td>{summary[k].delta}</td></tr>
               ))}
             </tbody>
           </table>

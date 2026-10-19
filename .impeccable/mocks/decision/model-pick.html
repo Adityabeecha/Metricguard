@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>MetricGuard · Working Papers</title>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&family=Source+Code+Pro:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;font-family:'Source Sans 3',sans-serif;background:#FFFFFF;color:#2B2B2B;display:grid;grid-template-rows:56px 1fr}
+header{display:flex;align-items:center;gap:28px;padding:0 32px;border-bottom:2px solid #2B2B2B}
+.logo{font-weight:700;font-size:18px}.logo span{color:#1F8A4C}
+header nav{display:flex;gap:22px;font-size:15px;color:#555}header nav b{color:#2B2B2B;border-bottom:2px solid #1F8A4C;padding-bottom:15px;margin-bottom:-17px}
+header .r{margin-left:auto;font-size:13px;color:#666}
+.wrap{display:grid;grid-template-columns:260px 1fr;min-height:0}
+.index{border-right:1px solid #DDD;padding:22px 20px;font-size:14px}
+.index h4{font-size:11px;letter-spacing:.12em;color:#5E5E5E;margin:0 0 10px}
+.index a{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #EEE;color:#2B2B2B;text-decoration:none}
+.index a code{font:12px 'Source Code Pro';color:#3A5BA9}.index a.on{font-weight:700}
+main{padding:28px 40px}
+.ref{font:600 12px 'Source Code Pro';color:#3A5BA9}
+h1{font-size:28px;margin:4px 0 6px}
+.lead{font-size:16px;color:#555}
+.grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;border:1px solid #2B2B2B;margin:24px 0}
+.grid div{padding:16px 18px;border-right:1px solid #DDD}.grid div:last-child{border:0}
+.grid small{font-size:12px;color:#5E5E5E;display:block;margin-bottom:6px}
+.grid b{font:600 26px 'Source Code Pro'}.tick{color:#1F8A4C;font-size:15px;margin-left:6px;vertical-align:super}
+.grid .big b{color:#C8372D}
+.say{font-size:18px;margin-bottom:18px}.say b{font-weight:700}
+table{width:100%;border-collapse:collapse;font-size:15px}
+th{text-align:left;font-size:12px;color:#5E5E5E;padding:8px 10px;border-bottom:2px solid #2B2B2B}
+td{padding:10px;border-bottom:1px solid #E5E5E5}td.n{font-family:'Source Code Pro';text-align:right}
+tr.total td{border-top:2px solid #2B2B2B;border-bottom:3px double #2B2B2B;font-weight:700}
+.legend{display:flex;gap:26px;margin-top:20px;font-size:13px;color:#555}.legend i{color:#1F8A4C;font-style:normal;font-weight:700}
+.btns{display:flex;gap:10px;float:right}.btn{font:600 14px 'Source Sans 3';padding:9px 16px;border:1px solid #2B2B2B;background:#fff}.btn.p{background:#1F8A4C;border-color:#1F8A4C;color:#fff}
+</style></head><body>
+<header><div class="logo">Metric<span>Guard</span></div><nav><b>Investigations</b><span>New comparison</span><span>Datasets</span><span>Metrics</span><span>Changes</span></nav><div class="r">Retail analytics · engine ready</div></header>
+<div class="wrap">
+<aside class="index"><h4>WORKING PAPERS</h4>
+<a class="on" href="#">Completed orders only <code>A-1</code></a><a href="#">North segment via join <code>A-2</code></a><a href="#">Stress avg 1,000,000 <code>B-1</code></a><a href="#">Stress distinct 1,000,000 <code>B-2</code></a><a href="#">Margin 500,000 <code>C-1</code></a></aside>
+<main>
+<div class="btns"><button class="btn">Replay</button><button class="btn p">Sign off</button></div>
+<div class="ref">W/P A-1 · Demo sales orders</div>
+<h1>Completed orders only</h1>
+<p class="lead">All orders vs completed orders on the same frozen dataset.</p>
+<div class="grid"><div><small>Current</small><b>750.75</b><span class="tick">✓</span></div><div><small>Proposed</small><b>410.75</b><span class="tick">✓</span></div><div class="big"><small>Change (INR)</small><b>−340.00</b><span class="tick">✓✓</span></div><div><small>Unexplained</small><b>0.00</b><span class="tick">Ⓡ</span></div></div>
+<p class="say"><b>3 records</b> account for the whole difference.</p>
+<table><tr><th>Record</th><th>Reason</th><th style="text-align:right">Current</th><th style="text-align:right">Proposed</th><th style="text-align:right">Change</th></tr>
+<tr><td>ORD-1004</td><td>Status “cancelled” left the filter</td><td class="n">120.00</td><td class="n">0.00</td><td class="n">−120.00</td></tr>
+<tr><td>ORD-1006</td><td>Status “pending” left the filter</td><td class="n">180.00</td><td class="n">0.00</td><td class="n">−180.00</td></tr>
+<tr><td>ORD-1008</td><td>Status “refunded” left the filter</td><td class="n">40.00</td><td class="n">0.00</td><td class="n">−40.00</td></tr>
+<tr class="total"><td>Total</td><td></td><td class="n">340.00</td><td class="n">0.00</td><td class="n">−340.00 ✓✓</td></tr></table>
+<div class="legend"><span><i>✓</i> recomputed from frozen data</span><span><i>✓✓</i> footed: records add up to the change</span><span><i>Ⓡ</i> replayed, identical evidence</span></div>
+</main></div>
+</body></html>

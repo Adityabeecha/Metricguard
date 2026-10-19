@@ -118,7 +118,7 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
         if (job.state !== 'validated' || !job.snapshot_id) throw new Error(job.error?.message || 'The rows read from the warehouse did not pass validation.');
         await refresh();
         const created = await api.snapshot(job.snapshot_id);
-        setDone(`${full ? 'Full table' : `Sample of ${sampleRows} rows`} frozen from ${SOURCE_LABEL[source]}: ${created.row_count.toLocaleString()} rows, each checked against your answers.`);
+        setDone(`${full ? 'Full table' : `Sample of ${sampleRows} rows`} frozen from ${SOURCE_LABEL[source]}: ${created.row_count.toLocaleString('en-US')} rows, each checked against your answers.`);
         onCreated(job.snapshot_id);
         return;
       }
@@ -218,7 +218,7 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
           <label>Sample size<input type="number" min={1} max={5000000} value={sampleRows} onChange={e => setSampleRows(Number(e.target.value))} /></label>
         </div>
       </details>
-      <label className="checkbox-field-standard"><input type="checkbox" checked={sample} onChange={e => setSample(e.target.checked)} /> <span>Take a sample first ({sampleRows.toLocaleString()} rows by key)</span></label>
+      <label className="checkbox-field-standard"><input type="checkbox" checked={sample} onChange={e => setSample(e.target.checked)} /> <span>Take a sample first ({sampleRows.toLocaleString('en-US')} rows by key)</span></label>
       <div className="guided-nav">
         <span id="warehouse-blocker" className="disabled-reason">{blocker}</span>
         <button className="button primary" disabled={busy || Boolean(blocker)} aria-describedby={blocker ? 'warehouse-blocker' : undefined} onClick={() => void extract(!sample)}>
