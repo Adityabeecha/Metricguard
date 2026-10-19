@@ -21,6 +21,8 @@ export type LibraryItem = {
   change: string | null;
   unit: string;
   hasConclusion: boolean;
+  /** The same calculation on an earlier and a later load of one dataset. */
+  twoLoads?: boolean;
   updatedAt: string;
   /** Why the draft's comparison did not finish, when it failed or was refused. */
   problem?: string;
@@ -78,6 +80,7 @@ export function buildLibraryItems(data: Pick<Bootstrap, 'investigations' | 'runs
       change: resultDisplayValue(run?.result, run?.result?.delta_target_minus_baseline),
       unit: resultUnit(run?.result, ctx?.unit_label || ctx?.currency || ''),
       hasConclusion: Boolean(inv.decision),
+      twoLoads: Boolean(run?.target_snapshot_id),
       updatedAt: inv.created_at,
     });
   }
@@ -102,6 +105,7 @@ export function buildLibraryItems(data: Pick<Bootstrap, 'investigations' | 'runs
       change: resultDisplayValue(run?.result, run?.result?.delta_target_minus_baseline),
       unit: resultUnit(run?.result, ctx?.unit_label || ''),
       hasConclusion: false,
+      twoLoads: Boolean(run?.target_snapshot_id),
       updatedAt: (d as { updated_at?: string; created_at?: string }).updated_at || (d as { created_at?: string }).created_at || '',
     });
   }

@@ -151,6 +151,7 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
                       <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                         {item.metricNames.length ? `Metric: ${item.metricNames.join(', ')}` : `${item.currentLabel} → ${item.proposedLabel}`}
                         {item.kind !== 'single' && ` · ${KIND_LABEL[item.kind]}`}
+                        {item.twoLoads && ' · Two loads'}
                         <span className="c-data-inline"> · {item.datasetName}</span>
                       </div>
                     </td>

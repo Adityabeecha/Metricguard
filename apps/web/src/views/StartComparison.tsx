@@ -183,7 +183,8 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     let active = true;
     const snapshot = choice.snapshot.id;
     (async () => {
-      for (const c of columns.slice(0, 40)) {
+      const ordered = [...columns].sort((a, b) => Number(a.type === 'date' || a.type === 'timestamp') - Number(b.type === 'date' || b.type === 'timestamp'));
+      for (const c of ordered.slice(0, 40)) {
         const values = await api.columnValues(snapshot, c.column).catch(() => null);
         if (!active) return;
         setKnown(k => ({ ...k, [c.id]: values }));

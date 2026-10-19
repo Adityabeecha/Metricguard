@@ -363,12 +363,18 @@ export type KnownValues = { complete: boolean; distinct_count: number; values: A
 /** Columns with this many distinct values or fewer are offered as clickable values and as the default condition. */
 export const FEW_VALUES = 20;
 
-/** The column a new condition starts on: the first one with a short, complete list of values, else none. */
+/**
+ * The column a new condition starts on: the first one with a short, complete list of values;
+ * while value look-ups are still loading, the first text or true/false column not known to have
+ * many values. Dates and timestamps are never the default (they suit ranges, not "is"). Empty when
+ * nothing fits.
+ */
 export function defaultConditionColumn(columns: FilterColumn[], known: Record<string, KnownValues | null | undefined>): string {
-  return columns.find(c => {
-    const k = known[c.id];
-    return k && k.complete && k.distinct_count > 0 && k.distinct_count <= FEW_VALUES;
-  })?.id || '';
+  const short = (k: KnownValues | null | undefined) => Boolean(k && k.complete && k.distinct_count > 0 && k.distinct_count <= FEW_VALUES);
+  const categorical = columns.filter(c => c.type === 'string' || c.type === 'boolean');
+  return categorical.find(c => short(known[c.id]))?.id
+    || categorical.find(c => known[c.id] === undefined && !/(^id$|_id$|_key$|_code$)/i.test(c.column))?.id
+    || '';
 }
 
 /**

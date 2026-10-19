@@ -97,7 +97,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
       <div className="page-heading">
         <div>
           <h1>{detail.title}</h1>
-          <p><span className="case-no">{caseNumber(detail.run.id)}</span> · {KIND_LABEL[kind]} · recorded by {detail.actor_label}, {new Date(detail.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}{unit && ` · ${unit}`}</p>
+          <p><span className="case-no">{caseNumber(detail.run.id)}</span> · {KIND_LABEL[kind]}{(detail.run as { target_snapshot_id?: string }).target_snapshot_id ? ' · two loads' : ''} · recorded by {detail.actor_label}, {new Date(detail.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}{unit && ` · ${unit}`}</p>
         </div>
         <div className="heading-actions">
           <button className="button secondary" onClick={onBack}><ArrowLeft size={15} /> Cases</button>

@@ -275,5 +275,9 @@ test('a new condition starts on a column with a short list of values, not on an 
   const cols = ['customer_id', 'status'].map(id => ({ id, label: id, column: id, type: 'string' }));
   const known = { customer_id: { complete: false, distinct_count: 50001, values: [] }, status: STATUS };
   assert.equal(defaultConditionColumn(cols, known), 'status');
-  assert.equal(defaultConditionColumn(cols, {}), '');
+  // Before look-ups load: the first text column that is not a timestamp, an ID, or known to have many values.
+  const withTime = [{ id: 'started', label: 'started', column: 'started', type: 'timestamp' }, ...cols];
+  assert.equal(defaultConditionColumn(withTime, {}), 'status');
+  assert.equal(defaultConditionColumn(withTime, { customer_id: known.customer_id }), 'status');
+  assert.equal(defaultConditionColumn(withTime.slice(0, 1), {}), '');
 });
