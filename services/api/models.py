@@ -95,7 +95,7 @@ class MeasureExpressionInput(Input):
 
 
 class FlatContractInput(Input):
-    version: Literal[3, 4, 5, 6, 7]
+    version: Literal[3, 4, 5, 6, 7, 8]
     mode: Literal['flat_snapshot']
     name: str = Field(min_length=1, max_length=160)
     row_key: str
@@ -104,7 +104,7 @@ class FlatContractInput(Input):
     scale: int = Field(ge=0, le=18)
     categories: list[str] = Field(max_length=8)
     predicate_policy: Literal['flat-boolean-v1'] | None = None
-    measure_policy: Literal['flat-subtraction-v1', 'flat-case-v1'] | None = None
+    measure_policy: Literal['flat-subtraction-v1', 'flat-case-v1', 'flat-multi-measure-v1'] | None = None
     decimal_columns: list[DecimalColumnInput] | None = None
     measure_expression: MeasureExpressionInput | None = None
     dimension_types: dict[str, str] | None = None
@@ -137,6 +137,7 @@ class FlatContractInput(Input):
             5: v5_fields,
             6: v6_fields,
             7: v5_fields | {'measure_policy'},
+            8: v6_fields - {'measure_expression'},
         }
         allowable = allowable_by_version[self.version]
         payload = {}
@@ -174,6 +175,14 @@ class FlatComparisonInput(Input):
     relationship: Literal['candidate', 'expected_agreement', 'intentional_variant', 'unrelated'] = 'candidate'
 
 
+class FlatSnapshotChangeInput(Input):
+    """One flat definition evaluated on a baseline and a target load of the same dataset contract."""
+    version_id: str
+    baseline_snapshot_id: str
+    target_snapshot_id: str
+    context: FlatContext
+
+
 class RelationalTableInput(Input):
     table: str
     key: str
@@ -202,6 +211,38 @@ class RelationalContractInput(Input):
     fact: RelationalTableInput
     dimension: RelationalTableInput
     relationship: RelationalRelationshipInput
+    measure: RelationalMeasureInput
+    measure_meaning: str = Field(min_length=1, max_length=300)
+    unit_label: str = Field(min_length=1, max_length=80)
+    values_comparable: Literal[True]
+    scope: Literal['entire_supplied_snapshot']
+    null_policy: Literal['blank_nullable', 'literal_NULL']
+
+    @field_validator('values_comparable', mode='before')
+    @classmethod
+    def explicit_comparable(cls, value):
+        if value is not True:
+            raise ValueError('Explicit boolean true confirmation is required.')
+        return value
+
+
+class RelationalLookupInput(Input):
+    role: str = Field(min_length=1, max_length=64)
+    table: str
+    key: str
+    grain: str = Field(min_length=1, max_length=300)
+    categories: list[str] = Field(max_length=8)
+    fact_foreign_key: str
+
+
+class RelationalStarContractInput(Input):
+    """Contract v2: one fact table and one to four lookup tables, each on its own foreign key."""
+    version: int = Field(strict=True, ge=2, le=2)
+    mode: Literal['relational_snapshot']
+    policy: Literal['relational-star-v1']
+    name: str = Field(min_length=1, max_length=160)
+    fact: RelationalTableInput
+    dimensions: list[RelationalLookupInput] = Field(min_length=1, max_length=4)
     measure: RelationalMeasureInput
     measure_meaning: str = Field(min_length=1, max_length=300)
     unit_label: str = Field(min_length=1, max_length=80)
@@ -568,6 +609,7 @@ class InvestigationEditorState(Input):
 
 
 class InvestigationDraftCreateInput(Input):
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=160)
     title: str = Field(default='Untitled investigation', min_length=1, max_length=200)
     metric_id: str | None = Field(default=None, max_length=128)
     baseline_definition_id: str | None = Field(default=None, max_length=128)

@@ -57,6 +57,23 @@ function Get-Health {
   try { return Invoke-RestMethod -Uri "$Url/api/v1/health" -TimeoutSec 3 } catch { return $null }
 }
 
+function Get-RunnerSourceHash {
+  # The runner image bakes in the engine code; a changed engine needs a rebuilt image,
+  # otherwise new definitions (e.g. ratios) would run on, and be refused by, old code.
+  $files = @('infra\Dockerfile.runner', 'requirements.txt') +
+    (Get-ChildItem -LiteralPath 'packages', 'services\supervisor' -Recurse -File -Filter '*.py' |
+      Where-Object { $_.FullName -notmatch '__pycache__' } | Sort-Object FullName | ForEach-Object { $_.FullName })
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $buffer = New-Object System.IO.MemoryStream
+  foreach ($f in $files) {
+    $name = [System.Text.Encoding]::UTF8.GetBytes(((Resolve-Path -LiteralPath $f -Relative) -replace '\\', '/') + "`n")
+    $buffer.Write($name, 0, $name.Length)
+    $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $f))
+    $buffer.Write($bytes, 0, $bytes.Length)
+  }
+  return ([System.BitConverter]::ToString($sha.ComputeHash($buffer.ToArray())) -replace '-', '').ToLower()
+}
+
 function Test-Docker {
   if ($NoDocker) { return 'skipped' }
   if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return 'missing' }
@@ -144,13 +161,28 @@ function Start-App {
     'missing' { Fail 'Docker is not installed. Install Docker Desktop, start it, then run this again. (Use -NoDocker to start view-only.)' }
     'stopped' { Fail 'Docker Desktop is installed but not running. Start Docker Desktop, wait until it says "Engine running", then run this again.' }
     'running' {
-      & docker image inspect $Image *> $null
-      if ($LASTEXITCODE -ne 0) {
-        Write-Step "Building the isolated runner image $Image (first run, a few minutes)"
-        & docker build -f infra/Dockerfile.runner -t $Image .
+      $sourceHash = Get-RunnerSourceHash
+      # Read the labels as JSON: Windows PowerShell drops inner quotes passed to native programs.
+      $built = $null; $present = $false
+      $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+      try {
+        $labels = (& docker image inspect $Image --format '{{json .Config.Labels}}' 2>$null)
+        if ($LASTEXITCODE -eq 0) {
+          $present = $true
+          $parsed = "$labels" | ConvertFrom-Json
+          if ($parsed) { $built = $parsed.'metricguard.source' }
+        }
+      } catch { } finally { $ErrorActionPreference = $previous }
+      if (-not $present -or "$built".Trim() -ne $sourceHash) {
+        $why = if (-not $present) { 'first run' } else { 'engine code changed' }
+        Write-Step "Building the isolated runner image $Image ($why, a few minutes)"
+        # docker writes build progress to stderr; judge success by the exit code only.
+        $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try { & docker build -f infra/Dockerfile.runner --label "metricguard.source=$sourceHash" -t $Image . 2>&1 | ForEach-Object { "$_" } | Where-Object { $_.Trim() -and $_ -ne 'System.Management.Automation.RemoteException' } | Select-Object -Last 3 | ForEach-Object { Write-Host "    $_" } }
+        finally { $ErrorActionPreference = $previous }
         if ($LASTEXITCODE -ne 0) { Fail 'Runner image build failed.' }
       }
-      Write-Step "Docker running; runner image $Image present"
+      Write-Step "Docker running; runner image $Image matches the current engine code"
     }
     'skipped' { Write-Step 'Docker skipped: comparisons will wait until the engine is available' }
   }

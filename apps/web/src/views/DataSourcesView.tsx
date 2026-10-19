@@ -69,6 +69,10 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
   const [compoundFilters, setCompoundFilters] = useState(false);
   const [enableSubtraction, setEnableSubtraction] = useState(false);
   const [enableCase, setEnableCase] = useState(false);
+  // Several amount columns (contract v8): extra columns and their units, beside the main amount.
+  const [enableMulti, setEnableMulti] = useState(false);
+  const [extraAmounts, setExtraAmounts] = useState<string[]>([]);
+  const [extraUnits, setExtraUnits] = useState<Record<string, string>>({});
   const [minuendColumn, setMinuendColumn] = useState('');
   const [subtrahendColumn, setSubtrahendColumn] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -129,14 +133,20 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
     );
   }, [activeSnapshot, flatContracts]);
   const keyIssue = confirmedKey ? filePreview?.key_issues?.[confirmedKey] : undefined;
-  const roleColumns = new Set([confirmedKey, enableSubtraction ? minuendColumn : confirmedMeasure, enableSubtraction ? subtrahendColumn : ''].filter(Boolean));
+  const multiExtras = enableMulti ? extraAmounts.filter(c => c !== confirmedKey && c !== confirmedMeasure) : [];
+  const roleColumns = new Set([confirmedKey, enableSubtraction ? minuendColumn : confirmedMeasure, enableSubtraction ? subtrahendColumn : '', ...multiExtras].filter(Boolean));
   const filterColumns = confirmedCategories.filter(c => !roleColumns.has(c));
   const validateBlocker = !confirmedKey ? 'Choose the column that identifies each row.'
     : keyIssue ? `The row key “${confirmedKey}” ${keyIssue}; choose a column whose values are all different.`
-    : roleColumns.size < (enableSubtraction ? 3 : 2) ? 'The row key and the amount must be different columns.'
+    : roleColumns.size < (enableSubtraction ? 3 : 2 + multiExtras.length) ? 'The row key and the amount must be different columns.'
+    : enableMulti && multiExtras.length === 0 ? 'Tick at least one more amount column, or choose a single amount.'
+    : enableMulti && multiExtras.length > 7 ? 'Register at most 8 amount columns.'
+    : enableMulti && multiExtras.some(c => !(extraUnits[c] ?? confirmedUnit).trim()) ? 'Enter a unit for every amount column.'
     : enableSubtraction && (!minuendColumn || !subtrahendColumn) ? 'Choose both amount columns for the subtraction.'
     : !enableSubtraction && !confirmedMeasure ? 'Choose the amount to total.'
     : !confirmedUnit.trim() ? 'Enter the unit the amount uses.'
+    : !Number.isInteger(precision) || precision < 1 || precision > 38 ? 'Decimal precision must be a whole number from 1 to 38.'
+    : !Number.isInteger(scale) || scale < 0 || scale > 18 || scale > precision ? 'Decimal places must be a whole number from 0 to 18, no greater than precision.'
     : enableCase && (!scopeConfirmed || !comparabilityConfirmed) ? 'Tick both confirmations for the conditional total.'
     : '';
   const activeSummary = useMemo(
@@ -207,6 +217,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
   const handleFilePicked = async (file: File) => {
     setSelectedFile(file);
     setFilePreview(null);
+    setExtraAmounts([]); setExtraUnits({}); setMinuendColumn(''); setSubtrahendColumn('');
     setCategoryTypeOverrides({});
     setValidationError(null);
     const cleanName = file.name.replace(/\.(csv|parquet)$/i, '');
@@ -255,8 +266,13 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
       // Infer from the complete bounded source; display only a small sample.
       setBusy(true);
       try {
-        if (file.size > 25 * 1024 * 1024) throw new Error('Source exceeds 25 MiB');
-        const parsed = parseCsvText(await file.text(), 25);
+        if (file.size > 512 * 1024 * 1024) throw new Error('Source exceeds 512 MiB');
+        // Large extracts: suggest types from the first 2 MiB of complete lines; the
+        // isolated import still checks every row against the approved types.
+        const large = file.size > 25 * 1024 * 1024;
+        let text = large ? await file.slice(0, 2 * 1024 * 1024).text() : await file.text();
+        if (large) text = text.slice(0, text.lastIndexOf('\n') + 1);
+        const parsed = parseCsvText(text, 25);
         setFilePreview(parsed);
         const inf = inferMeaning(parsed.headers, parsed.observed_types, parsed.sample_rows, file.name, parsed.key_issues);
         setConfirmedKey(inf.rowKey);
@@ -288,6 +304,10 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
   const handleValidateAndCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedFile || !filePreview) return;
+    if (validateBlocker) {
+      setValidationError({ title: 'Check dataset settings', message: validateBlocker });
+      return;
+    }
 
     if (enableCase && (!scopeConfirmed || !comparabilityConfirmed)) {
       setValidationError({ title: 'Confirmation required', message: 'Confirm the whole-snapshot scope and that all non-NULL measure values share the declared unit before importing CASE data.' });
@@ -358,7 +378,26 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
         dimensionTypes[cat] = categoryTypeOverrides[cat] || inferred;
       }
 
-      const contractPayload = enableSubtraction ? {
+      const contractPayload = enableMulti ? {
+        version: 8,
+        measure_policy: 'flat-multi-measure-v1',
+        predicate_policy: 'flat-boolean-v1',
+        mode: 'flat_snapshot',
+        name: snapshotName || selectedFile.name,
+        row_key: confirmedKey,
+        decimal_columns: [confirmedMeasure, ...multiExtras].map((name, i) => ({
+          name, precision, scale, unit_label: i === 0 ? confirmedUnit.trim() : (extraUnits[name] ?? confirmedUnit).trim(),
+        })),
+        scale,
+        categories: filterColumns,
+        dimension_types: dimensionTypes,
+        nullable_categories: filterColumns.filter(cat => !filePreview?.null_counts || filePreview.null_counts[cat] > 0),
+        measure_meaning: confirmedMeaning || `Amounts ${[confirmedMeasure, ...multiExtras].join(', ')}`,
+        unit_label: confirmedUnit.trim(),
+        values_comparable: true,
+        scope: 'entire_supplied_snapshot',
+        null_policy: nullPolicy,
+      } : enableSubtraction ? {
         version: 6,
         measure_policy: 'flat-subtraction-v1',
         predicate_policy: 'flat-boolean-v1',
@@ -555,7 +594,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
 
   const getSourceTypeBadge = (s: Snapshot) => {
     const isParquet = s.name.endsWith('.parquet') || (s.manifest as { format?: string })?.format === 'parquet';
-    if (s.execution_policy === 'relational_snapshot_v1') return <span className="source-tag csv">Two tables</span>;
+    if (s.execution_policy === 'relational_snapshot_v1') return <span className="source-tag csv">{summarizeDataset(s, data).tables.length || 2} tables</span>;
     if (isParquet) return <span className="source-tag parquet">Parquet</span>;
     if (s.name.toLowerCase().includes('postgres')) return <span className="source-tag postgres">PostgreSQL</span>;
     return <span className="source-tag csv">CSV</span>;
@@ -563,7 +602,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
 
   const getSourceTypeLabel = (s: Snapshot) => {
     const isParquet = s.name.endsWith('.parquet') || (s.manifest as { format?: string })?.format === 'parquet';
-    if (s.execution_policy === 'relational_snapshot_v1') return 'Two connected CSV tables (fact + lookup)';
+    if (s.execution_policy === 'relational_snapshot_v1') return summarizeDataset(s, data).kindLabel;
     if (isParquet) return 'Parquet extract';
     if (s.name.toLowerCase().includes('postgres')) return 'PostgreSQL snapshot';
     return 'CSV extract';
@@ -1019,7 +1058,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                         <span>
                           {selectedFile
                             ? `${Math.round(selectedFile.size / 1024)} KB selected`
-                            : 'Drop a flat CSV or Parquet extract up to 25 MiB'}
+                            : 'Drop a flat CSV (up to 512 MiB) or Parquet extract'}
                         </span>
                         <input
                           type="file"
@@ -1036,7 +1075,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                         <div className="file-preview-card">
                           <div className="preview-heading-row">
                             <strong>
-                              {filePreview.headers.length} columns detected · {filePreview.totalRowsSampled} {selectedFile?.name.toLowerCase().endsWith('.parquet') ? 'sample rows' : 'rows checked'}
+                              {filePreview.headers.length} columns detected · {filePreview.totalRowsSampled} {selectedFile?.name.toLowerCase().endsWith('.parquet') ? 'sample rows' : (selectedFile?.size || 0) > 25 * 1024 * 1024 ? 'rows checked from the beginning of the file; all rows are validated during import' : 'rows checked'}
                             </strong>
                             <span className="badge neutral">Previewing top rows</span>
                           </div>
@@ -1172,7 +1211,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                             <Database size={15} style={{ color: '#245BFF' }} />
                             <span>Inferred Logical Schema</span>
                             <span className="badge neutral" style={{ fontSize: 12, fontWeight: 500 }}>
-                              {filePreview.headers.length} columns detected · {filePreview.totalRowsSampled} {selectedFile?.name.toLowerCase().endsWith('.parquet') ? 'sample rows' : 'rows checked'}
+                              {filePreview.headers.length} columns detected · {filePreview.totalRowsSampled} {selectedFile?.name.toLowerCase().endsWith('.parquet') ? 'sample rows' : (selectedFile?.size || 0) > 25 * 1024 * 1024 ? 'rows checked from the beginning of the file; all rows are validated during import' : 'rows checked'}
                             </span>
                           </div>
                           <p style={{ margin: '3px 0 0', fontSize: 12, color: '#64748B' }}>
@@ -1198,7 +1237,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                               const isKey = col === confirmedKey;
                               const isMinuend = enableSubtraction && col === minuendColumn;
                               const isSubtrahend = enableSubtraction && col === subtrahendColumn;
-                              const isMeasure = !enableSubtraction && col === confirmedMeasure;
+                              const isMeasure = !enableSubtraction && (col === confirmedMeasure || multiExtras.includes(col));
                               const declType = col === confirmedKey ? 'VARCHAR' : (isMeasure || isMinuend || isSubtrahend) ? `DECIMAL(${precision},${scale})` : filePreview.declared_types[col] || 'VARCHAR';
                               const isCategory = confirmedCategories.includes(col);
                               const nullCount = filePreview.null_counts?.[col];
@@ -1415,7 +1454,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                       </span>
                       <div className="categories-chip-wrap">
                         {filePreview?.headers
-                          .filter((h) => h !== confirmedKey && h !== confirmedMeasure)
+                          .filter((h) => h !== confirmedKey && h !== confirmedMeasure && !multiExtras.includes(h))
                           .map((col) => {
                             const isChecked = confirmedCategories.includes(col);
                             return (
@@ -1489,24 +1528,50 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
 
                     <label>
                       What kind of total will you compare?
-                      <select value={enableCase ? 'case' : enableSubtraction ? 'subtraction' : 'single'} onChange={(e) => {
+                      <select value={enableCase ? 'case' : enableSubtraction ? 'subtraction' : enableMulti ? 'multi' : 'single'} onChange={(e) => {
                         const mode = e.target.value;
                         setEnableCase(mode === 'case');
                         setEnableSubtraction(mode === 'subtraction');
+                        setEnableMulti(mode === 'multi');
                         if (mode === 'subtraction' && !minuendColumn) setMinuendColumn(confirmedMeasure);
                       }}>
                         <option value="single">A total of one amount column (most common)</option>
+                        <option value="multi">Several amount columns, e.g. revenue and cost for margin % (preview)</option>
                         <option value="subtraction">A total of one column minus another (preview)</option>
                         <option value="case">A conditional total — CASE WHEN (preview)</option>
                       </select>
                       <small className="field-hint">Fixed for this dataset once created. Existing datasets keep their own rules.</small>
                     </label>
                     <label>
-                      <input type="checkbox" checked={compoundFilters || enableSubtraction || enableCase}
-                        disabled={enableSubtraction || enableCase} onChange={(e) => setCompoundFilters(e.target.checked)} />
+                      <input type="checkbox" checked={compoundFilters || enableSubtraction || enableCase || enableMulti}
+                        disabled={enableSubtraction || enableCase || enableMulti} onChange={(e) => setCompoundFilters(e.target.checked)} />
                       Allow filters combined with AND, OR and NOT
                       <small className="field-hint">AND, OR and NOT; 16 conditions and 8 levels per filter tree. Included in subtraction and CASE modes.</small>
                     </label>
+                    {enableMulti && <div className="panel-note">
+                      <strong>More amount columns</strong>
+                      <p>Besides <code>{confirmedMeasure || 'the main amount'}</code>, tick the other amounts to register. Calculations can then total any one of them or divide one by another, e.g. <code>SUM(revenue - cost) / SUM(revenue)</code>. Each needs its own unit; amounts in different units are never added together.</p>
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        {filePreview?.headers.filter(h => h !== confirmedKey && h !== confirmedMeasure).map(col => {
+                          const checked = extraAmounts.includes(col);
+                          return (
+                            <div key={col} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                              <label className="checkbox-field-standard">
+                                <input type="checkbox" checked={checked} onChange={() => {
+                                  setExtraAmounts(list => checked ? list.filter(x => x !== col) : [...list, col]);
+                                  setConfirmedCategories(c => c.filter(x => x !== col));
+                                }} />
+                                <span>{col} ({filePreview.observed_types[col] || 'string'})</span>
+                              </label>
+                              {checked && (
+                                <input aria-label={`Unit of ${col}`} style={{ maxWidth: 140 }} value={extraUnits[col] ?? confirmedUnit}
+                                  onChange={e => setExtraUnits(u => ({ ...u, [col]: e.target.value }))} placeholder="unit, e.g. INR" />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>}
                     {enableCase && <div className="panel-note">
                       <strong>One conditional measure</strong>
                       <p><code>SUM(CASE WHEN {confirmedMeasure || '&lt;measure&gt;'} IS NOT NULL THEN {confirmedMeasure || '&lt;measure&gt;'} ELSE 0 END)</code></p>
@@ -1629,7 +1694,10 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                                     if (selectedFile && policy !== 'native_null') {
                                       setBusy(true);
                                       try {
-                                        setFilePreview(parseCsvText(await selectedFile.text(), 25, policy));
+                                        const large = selectedFile.size > 25 * 1024 * 1024;
+                                        let text = large ? await selectedFile.slice(0, 2 * 1024 * 1024).text() : await selectedFile.text();
+                                        if (large) text = text.slice(0, text.lastIndexOf('\n') + 1);
+                                        setFilePreview(parseCsvText(text, 25, policy));
                                         setCategoryTypeOverrides({});
                                       } catch (err) {
                                         setFilePreview(null);
@@ -1705,7 +1773,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                     <span><strong>Snapshot:</strong> {createdSnapshot?.name || snapshotName || selectedFile?.name}</span>
                     <span><strong>Rows:</strong> {(createdSnapshot?.row_count ?? filePreview?.totalRowsSampled ?? 0).toLocaleString()}</span>
                     <span><strong>Key:</strong> {confirmedKey || 'Not declared'}</span>
-                    <span><strong>Amount:</strong> {enableSubtraction ? `${minuendColumn} − ${subtrahendColumn}` : confirmedMeasure || 'Not declared'}</span>
+                    <span><strong>Amount:</strong> {enableSubtraction ? `${minuendColumn} − ${subtrahendColumn}` : enableMulti ? [confirmedMeasure, ...multiExtras].join(", ") : confirmedMeasure || "Not declared"}</span>
                     <span><strong>Unit:</strong> {confirmedUnit || 'Not declared'}</span>
                   </div>
                 </div>

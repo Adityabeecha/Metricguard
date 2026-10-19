@@ -1,3 +1,4 @@
+import { resultUnit } from '../resultSummary';
 import { useEffect, useState } from 'react';
 import { ArrowLeft, Download, Pencil, RefreshCw } from 'lucide-react';
 import { api, ApiError, versionName, type Bootstrap, type InvestigationDetail, type Run } from '../api';
@@ -68,13 +69,18 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
   const ctx = detail.context as unknown as { mode?: string; unit_label?: string; currency?: string };
   const relational = ctx.mode === 'relational_snapshot';
   const kind = relational ? 'relational' : ctx.mode === 'flat_snapshot' ? 'single' : 'orders';
-  const unit = ctx.unit_label || detail.run.result?.currency || ctx.currency || '';
+  const declaredUnit = ctx.unit_label || detail.run.result?.currency || ctx.currency || '';
+  const unit = resultUnit(detail.run.result, declaredUnit);
   const defs = data.definitions;
   const runSha = (r: Run | null) => (r?.result as unknown as { evidence_artifact?: { sha256?: string } } | null)?.evidence_artifact?.sha256;
   const same = replay?.result && detail.run.result
     && replay.result.baseline_value === detail.run.result.baseline_value
     && replay.result.target_value === detail.run.result.target_value
     && replay.result.delta_target_minus_baseline === detail.run.result.delta_target_minus_baseline
+    && replay.result.residual === detail.run.result.residual
+    && (replay.result.ratio?.baseline.exact ?? null) === (detail.run.result.ratio?.baseline.exact ?? null)
+    && (replay.result.ratio?.target.exact ?? null) === (detail.run.result.ratio?.target.exact ?? null)
+    && (replay.result.ratio?.gap_exact ?? null) === (detail.run.result.ratio?.gap_exact ?? null)
     && (runSha(replay) ?? null) === (runSha(detail.run) ?? null);
   const replayBlocker = !detail.replay_available ? 'The frozen dataset is no longer available, so this case cannot be replayed. The saved result stays readable.'
     : data.mode !== 'isolated' ? 'Replay needs the isolated engine (scripts\\mg.ps1 start).' : '';
@@ -92,7 +98,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
         <div>
           <div className="eyebrow">SAVED INVESTIGATION · {KIND_LABEL[kind].toUpperCase()} <span className="eyebrow-line" /></div>
           <h1>{detail.title}</h1>
-          <p>Recorded by {detail.actor_label} on {new Date(detail.created_at).toLocaleString()} · dataset “{detail.snapshot.name}”</p>
+          <p>Recorded by {detail.actor_label} on {new Date(detail.created_at).toLocaleString()} · dataset “{detail.snapshot.name}”{unit && ` · ${unit}`}</p>
         </div>
         <div className="heading-actions">
           <button className="button secondary" onClick={onBack}><ArrowLeft size={15} /> All investigations</button>
@@ -108,7 +114,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
       <section className="guided-card" aria-labelledby="result-title">
         <h2 id="result-title">Result</h2>
         {detail.run.result ? (
-          <ResultReport run={detail.run} unit={unit} relational={relational}
+          <ResultReport run={detail.run} unit={declaredUnit} relational={relational}
             baselineLabel={versionName(defs, detail.baseline_version_id)} targetLabel={versionName(defs, detail.target_version_id)}
             baselineSql={detail.baseline_version.raw_sql} targetSql={detail.target_version.raw_sql}
             snapshot={detail.snapshot} versions={defs.flatMap(d => d.versions)} />

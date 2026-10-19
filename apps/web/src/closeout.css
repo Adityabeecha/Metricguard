@@ -151,3 +151,14 @@ button.context-card { font: inherit; text-align: left; width: 100%; color: inher
 .share-bar > span { display: block; height: 100%; background: #245BFF; }
 .column-picker { border: 1px solid #E4E7EC; border-radius: 6px; padding: 4px 10px; display: flex; flex-wrap: wrap; gap: 10px; font-size: 13px; }
 .column-picker legend { font-size: 12px; font-weight: 600; color: #475467; padding: 0 4px; }
+
+/* Guided-flow polish (2026-10-18) */
+.form-hint { display: block; font-size: 12px; color: #475467; background: #F9FAFB; border-left: 3px solid #98A2B3; padding: 4px 8px; border-radius: 4px; }
+.run-progress { display: flex; gap: 10px; align-items: center; }
+.run-spinner { width: 16px; height: 16px; flex: none; border: 2px solid #DCE6FF; border-top-color: #245BFF; border-radius: 50%; animation: mg-spin 0.8s linear infinite; }
+@keyframes mg-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .run-spinner { animation: none; } }
+.exact-values { font-size: 12px; color: #475467; }
+.exact-values summary { cursor: pointer; }
+.exact-values ul { margin: 4px 0 0; padding-left: 18px; }
+.exact-values code { overflow-wrap: anywhere; }

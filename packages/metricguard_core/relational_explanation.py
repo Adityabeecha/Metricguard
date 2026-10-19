@@ -41,6 +41,9 @@ def predicate_states(ir, row, contract):
 
 def explain_row(context, row):
     """Describe a validated fact row without inferring missing source values."""
+    if context['contract'].get('version') == 2:
+        from .relational_star import explain_row as explain_star_row
+        return explain_star_row(context, row)
     explanation = {'fact_key': row['fact_key'], 'join_membership': row['join_membership']}
     for side in SIDES:
         ir = context[side]

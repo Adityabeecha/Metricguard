@@ -7,6 +7,9 @@ COPY services/supervisor /app/services/supervisor
 # The root file system is read-only at run time, so compile bytecode at build time:
 # otherwise every job recompiles the engine before it can start.
 RUN python -m compileall -q /app/packages /app/services
+# Scratch for temporary evidence files. The launcher mounts a fresh anonymous volume here,
+# which copies this owner, so the runner user can write it on a read-only root file system.
+RUN mkdir -p /job/scratch && chown 10001:10001 /job/scratch
 ENV PYTHONPATH=/app
 USER 10001:10001
 ENTRYPOINT ["python", "-m", "services.supervisor.runner"]

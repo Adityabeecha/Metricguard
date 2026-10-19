@@ -1,3 +1,4 @@
+import { resultUnit, resultDisplayValue, valueWithUnit } from './resultSummary';
 import {
   AlertCircle,
   ArrowRight,
@@ -11,7 +12,6 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import {
-  exact,
   latest,
   versionName,
   type Bootstrap,
@@ -102,8 +102,8 @@ export function Dashboard({
       badgeTone: 'attention',
       title: `${baseName} → ${targetName}`,
       subtitle: `${snap?.name || 'Fixed snapshot'} · ${res?.explanation_status?.replaceAll('_', ' ') || 'reconciliation complete'}`,
-      deltaDisplay: delta,
-      currency: res?.currency || (snap as any)?.unit_label || snap?.currency || '',
+      deltaDisplay: resultDisplayValue(res, delta),
+      currency: resultUnit(res, (snap as any)?.unit_label || snap?.currency || ''),
       actionLabel: 'Review and save',
       onAction: () => {
         if (onOpenRun) onOpenRun(r);
@@ -266,7 +266,7 @@ export function Dashboard({
                   <div className="drift-stat">
                     <span className="stat-label">CHANGE (PROPOSED − CURRENT)</span>
                     <strong className="stat-value error-text">
-                      {exact(topAttentionItem.deltaDisplay, topAttentionItem.currency)}
+                      {valueWithUnit(topAttentionItem.deltaDisplay, topAttentionItem.currency || '')}
                     </strong>
                     <small>Measured on the same frozen dataset; a negative change is not automatically a loss</small>
                   </div>
@@ -348,7 +348,7 @@ export function Dashboard({
                     {item.deltaDisplay && (
                       <div className="queue-row-metric">
                         <span>DELTA</span>
-                        <strong>{exact(item.deltaDisplay, item.currency)}</strong>
+                        <strong>{valueWithUnit(item.deltaDisplay, item.currency || '')}</strong>
                       </div>
                     )}
                     <div className="queue-row-actions">

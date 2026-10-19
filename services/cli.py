@@ -384,6 +384,7 @@ def execute_headless_comparison(
         relative_threshold=policy.get('relative_threshold'),
         is_intentional_variant=(inputs.relationship == 'intentional_variant'),
         suppress_intentional_variants=policy.get('suppress_intentional_variants', True),
+        exact_ratio=result.get('ratio'),
     )
 
     return _build_report(

@@ -71,7 +71,8 @@ def test_count_and_sum_cannot_be_compared_and_other_counts_are_refused(snapshot)
     c, database, context = snapshot
     with pytest.raises(CoreError, match='same aggregate'):
         compare_flat(database, parse_flat('SELECT SUM(amount) FROM snapshot', c), parse_flat('SELECT COUNT(*) FROM snapshot', c), context)
-    for sql in ['SELECT COUNT(DISTINCT region) FROM snapshot', 'SELECT COUNT(region) FROM snapshot', 'SELECT COUNT(1) FROM snapshot']:
+    # COUNT(DISTINCT column) is supported since 2026-10-18 (tests/test_distinct_and_ratio.py).
+    for sql in ['SELECT COUNT(region) FROM snapshot', 'SELECT COUNT(1) FROM snapshot']:
         with pytest.raises(CoreError, match='Only COUNT'):
             parse_flat(sql, c)
 

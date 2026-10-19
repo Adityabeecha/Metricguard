@@ -66,6 +66,30 @@ print(json.dumps({
     return checks
 
 
+def verify_scratch(launcher: DockerLauncher, work: Path) -> dict:
+    """Large comparisons spool evidence with tempfile; it must fit beyond the 64 MiB in-memory /tmp."""
+    probe = '''import json, tempfile
+with tempfile.TemporaryFile() as f:
+    block = b'x' * (1024 * 1024)
+    for _ in range(200):
+        f.write(block)
+    f.flush()
+    print(json.dumps({'tempdir': tempfile.gettempdir(), 'written_mib': f.tell() // (1024 * 1024)}))'''
+    (work / 'scratch-check' / 'input').mkdir(parents=True)
+    (work / 'scratch-check' / 'output').mkdir()
+    args, _ = launcher.arguments(work / 'scratch-check' / 'input', work / 'scratch-check' / 'output',
+                                 ['--entrypoint', 'python', launcher.image, '-c', probe])
+    volumes = lambda: set(subprocess.run(['docker', 'volume', 'ls', '-q'], check=True, capture_output=True,
+                                         text=True).stdout.split())
+    before = volumes()
+    result = subprocess.run(args, check=True, capture_output=True, text=True, timeout=120)
+    checks = json.loads(result.stdout)
+    assert checks == {'tempdir': '/job/scratch', 'written_mib': 200}, checks
+    checks['scratch_volume_removed'] = not (volumes() - before)
+    assert checks['scratch_volume_removed'], 'the per-job scratch volume outlived its container'
+    return checks
+
+
 def verify_live_runner() -> dict:
     (ROOT / '.test-tmp').mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='live-runner-', dir=ROOT / '.test-tmp',
@@ -262,7 +286,8 @@ def verify_live_runner() -> dict:
         worker.store.engine.dispose()
         client.app.state.store.engine.dispose()
         report = {'method': 'live_docker_supervisor', 'image': launcher.image,
-                  'checks': checks, 'isolation': verify_isolation(launcher.image)}
+                  'checks': checks, 'isolation': verify_isolation(launcher.image),
+                  'scratch': verify_scratch(launcher, work)}
         return report
 
 

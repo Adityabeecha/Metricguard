@@ -255,6 +255,15 @@ metric_diff_reports = Table('metric_diff_reports', metadata,
 
 
 
+def _with_flat_policy(snapshot):
+    """Warehouse snapshots recorded before 2026-10-18 lack the execution policy their manifest declares."""
+    manifest = snapshot.get('manifest') or {}
+    if (not snapshot.get('execution_policy') and manifest.get('mode') == 'flat_snapshot' and
+            manifest.get('execution_policy') == 'flat_snapshot_v1'):
+        return {**snapshot, 'execution_policy': 'flat_snapshot_v1'}
+    return snapshot
+
+
 class Store(MetricContractStoreMixin, RelationalStoreMixin):
     project_id = 'local-retail'
 
@@ -322,7 +331,7 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
 
     def snapshot(self, ident):
         row = self._row(snapshots, ident)
-        return {**row['data'], 'project_id': row['project_id']}
+        return _with_flat_policy({**row['data'], 'project_id': row['project_id']})
 
     def _record_of_kind(self, ident, kind):
         row = self._row(records, ident)
@@ -355,6 +364,29 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                 kind='flat_contract', created_at=item['created_at'], data=item))
         return item
 
+    def _definition_on(self, conn, ident):
+        row = dict(conn.execute(select(definitions).where(definitions.c.id == ident)).mappings().one())
+        row['versions'] = [r['data'] for r in conn.execute(select(versions).where(
+            versions.c.definition_id == ident).order_by(versions.c.version_number)).mappings()]
+        return row
+
+    def _same_snapshot_definition(self, conn, pid, contract_id, execution_policy, raw_sql):
+        """The definition that already holds this exact SQL for this snapshot contract, if any.
+
+        Guided comparisons register a calculation per run; repeating a comparison must reuse it, not
+        add another definition. Locks the project row so concurrent identical requests serialize."""
+        conn.execute(update(projects).where(projects.c.id == pid).values(name=projects.c.name))
+        raw_hash = hashlib.sha256(raw_sql.encode()).hexdigest()
+        rows = conn.execute(select(versions.c.definition_id, versions.c.data).join(
+            definitions, definitions.c.id == versions.c.definition_id).where(definitions.c.project_id == pid)
+            .order_by(definitions.c.created_at)).mappings()
+        for row in rows:
+            data = row['data']
+            if (data.get('contract_id') == contract_id and data.get('execution_policy') == execution_policy
+                    and data.get('raw_hash') == raw_hash and data.get('support_state') == 'executable'):
+                return row['definition_id']
+        return None
+
     def record_flat_definition(self, name, raw_sql, contract_id, project_id=None):
         from packages.metricguard_core.flat import parse_flat
 
@@ -364,6 +396,9 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                     if key not in {'id', 'created_at', 'version_number', 'project_id'}}
         ir = parse_flat(raw_sql, contract)
         with self.engine.begin() as conn:
+            existing = self._same_snapshot_definition(conn, pid, contract_id, 'flat_snapshot_v1', raw_sql)
+            if existing:
+                return self._definition_on(conn, existing)
             if len(conn.execute(select(definitions.c.id).where(definitions.c.project_id == pid)).all()) >= 100:
                 raise DomainError('IMPORT_LIMIT', 'This local project supports at most 100 definitions.')
             definition_id, version_id = str(uuid4()), str(uuid4())
@@ -402,7 +437,8 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                 'baseline_version_id': run['baseline_version_id'],
                 'target_version_id': run['target_version_id'],
                 'context': run['context'], 'relationship': run['relationship'],
-                'review_status': 'recorded_locally', 'project_id': pid}
+                'review_status': 'recorded_locally', 'project_id': pid,
+                **({'target_snapshot_id': run['target_snapshot_id']} if run.get('target_snapshot_id') else {})}
         if run.get('execution_policy') == 'relational_snapshot_v1':
             provenance = run['result']['provenance']
             item.update(execution_policy='relational_snapshot_v1', contract_hash=snapshot['contract_hash'],
@@ -568,6 +604,13 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                 from packages.metricguard_core.relational_snapshot import validate_manifest
                 validate_manifest(manifest, manifest['contract'])
                 data.update(execution_policy='relational_snapshot_v1', currency=None, timezone=None, cutoff_at=None)
+            elif manifest.get('mode') == 'flat_snapshot' and manifest.get('execution_policy') == 'flat_snapshot_v1':
+                # Single-table warehouse extracts: the same policy as an uploaded file, so they can be compared.
+                from packages.metricguard_core.flat import validate_contract
+                contract = validate_contract(manifest['contract'])
+                if contract['contract_hash'] != manifest.get('contract_hash'):
+                    raise DomainError('SNAPSHOT_INTEGRITY', 'Collected snapshot contract hash differs from its contract.')
+                data.update(execution_policy='flat_snapshot_v1', currency=None)
             conn.execute(insert(snapshots).values(id=data['id'], project_id=pid, manifest_hash=data['manifest_hash'], data=data))
         return data
 
@@ -751,7 +794,8 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
             if row is None:
                 return False
             state = 'canceled' if row['cancel_requested'] else ('failed' if error or result is None else (
-                'succeeded' if result.get('explanation_status') in {'complete_ordered_bridge', 'complete_eligibility_change', 'complete_case_definition_change', 'complete_join_filter_change'} else 'partial'))
+                'succeeded' if result.get('explanation_status') in {'complete_ordered_bridge', 'complete_eligibility_change', 'complete_case_definition_change', 'complete_join_filter_change',
+                                                                       'complete_entity_membership_change', 'complete_ratio_bridge', 'complete_snapshot_change'} else 'partial'))
             changed = conn.execute(update(runs).where(condition).values(state=state, result=result if state in ('succeeded', 'partial') else None,
                 error=error, completed_at=now(), lease_expires_at=None))
             return bool(changed.rowcount)
@@ -783,10 +827,10 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
             conn.execute(insert(records).values(id=value['id'], project_id=pid, kind=kind, created_at=value['created_at'], data=value))
         return value
 
-    def evidence_context(self, run_id: str, attempt: int) -> dict | None:
-        """The record-context file registered for one run attempt, if the runner produced one."""
+    def evidence_context(self, run_id: str, attempt: int, kind: str = 'evidence_context') -> dict | None:
+        """The record-context (or, with kind='evidence_members', membership) file registered for one run attempt."""
         with self.engine.connect() as conn:
-            for row in conn.execute(select(records).where(records.c.kind == 'evidence_context')).mappings():
+            for row in conn.execute(select(records).where(records.c.kind == kind)).mappings():
                 data = row['data']
                 if data.get('run_id') == run_id and data.get('attempt') == attempt:
                     return data
@@ -809,7 +853,7 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
         pid = project_id or self.project_id
         with self.engine.connect() as conn:
             ids = list(conn.execute(select(definitions.c.id).where(definitions.c.project_id == pid).order_by(definitions.c.created_at)).scalars())
-            snapshot_list = [{**r['data'], 'project_id': r['project_id']} for r in conn.execute(select(snapshots).where(snapshots.c.project_id == pid).order_by(snapshots.c.id)).mappings()]
+            snapshot_list = [_with_flat_policy({**r['data'], 'project_id': r['project_id']}) for r in conn.execute(select(snapshots).where(snapshots.c.project_id == pid).order_by(snapshots.c.id)).mappings()]
             run_list = [self._run(r) for r in conn.execute(select(runs).where(runs.c.project_id == pid).order_by(runs.c.created_at.desc()).limit(100)).mappings()]
             all_records = list(conn.execute(select(records).where(records.c.project_id == pid).order_by(records.c.created_at.desc())).mappings())
         snapshot_import_list = [item for item in self.list_imports(pid) if item['metadata'].get('purpose') != 'preview']
@@ -2584,6 +2628,7 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
             target_val_str=target_val_str,
             absolute_threshold=abs_thresh,
             relative_threshold=rel_thresh,
+            exact_ratio=raw_result.get('ratio'),
         )
 
         run_id = f"run-impact-{uuid4().hex}"
@@ -3468,7 +3513,25 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
         pid = project_id or self.project_id
         self.get_project(pid)
 
-        draft_id = payload.get('id') or f"draft-{uuid4().hex}"
+        retry_key = payload.get('idempotency_key')
+        if retry_key is not None and (not isinstance(retry_key, str) or not 1 <= len(retry_key) <= 160):
+            raise DomainError('INVALID_IDEMPOTENCY_KEY', 'Draft retry key must contain 1 to 160 characters.')
+        draft_id = ('draft-' + fingerprint({'project': pid, 'actor': created_by, 'key': retry_key})
+                    if retry_key else payload.get('id') or f"draft-{uuid4().hex}")
+        if retry_key:
+            with self.engine.connect() as conn:
+                existing = conn.execute(select(records.c.data).where(records.c.id == draft_id,
+                    records.c.project_id == pid, records.c.kind == 'investigation_draft')).scalar_one_or_none()
+                if existing is not None:
+                    return existing
+        run_id = payload.get('comparison_run_id')
+        if run_id and payload.get('origin') != 'ci':
+            # One open draft per comparison run: a repeated comparison resumes it instead of adding another.
+            with self.engine.connect() as conn:
+                for existing in conn.execute(select(records.c.data).where(records.c.project_id == pid,
+                        records.c.kind == 'investigation_draft').order_by(records.c.created_at)).scalars():
+                    if existing.get('comparison_run_id') == run_id and existing.get('origin') != 'ci':
+                        return existing
         current_time = now()
         token = uuid4().hex[:12]
 
@@ -3500,14 +3563,19 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
             if k not in item:
                 item[k] = v
 
-        with self.engine.begin() as conn:
-            conn.execute(insert(records).values(
-                id=draft_id,
-                project_id=pid,
-                kind='investigation_draft',
-                created_at=current_time,
-                data=item,
-            ))
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(insert(records).values(
+                    id=draft_id,
+                    project_id=pid,
+                    kind='investigation_draft',
+                    created_at=current_time,
+                    data=item,
+                ))
+        except IntegrityError:
+            if not retry_key:
+                raise
+            return self.get_investigation_draft(draft_id, project_id=pid)
         return item
 
     def get_investigation_draft(self, draft_id: str, project_id: str | None = None) -> dict:

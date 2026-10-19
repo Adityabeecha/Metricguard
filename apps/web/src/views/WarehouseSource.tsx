@@ -28,6 +28,8 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
   const [precision, setPrecision] = useState(18);
   const [scale, setScale] = useState(2);
   const [unit, setUnit] = useState('');
+  // Optional further amount columns, "cost" or "units:pieces" (name, or name:unit).
+  const [moreAmounts, setMoreAmounts] = useState('');
   const [filters, setFilters] = useState<FilterCol[]>([{ name: '', type: 'string' }]);
   const [cutoffColumn, setCutoffColumn] = useState('');
   const [cutoffValue, setCutoffValue] = useState(new Date().toISOString().slice(0, 10));
@@ -38,12 +40,21 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
   const [done, setDone] = useState('');
 
   const named = filters.filter(f => f.name.trim());
+  const extras = moreAmounts.split(',').map(x => x.trim()).filter(Boolean).map(x => {
+    const [name, ...rest] = x.split(':');
+    return { name: name.trim(), unit: rest.join(':').trim() || unit.trim() };
+  });
   const blocker = !uri.trim() ? 'Enter the connection string.'
     : !IDENT.test(schema) || !IDENT.test(table) ? 'Enter a valid schema and table name.'
     : !IDENT.test(key) ? 'Enter the column that uniquely identifies each row.'
     : !IDENT.test(amount) || amount === key ? 'Enter the amount column to total (different from the key).'
     : !unit.trim() ? 'Enter the unit of the amount.'
-    : named.some(f => !IDENT.test(f.name) || f.name === key || f.name === amount) ? 'Filter columns must be valid names, different from the key and amount.'
+    : !Number.isInteger(precision) || precision < 1 || precision > 38 ? 'Decimal precision must be a whole number from 1 to 38.'
+    : !Number.isInteger(scale) || scale < 0 || scale > 18 || scale > precision ? 'Decimal places must be a whole number from 0 to 18, no greater than precision.'
+    : sample && (!Number.isInteger(sampleRows) || sampleRows < 1 || sampleRows > 5000000) ? 'Sample size must be a whole number from 1 to 5,000,000.'
+    : extras.some(x => !IDENT.test(x.name) || x.name === key || x.name === amount) ? 'Other amount columns must be valid names, different from the key and the main amount.'
+    : new Set(extras.map(x => x.name)).size !== extras.length || extras.length > 7 ? 'List each other amount column once (at most 7).'
+    : named.some(f => !IDENT.test(f.name) || f.name === key || f.name === amount || extras.some(x => x.name === f.name)) ? 'Filter columns must be valid names, different from the key and amounts.'
     : new Set(named.map(f => f.name)).size !== named.length ? 'Each filter column can be listed once.'
     : !IDENT.test(cutoffColumn) ? 'Enter the date or timestamp column used as the cutoff.'
     : !/^\d{4}-\d{2}-\d{2}/.test(cutoffValue) ? 'Enter a cutoff date like 2026-10-01.'
@@ -53,13 +64,18 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
     setBusy(true); setProblem(null); setDone('');
     try {
       const categories = named.map(f => f.name);
-      const contract = await api.createFlatContract({
-        version: 5, predicate_policy: 'flat-boolean-v1', mode: 'flat_snapshot',
-        name: `${schema}.${table}`, row_key: key, measure: amount, precision, scale, categories,
+      const common = {
+        predicate_policy: 'flat-boolean-v1', mode: 'flat_snapshot', name: `${schema}.${table}`, row_key: key, scale, categories,
         dimension_types: Object.fromEntries(named.map(f => [f.name, f.type])), nullable_categories: categories,
-        measure_meaning: `${amount} from ${schema}.${table}`, unit_label: unit.trim(), values_comparable: true,
-        scope: 'entire_supplied_snapshot', null_policy: 'native_null',
-      }) as FlatContract;
+        measure_meaning: `${[amount, ...extras.map(x => x.name)].join(', ')} from ${schema}.${table}`, unit_label: unit.trim(),
+        values_comparable: true, scope: 'entire_supplied_snapshot', null_policy: 'native_null',
+      };
+      // Several amounts register a v8 dataset (totals of any one, ratios such as margin %).
+      const contract = await api.createFlatContract(extras.length ? {
+        ...common, version: 8, measure_policy: 'flat-multi-measure-v1',
+        decimal_columns: [{ name: amount, precision, scale, unit_label: unit.trim() },
+                          ...extras.map(x => ({ name: x.name, precision, scale, unit_label: x.unit }))],
+      } : { ...common, version: 5, measure: amount, precision }) as FlatContract;
       const extraction = await api.post<{ snapshot_id?: string; row_count?: number; state?: string; error?: { message?: string } }>(
         `/projects/${encodeURIComponent(workspaceId)}/sources/postgres/extract`, {
           source_uri: uri.trim(), schema_name: schema, table_name: table, contract_id: contract.id,
@@ -82,7 +98,7 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
   return (
     <div className="guided-card" aria-labelledby="warehouse-title">
       <h2 id="warehouse-title">Use a PostgreSQL table</h2>
-      <p className="lead">MetricGuard reads the table once, read-only and in a single consistent transaction, and freezes the rows up to your cutoff as a dataset. Start with a sample to check your answers, then take the full table (up to 100,000 rows).</p>
+      <p className="lead">MetricGuard reads the table once, read-only and in a single consistent transaction, and freezes the rows up to your cutoff as a dataset. Start with a sample to check your answers, then take the full table (up to 5,000,000 rows). Large datasets support bounded total and record-count comparisons; distinct counts and ratios require at most 100,000 rows.</p>
       <label>Connection string
         <input type="password" autoComplete="off" spellCheck={false} value={uri} onChange={e => setUri(e.target.value)} placeholder="postgresql://user:password@host:5432/database" />
         <span className="example">Used for this request only. It is never saved; the dataset records the connection with the password removed. Use a read-only database user.</span>
@@ -94,6 +110,8 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
           <label>Which column uniquely identifies each row?<input value={key} onChange={e => setKey(e.target.value)} placeholder="order_id" /></label>
           <label>Which amount do you want to total?<input value={amount} onChange={e => setAmount(e.target.value)} placeholder="sales_amount" /></label>
           <label>What unit does that amount use?<input value={unit} onChange={e => setUnit(e.target.value)} placeholder="INR, USD, points" /></label>
+          <label>Other amount columns (optional)<input value={moreAmounts} onChange={e => setMoreAmounts(e.target.value)} placeholder="cost, units:pieces" />
+            <span className="example">For ratios such as margin % or revenue per unit. Same unit as above unless written as name:unit; same decimal places.</span></label>
         </div>
         <div className="calc-card">
           <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 6 }}>
@@ -118,7 +136,7 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
         <div className="calc-grid" style={{ marginTop: 8 }}>
           <label>Decimal precision<input type="number" min={1} max={38} value={precision} onChange={e => setPrecision(Number(e.target.value))} /></label>
           <label>Decimal places<input type="number" min={0} max={18} value={scale} onChange={e => setScale(Number(e.target.value))} /></label>
-          <label>Sample size<input type="number" min={1} max={100000} value={sampleRows} onChange={e => setSampleRows(Number(e.target.value))} /></label>
+          <label>Sample size<input type="number" min={1} max={5000000} value={sampleRows} onChange={e => setSampleRows(Number(e.target.value))} /></label>
         </div>
       </details>
       <label className="checkbox-field-standard"><input type="checkbox" checked={sample} onChange={e => setSample(e.target.checked)} /> <span>Take a sample first ({sampleRows.toLocaleString()} rows by key)</span></label>

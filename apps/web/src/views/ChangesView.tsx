@@ -1,3 +1,4 @@
+import { resultUnit, resultDisplayValue, valueWithUnit } from '../resultSummary';
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -21,7 +22,6 @@ import {
 } from 'lucide-react';
 import {
   api,
-  exact,
   type AffectedMetricDiffItem,
   type Bootstrap,
   type DbtChangeSet,
@@ -42,7 +42,7 @@ import { isDefinedComparison, isExactZero } from '../investigationUtils';
 // Preserve the backend's fixed-point string rather than round it through Number.
 function formatDelta(value: string | null | undefined, currency = ''): string {
   if (value == null) return 'Unavailable';
-  return `${!isExactZero(value) && !value.startsWith('-') && !value.startsWith('+') ? '+' : ''}${exact(value, currency)}`;
+  return `${!isExactZero(value) && !value.startsWith('-') && !value.startsWith('+') ? '+' : ''}${valueWithUnit(value, currency)}`;
 }
 
 interface ChangesViewProps {
@@ -74,6 +74,28 @@ export function ChangesView({
 
   // Active diff report detail
   const [activeDiff, setActiveDiff] = useState<MetricDiffReport | null>(null);
+  const [diffRuns, setDiffRuns] = useState<Record<string, Run>>({});
+  useEffect(() => {
+    let active = true;
+    setDiffRuns({});
+    const ids = new Set((activeDiff?.metrics || []).flatMap(m => [
+      m.comparison_run_id, m.primary_impact?.run_id,
+      m.approved_baseline_impact?.run_id, m.incremental_impact?.run_id,
+    ]).filter((id): id is string => Boolean(id)));
+    // Bootstrap contains recent runs only. Older diff reports need their frozen
+    // results too; never substitute the snapshot's amount unit for missing data.
+    void (async () => {
+      for (const id of ids) {
+        if (!active) return;
+        if (runs.some(r => r.id === id)) continue;
+        try {
+          const run = await api.run(id);
+          if (active) setDiffRuns(previous => ({ ...previous, [id]: run }));
+        } catch { /* Leave the unit unspecified when the saved run is unavailable. */ }
+      }
+    })();
+    return () => { active = false; };
+  }, [activeDiff, data.runs, workspaceId]);
   const [loadingDiff, setLoadingDiff] = useState(false);
   const [diffLoadError, setDiffLoadError] = useState('');
 
@@ -384,7 +406,7 @@ export function ChangesView({
     const snapName = snap?.name || `Snapshot ${activeDiff.snapshot_id.slice(0, 10)}`;
     const baseLabel = formatRevisionLabel(activeDiff.baseline_revision_id, activeDiff.source_metadata?.baseline);
     const targetLabel = formatRevisionLabel(activeDiff.target_revision_id, activeDiff.source_metadata?.target);
-    const currency = snap?.unit_label || snap?.currency || '';
+    const declaredUnit = snap?.unit_label || snap?.currency || '';
 
     const hasRefusals = activeDiff.counts.refused_metrics > 0;
     const hasMaterial = activeDiff.counts.material_metrics > 0;
@@ -566,6 +588,10 @@ export function ChangesView({
             const incrementalImpact = m.incremental_impact || m.primary_impact;
             const incrementalDelta = incrementalImpact?.exact_delta;
             const incrementalPct = incrementalImpact?.relative_change_percent;
+            const metricRunId = approvedImpact?.run_id || incrementalImpact?.run_id || m.comparison_run_id;
+            const metricResult = runs.find(r => r.id === metricRunId)?.result || (metricRunId ? diffRuns[metricRunId]?.result : null);
+            const currency = metricResult ? resultUnit(metricResult, declaredUnit) : '';
+            const metricValue = (value: string | null | undefined) => resultDisplayValue(metricResult, value);
 
             const isExpandedRefusal = Boolean(expandedRefusalIds[m.metric_id]);
 
@@ -627,7 +653,7 @@ export function ChangesView({
                           <span className="step-label">{step.label}</span>
                           <span className={`step-value ${!step.isAvailable ? 'unavailable' : ''}`}>
                             {step.isAvailable && step.value != null
-                              ? exact(step.value, currency)
+                              ? valueWithUnit(metricValue(step.value), metricResult?.ratio?.unit === 'share' ? '%' : currency)
                               : !step.isAvailable
                               ? 'No approved version'
                               : 'Unavailable'}
@@ -640,9 +666,9 @@ export function ChangesView({
                         <div className="version-path-connector">
                           <span className="connector-badge">
                             {idx === 0 && m.has_approved_baseline && approvedDelta
-                              ? formatDelta(approvedDelta, currency)
+                              ? formatDelta(metricValue(approvedDelta), currency)
                               : idx > 0 && incrementalDelta
-                              ? formatDelta(incrementalDelta, currency)
+                              ? formatDelta(metricValue(incrementalDelta), currency)
                               : '→'}
                           </span>
                         </div>
@@ -668,7 +694,7 @@ export function ChangesView({
                       <div className="impact-delta-row">
                         <span className="impact-delta-val">
                           {m.has_approved_baseline && approvedDelta != null
-                            ? formatDelta(approvedDelta, currency)
+                            ? formatDelta(metricValue(approvedDelta), currency)
                             : 'Not available'}
                         </span>
                         {m.has_approved_baseline && approvedPct && (
@@ -703,7 +729,7 @@ export function ChangesView({
                       <div className="impact-delta-row">
                         <span className="impact-delta-val">
                           {incrementalDelta != null
-                            ? formatDelta(incrementalDelta, currency)
+                            ? formatDelta(metricValue(incrementalDelta), currency)
                             : 'Unavailable'}
                         </span>
                         {incrementalPct && (
@@ -1224,7 +1250,7 @@ export function ChangesView({
                   <div className="queue-row-main">
                     <div className="queue-row-top">
                       <span className={`badge ${hasDelta ? 'critical' : 'attention'}`}>
-                        {!res ? r.state : !defined ? 'Gap unavailable (undefined SUM)' : hasDelta ? 'Drift detected' : 'Agreement'}
+                        {!res ? r.state : !defined ? 'Gap unavailable (undefined SUM)' : hasDelta ? 'Differs' : 'Agreement'}
                       </span>
                       <strong>
                         Run {r.id.slice(0, 8)}…
@@ -1238,7 +1264,7 @@ export function ChangesView({
                     <div className="queue-row-metric">
                       <span>DELTA</span>
                       <strong style={{ color: hasDelta ? '#D92D20' : '#245BFF' }}>
-                        {defined ? formatDelta(delta, res.currency) : 'Unavailable'}
+                        {defined ? formatDelta(resultDisplayValue(res, delta), resultUnit(res, snap?.unit_label || snap?.currency || '')) : 'Unavailable'}
                       </strong>
                     </div>
                   )}

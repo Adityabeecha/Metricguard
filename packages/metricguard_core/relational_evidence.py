@@ -25,6 +25,10 @@ def binding(context):
 
 
 def validate_result(result, context):
+    if context['contract'].get('version') in (2, 3):
+        from .relational_star import validate_result as validate_star_result
+        binding(context)
+        return validate_star_result(result, context)
     c, manifest = context['contract'], context['manifest']
     binding(context)
     a, b = context['baseline'], context['target']
@@ -57,7 +61,16 @@ def validate_result(result, context):
             raise ValueError('RELATIONAL_RESULT_INVALID')
 
 
-class RelationalEvidenceValidator:
+def RelationalEvidenceValidator(context, *, include_join_evidence=False):
+    """Row validator for the snapshot's contract version (one lookup table, or several)."""
+    binding(context)
+    if context['contract'].get('version') in (2, 3):
+        from .relational_star import EvidenceValidator
+        return EvidenceValidator(context, include_join_evidence=include_join_evidence)
+    return _OneLookupEvidenceValidator(context, include_join_evidence=include_join_evidence)
+
+
+class _OneLookupEvidenceValidator:
     def __init__(self, context, *, include_join_evidence=False):
         binding(context)
         self.context = context

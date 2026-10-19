@@ -38,6 +38,9 @@ class RelationalStoreMixin:
         contract = {k: v for k, v in record.items() if k not in {'id', 'created_at', 'project_id', 'version_number'}}
         ir = parse_relational(raw_sql, contract)
         with self.engine.begin() as conn:
+            existing = self._same_snapshot_definition(conn, pid, contract_id, EXECUTION_POLICY, raw_sql)
+            if existing:
+                return self._definition_on(conn, existing)
             if len(conn.execute(select(definitions.c.id).where(definitions.c.project_id == pid)).all()) >= 100:
                 raise DomainError('IMPORT_LIMIT', 'Workspace supports at most 100 definitions.')
             did, vid = str(uuid4()), str(uuid4())

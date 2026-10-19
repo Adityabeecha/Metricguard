@@ -5,12 +5,14 @@ to eliminate floating-point and Decimal precision-truncation vulnerabilities
 during evidence and comparison validation.
 """
 
+import re
 from decimal import Decimal
 from typing import Iterable, Union
 
 
 MAX_NUMERIC_STR_LEN = 128
 MAX_NUMERIC_SCALE = 38
+_PLAIN_DECIMAL = re.compile(r'(-?)([0-9]+)(?:\.([0-9]+))?')
 
 
 def parse_fixed_point(
@@ -52,6 +54,17 @@ def parse_fixed_point(
       ValueError with structured messages ('invalid numeric representation',
       'nonfinite numeric value', or 'invalid numeric value').
     """
+    # Fast path for the plain forms evidence uses ("-12.50", "3"): ASCII digits, an
+    # optional leading minus and an optional fraction. It returns exactly what the
+    # general path below returns for these inputs; everything else goes through it.
+    if type(val) is str and len(val) <= max_len:
+        match = _PLAIN_DECIMAL.fullmatch(val)
+        if match is not None:
+            negative, whole, fraction = match.groups()
+            scale = len(fraction) if fraction is not None else 0
+            if max_scale is None or scale <= max_scale:
+                coeff = int(whole + fraction) if fraction is not None else int(whole)
+                return (-coeff if negative else coeff), scale
     if not isinstance(val, str):
         raise ValueError("invalid numeric representation")
     if not val or len(val) > max_len:

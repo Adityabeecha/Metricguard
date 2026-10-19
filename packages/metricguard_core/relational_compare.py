@@ -14,6 +14,9 @@ from .relational_snapshot import open_snapshot, verify_database, join_sql
 
 def compare_relational(database, baseline, target, context):
     c, manifest = open_snapshot(database)
+    if c['version'] in (2, 3):  # several lookup tables
+        from .relational_star import compare
+        return compare(database, c, manifest, baseline, target, context)
     baseline, target = validate_ir(baseline, c), validate_ir(target, c)
     if context != context_for(c):
         fail('not_comparable', 'Use the exact frozen whole-snapshot scope and unit context.')

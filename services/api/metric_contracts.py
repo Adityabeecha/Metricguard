@@ -78,6 +78,28 @@ def _rows(conn, table, kind, pid, mid):
                                      table.c.data['metric_id'].as_string() == mid)
 
 
+def _flat_metric_unit(dataset, ir):
+    """Metric output units come from its frozen expression, not the first amount."""
+    def amount_unit(name):
+        if dataset.get('version') == 8:
+            return next((c.get('unit_label') for c in dataset.get('decimal_columns', []) if c['name'] == name), None)
+        return dataset.get('unit_label')
+
+    aggregate = ir.get('aggregate')
+    if aggregate in ('count', 'count_distinct'):
+        return 'count'
+    if aggregate == 'ratio':
+        numerator, denominator = ir['numerator'], ir['denominator']
+        top = 'count' if numerator['aggregate'] == 'count' else amount_unit(numerator['measure'])
+        bottom = 'record' if denominator['aggregate'] == 'count' else amount_unit(denominator['measure'])
+        if any(not unit or unit.lower() in ('unknown', 'unknown currency', 'unspecified') for unit in (top, bottom)):
+            return None
+        if (numerator['aggregate'] == denominator['aggregate'] == 'count') or top == bottom:
+            return 'share'
+        return f'{top} per {bottom}'
+    return amount_unit(ir.get('measure'))
+
+
 def _metadata_checks(revision, metric, version, definition, snapshot, binding):
     expected = revision['expectations']
     source = expected['source_expectations']
@@ -113,6 +135,8 @@ def _metadata_checks(revision, metric, version, definition, snapshot, binding):
 
     # Use the original flat declaration, never the compatibility currency field.
     unit = (dataset.get('unit_label') or manifest.get('unit_label')) if actual_mode == 'flat_snapshot' else dataset.get('currency') or manifest.get('currency') or snapshot.get('currency')
+    if actual_mode == 'flat_snapshot':
+        unit = _flat_metric_unit(dataset, version.get('ir') or {})
     if actual_mode == 'retail' and (version.get('ir') or {}).get('aggregate') in ('count', 'count_distinct'):
         unit = 'count'
     unknown_unit = not unit or str(unit).lower() in ('unknown', 'unknown currency', 'unspecified')

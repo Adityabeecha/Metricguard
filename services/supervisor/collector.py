@@ -7,6 +7,7 @@ creates an integrity-verified manifest, and atomically publishes it to the Store
 """
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -40,6 +41,26 @@ logger = logging.getLogger(__name__)
 
 IDENTIFIER_REGEX = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]{0,127}\Z')
 MAX_RETAIL_ROWS = 1_000_000
+
+
+
+STAGING_NULL = '__METRICGUARD_COLLECTOR_NULL_7d1e__'
+
+
+def _staged_cell(value, row_number):
+    """One validated value as CSV text for the staging COPY (typed by the DuckDB table)."""
+    if value is None:
+        return STAGING_NULL
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return format(value, 'f')
+    text = str(value)
+    if text == STAGING_NULL:
+        raise CollectorError('INVALID_ROW', f'Row {row_number} contains a reserved value')
+    return text
 
 
 class CollectorError(Exception):
@@ -317,7 +338,7 @@ class PostgresCollector:
             clean_contract = {k: v for k, v in contract.items() if k not in {'id', 'created_at', 'version_number', 'project_id'}}
             validated_contract = validate_flat_contract(clean_contract)
             if validated_contract['version'] in (6, 7):
-                raise CollectorError('UNSUPPORTED_CONTRACT', 'Warehouse extraction supports datasets with one amount column (not subtraction or CASE datasets).')
+                raise CollectorError('UNSUPPORTED_CONTRACT', 'Warehouse extraction supports datasets with plain amount columns (not subtraction or CASE datasets).')
             return {
                 'is_flat': True,
                 'contract': validated_contract,
@@ -364,7 +385,7 @@ class PostgresCollector:
 
         # Determine select projection
         if is_flat:
-            if contract.get('version') == 6:
+            if contract.get('version') in (6, 8):
                 columns_to_select = [contract['row_key'], *[c['name'] for c in contract['decimal_columns']], *contract['categories']]
             else:
                 columns_to_select = [contract['row_key'], contract['measure'], *contract['categories']]
@@ -406,20 +427,19 @@ class PostgresCollector:
         row_count = 0
         max_rows = MAX_FLAT_ROWS if is_flat else selection.row_limit
 
-        # Initialize DuckDB staging table
-        with duckdb.connect(str(staging_db)) as ddb:
+        # Validated rows are staged in a CSV and loaded with one COPY: row-by-row INSERTs
+        # (executemany) take milliseconds per row, i.e. minutes for a large extract.
+        staging_csv = staging_db.with_name(staging_db.name + '.rows.csv')
+        with duckdb.connect(str(staging_db)) as ddb, staging_csv.open('w', encoding='utf-8', newline='') as staged:
+            writer = csv.writer(staged)
             ddb.execute("BEGIN TRANSACTION")
             if is_flat:
                 # Same typed physical schema as a validated file upload (dates, booleans, timestamps).
                 schema = flat_schema(contract)
                 ddb.execute('CREATE TABLE snapshot (' + ', '.join(f'"{name}" {kind}' for name, kind in schema.items()) + ')')
-                insert_placeholders = ', '.join(['?'] * len(columns_to_select))
-                insert_sql = f'INSERT INTO snapshot VALUES ({insert_placeholders})'
             else:
                 col_defs = ', '.join(f'"{name}" {kind}' for name, kind in SCHEMA.items())
                 ddb.execute(f'CREATE TABLE orders ({col_defs})')
-                insert_placeholders = ', '.join(['?'] * len(SCHEMA))
-                insert_sql = f'INSERT INTO orders VALUES ({insert_placeholders})'
 
             try:
                 with conn.cursor(name=cursor_name) as cursor:
@@ -444,10 +464,12 @@ class PostgresCollector:
 
                             validated_batch.append(val_row)
 
-                        ddb.executemany(insert_sql, validated_batch)
+                        writer.writerows([_staged_cell(value, row_count) for value in row] for row in validated_batch)
 
-                # Verify row count in DuckDB
+                # Load every validated row at once, then verify the count in DuckDB.
                 table_name = 'snapshot' if is_flat else 'orders'
+                staged.close()
+                ddb.execute(f"COPY {table_name} FROM ? (FORMAT CSV, HEADER FALSE, NULLSTR '{STAGING_NULL}')", [str(staging_csv)])
                 loaded_count = ddb.execute(f'SELECT COUNT(*) FROM {table_name}').fetchone()[0]
                 if loaded_count != row_count:
                     raise CollectorError('ROW_COUNT_MISMATCH', f"DuckDB row count ({loaded_count}) differs from validated row count ({row_count}).")
@@ -456,6 +478,9 @@ class PostgresCollector:
             except Exception:
                 ddb.execute("ROLLBACK")
                 raise
+            finally:
+                staged.close()
+                staging_csv.unlink(missing_ok=True)
 
         return row_count
 
@@ -553,26 +578,31 @@ class PostgresCollector:
             raise CollectorError('DUPLICATE_KEY', f"Duplicate row_key '{key}' at row {row_number}")
         seen_keys.add(key)
 
-        measure_val = raw_tuple[1]
-        dec_amount = None
-        if measure_val is not None:
-            try:
-                dec = Decimal(str(measure_val))
-            except (InvalidOperation, TypeError):
-                raise CollectorError('INVALID_ROW', f"Invalid decimal measure at row {row_number}")
-            if not dec.is_finite():
-                raise CollectorError('INVALID_ROW', f"Non-finite measure at row {row_number}")
-            digits = dec.as_tuple().digits
-            fractional = max(-dec.as_tuple().exponent, 0)
-            integer = max(len(digits) + dec.as_tuple().exponent, 0)
-            if fractional > contract['scale'] or integer > contract['precision'] - contract['scale']:
-                raise CollectorError('INVALID_ROW', f"Measure exceeds declared DECIMAL({contract['precision']},{contract['scale']}) at row {row_number}")
-            dec_amount = dec
+        specs = (contract['decimal_columns'] if contract.get('version') in (6, 8) else
+                 [{'name': contract['measure'], 'precision': contract['precision'], 'scale': contract['scale']}])
+        amounts = []
+        for offset, spec in enumerate(specs, start=1):
+            measure_val = raw_tuple[offset]
+            dec_amount = None
+            if measure_val is not None:
+                try:
+                    dec = Decimal(str(measure_val))
+                except (InvalidOperation, TypeError):
+                    raise CollectorError('INVALID_ROW', f"Invalid decimal {spec['name']} at row {row_number}")
+                if not dec.is_finite():
+                    raise CollectorError('INVALID_ROW', f"Non-finite {spec['name']} at row {row_number}")
+                digits = dec.as_tuple().digits
+                fractional = max(-dec.as_tuple().exponent, 0)
+                integer = max(len(digits) + dec.as_tuple().exponent, 0)
+                if fractional > spec['scale'] or integer > spec['precision'] - spec['scale']:
+                    raise CollectorError('INVALID_ROW', f"{spec['name']} exceeds declared DECIMAL({spec['precision']},{spec['scale']}) at row {row_number}")
+                dec_amount = dec
+            amounts.append(dec_amount)
 
         categories = []
         types = contract.get('dimension_types') or {}
         nullable = set(contract.get('nullable_categories') or contract['categories'])
-        for i, cat_name in enumerate(contract['categories'], start=2):
+        for i, cat_name in enumerate(contract['categories'], start=1 + len(specs)):
             val = raw_tuple[i]
             kind = types.get(cat_name, 'string') if contract['version'] >= 4 else 'string'
             if val is None:
@@ -597,7 +627,7 @@ class PostgresCollector:
                     raise CollectorError('INVALID_ROW', f"Category '{cat_name}' exceeds 256 chars at row {row_number}")
                 categories.append(val_str)
 
-        return (key, dec_amount, *categories)
+        return (key, *amounts, *categories)
 
     def _build_manifest(
         self,

@@ -71,6 +71,10 @@ def test_docker_launch_enforces_isolation_at_process_boundary(monkeypatch, tmp_p
                  ['--memory', '1g'], ['--cpus', '1'], ['--pids-limit', '64']):
         assert all(item in args for item in pair)
     assert 'metricguard-runner:1.0' in args
+    # Temporary files go to a fresh disk-backed volume, not the 64 MiB in-memory /tmp.
+    assert 'type=volume,dst=/job/scratch' in args
+    assert args[args.index('TMPDIR=/job/scratch') - 1] == '--env'
+    assert args.index('TMPDIR=/job/scratch') < args.index('metricguard-runner:1.0')
     assert not any('docker.sock' in item for item in args)
     assert kwargs['stdout'] == -1 and kwargs['stderr'] == -1
     assert args[args.index('--name') + 1].startswith('metricguard-')

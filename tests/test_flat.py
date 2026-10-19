@@ -81,7 +81,10 @@ def test_flat_refuses_values_too_large_for_bounded_evidence(tmp_path):
         ingest_flat(source, tmp_path / 'oversized.duckdb', contract())
 
 
-def test_flat_synthetic_row_boundary_is_atomic(tmp_path):
+def test_flat_synthetic_row_boundary_is_atomic(tmp_path, monkeypatch):
+    # The row cap is now 5,000,000; the boundary behaviour is checked at a patched cap of 100,000.
+    import packages.metricguard_core.flat as flat_module
+    monkeypatch.setattr(flat_module, 'MAX_FLAT_ROWS', 100_000)
     for count in (100_000, 100_001):
         source = tmp_path / f'synthetic-{count}.csv'
         with source.open('w', encoding='utf-8', newline='') as stream:

@@ -66,6 +66,14 @@ Presentation and reliability only; engine, contracts, evidence and authorization
 
 Breakdown and record columns: the runner writes an optional, separately hashed record-context file (`services/supervisor/row_context.py`) beside the evidence; the supervisor validates it line-by-line against the evidence keys and registers it (`evidence_context` records). Evidence hashes and replay identity are unchanged. API: `GET /comparisons/{id}/evidence-breakdown?column=` (exact Decimal split), `?with_context=true` on evidence pages. COUNT(*): separate `aggregate: 'count'` in single-table IR (SUM IRs and hashes unchanged; empty COUNT is 0). Warehouse: the PostgreSQL collector now writes the typed `flat_schema`, records the real contract version, validates typed/nullable columns and supports `sample_rows`; guided UI in `views/WarehouseSource.tsx`. Speed: one full evidence verification in the supervisor (copy checked by SHA-256), cached join summaries, precompiled runner image, `METRICGUARD_JOB_DIR` outside synced folders.
 
+## Aggregate, scale and lookup continuation (2026-10-18)
+
+Implementation (acceptance pending) extends `flat.py` through `flat_distinct.py` / `flat_ratio.py` and their evidence validators. Distinct values have entity evidence plus a hashed record membership sidecar; ratios and AVG retain exact fractions and exact numerator/denominator attribution. FlatContract v8 registers 2–8 amounts for margin and cross-amount ratios. The API, collector, guided builder, exports and saved replay use the frozen contracts. Exact materiality and metadata unit checks follow the calculation, not rounded display values or the dataset's first amount.
+
+Bounded scale: streamed flat import up to 5 million records / 512 MiB; above 100,000 records only plain SUM/COUNT(*) with explicitly changed-only evidence (100,000 listed records / 256 MiB maximum), unchanged counts, and bounded exact accumulation. Other aggregate families refuse large snapshots. `relational_star.py` handles relational contract v2: one fact, up to four unique lookups, declared INNER/LEFT joins, 100,000 rows/table and 25 MiB combined. Schema-2 governance covers the selected lookup; further lookup coverage remains unverified/inconclusive. Historical flat/retail and relational-v1 artifacts keep their policies. `evidence_cache.py` bounds cached rows and binds indexed bytes to artifact hashes. `scripts/benchmark_flat_comparisons.py` writes reproducible synthetic timing receipts. See the [design and completion decisions](superpowers/specs/2026-10-18-distinct-and-ratio-design.md). Regression/browser acceptance remains delegated and unexecuted in this pass; no graph refresh was requested.
+
+Speed (same pass): the runner writes evidence, context and membership files with 4 MiB buffers (each small write into a Docker Desktop bind mount is slow on Windows) and no longer re-checks rows the supervisor re-verifies anyway (`write_artifact(check_rows=False)`); ratio arithmetic uses integer coefficients at fixed scales; the supervisor notices container exit within 0.1 s; the API starts the full evidence verification in the background when a finished run is first fetched (`prefetch_evidence`, one verification per artifact via a per-key lock); the PostgreSQL collector stages validated rows in a CSV and loads them with one `COPY` instead of row-by-row `executemany`; `parse_fixed_point` has a regex fast path proven identical to the general path. `scripts/mg.ps1` labels the runner image with a hash of the engine sources and rebuilds it whenever they change. Measured through Docker on Windows (100,000 rows): SUM compare 24 → 7.8 s, AVG 75 → 14.7 s, import 17 → 2.9 s; 1,000,000 rows: import 13 s, SUM compare 9 s.
+
 ## Runtime graph
 
 ```mermaid
@@ -87,6 +95,8 @@ flowchart LR
   Supervisor --> Artifact
   Runner --> Core["Restricted metric core<br/>packages/metricguard_core"]
   Runner --> Flat["Flat-snapshot policy v1<br/>flat.py"]
+  Runner --> FlatChange["Two-load change<br/>flat_change.py"]
+  FlatChange --> Flat
   API --> FlatUI["Flat guided workflow<br/>FlatInvestigations.tsx"]
   FlatUI --> API
   Contracts --> Binder["Source SQL to allowlisted roles<br/>v2_binding.py"]
@@ -107,6 +117,10 @@ The **Flat snapshots** workbench is a separate contract/execution mode. Its immu
 An optional, bounded external-preparation JSON manifest can accompany a flat upload. The API checks its declared prepared-file SHA-256 against uploaded bytes; the runner pins the manifest data and hash in the immutable snapshot, and saved cases pin that hash. Public snapshot and bounded export views expose the source/lineage/script/transform references, while older snapshots show preparation as unavailable. Referenced lineage and original source files remain external and are not independently verified by the application.
 Flat inputs are capped at 100,000 rows, eight categories, 256-character key/category values, and decimal scale 18; the 25 MiB upload cap remains. These bounds keep accepted extracts inside the existing in-memory comparison and evidence limits.
 
+## Two-data-load comparison (2026-10-18)
+
+Implementation (acceptance pending) answers the analyst evaluation's most-asked question: how one metric changed between two loads of the same dataset (for example September vs October). `packages/metricguard_core/flat_change.py` (`flat-snapshot-change-v1`) runs **one** flat SUM or COUNT(*) definition (FlatContract v3/v4/v5/v8; at most 100,000 records per load) on a baseline and a target snapshot. Both snapshots must be pinned to the same `contract_hash`, or the run is refused with `snapshot_contract_mismatch`. Records are joined on the contract row key. Each evidence row keeps the flat row schema plus `baseline_present`, `target_present` and `change` (`added`, `removed`, `value_changed`, `entered_filter`, `left_filter`, `unchanged`). The rows sum exactly to the change, and the result carries `change_summary`. `services/supervisor/evidence_artifact.py` re-derives the change label for every row and rejects presence/value contradictions. The run stays `flat_snapshot_v1`: its context carries `comparison=snapshot_change` plus both manifest hashes, and the request stores `target_snapshot_id`. The worker copies a second, hash-checked `target_snapshot.duckdb`, and the runner verifies its hash and skips the record-context sidecar. API: `POST /api/v1/flat/snapshot-changes[/validate]` (`FlatSnapshotChangeInput`); saved investigations keep `target_snapshot_id` and replay through the same validation. Web: **Start a comparison → Compare two data loads** (`views/SnapshotChange.tsx`); `ResultReport` labels each record's change. Not yet covered: distinct counts, ratios, subtraction, CASE, relational data, loads over 100,000 records, breakdown columns for these runs, and HTML export wording specific to load changes.
+
 ## Find the right file
 
 | Need | Start here |
@@ -115,6 +129,7 @@ Flat inputs are capped at 100,000 rows, eight categories, 256-character key/cate
 | Snapshot validation and ingestion | `packages/metricguard_core/snapshot.py`, `parquet.py`, `tests/test_snapshot_consistency.py`, `tests/test_parquet_ingestion.py` |
 | V2 contract, explicit mapping, bounded preview and mapped CSV/Parquet | `packages/metricguard_core/v2_contract.py`, `tests/test_v2_contract.py`, `tests/test_v2_preview_api.py`, `tests/test_v2_parquet_api.py` |
 | Flat whole-snapshot SUM policy and actual Olist execution | `packages/metricguard_core/flat.py`, `tests/test_flat.py`, `tests/test_flat_workflow.py`, `services/api/app.py`, `services/supervisor/runner.py`, `scripts/verify_flat_olist_live.py` |
+| Same calculation across two data loads | `packages/metricguard_core/flat_change.py`, `services/supervisor/evidence_artifact.py`, `services/api/app.py` (`/flat/snapshot-changes`), `apps/web/src/views/SnapshotChange.tsx`, `tests/test_flat_snapshot_change.py` |
 | V2 SQL binding and hash-pinned context | `packages/metricguard_core/v2_binding.py`, `services/api/store.py`, `tests/test_v2_binding.py`, `tests/test_v2_context.py` |
 | Endpoint totals, row evidence, ordered bridge, Shapley | `packages/metricguard_core/engine.py`, `shapley.py`, `tests/test_core.py`, `tests/test_shapley.py` |
 | API routes, persistence, replay, imports and v2 investigations | `services/api/app.py`, `store.py`, `models.py`, `tests/test_api.py`, `tests/test_workflows.py`, `tests/test_v2_investigations.py` |

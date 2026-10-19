@@ -25,6 +25,17 @@ const initialRelational = (contract: RelationalContract | undefined, join: 'inne
   materiality_policy: { absolute_threshold: null, relative_threshold: null },
 });
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
+/**
+ * Governance (metric-governance-v2) covers one lookup table. For a contract with several
+ * lookup tables (v2), present it as a one-lookup contract for the selected lookup; the
+ * server reports the other lookups as not governed.
+ */
+const lookupView = (contract: RelationalContract, table?: string): RelationalContract => {
+  if (contract.version !== 2 || !contract.dimensions?.length) return contract;
+  const d = contract.dimensions.find(x => x.table === table) || contract.dimensions[0];
+  return { ...contract, dimension: { table: d.table, key: d.key, grain: d.grain, categories: d.categories },
+    relationship: { fact_foreign_key: d.fact_foreign_key, dimension_key: d.key, cardinality: 'many_to_one', missing_dimension_policy: 'preserve_and_report' } };
+};
 const display = (value: unknown) => value === null || value === undefined ? 'Unavailable'
   : typeof value === 'object' ? JSON.stringify(value) : String(value);
 const checkLabel = (status: MetricContractCheck['status']) => ({
@@ -150,8 +161,16 @@ export function MetricContractsPanel({ projectId, metric, definitions, bindings,
   const approvedId = metric.active_binding?.approved_version_id;
   const approvedVersion = choices.find(d => d.id === metric.active_binding?.definition_id)?.versions.find(v => v.id === approvedId) as VersionMeta | undefined;
   const relational = isRelationalVersion(approvedVersion);
-  const registered = relational ? relationalContracts.find(c => c.id === approvedVersion?.contract_id) : undefined;
-  const approvedJoin = (approvedVersion?.ir as { join?: 'inner' | 'left' } | null)?.join;
+  const rawRegistered = relational ? relationalContracts.find(c => c.id === approvedVersion?.contract_id) : undefined;
+  const approvedJoins = (approvedVersion?.ir as { joins?: Record<string, 'inner' | 'left'> } | null)?.joins;
+  // Star contracts: default to the first lookup the approved implementation joins.
+  const defaultLookup = rawRegistered?.version === 2
+    ? rawRegistered.dimensions?.find(d => approvedJoins?.[d.role])?.table : undefined;
+  const lookupTable = editing && rawRegistered?.version === 2 && relForm.dimension.table ? relForm.dimension.table : defaultLookup;
+  const registered = rawRegistered ? lookupView(rawRegistered, lookupTable) : undefined;
+  const selectedRole = rawRegistered?.dimensions?.find(d => d.table === registered?.dimension.table)?.role;
+  const approvedJoin = approvedJoins && selectedRole ? approvedJoins[selectedRole]
+    : (approvedVersion?.ir as { join?: 'inner' | 'left' } | null)?.join;
   const implementationLabel = relational ? 'Relational snapshot (relational_snapshot_v1)'
     : (approvedVersion?.ir as { mode?: string } | null)?.mode === 'flat_snapshot' ? 'Flat snapshot' : approvedVersion ? 'Retail' : 'Unknown';
 
@@ -222,10 +241,16 @@ export function MetricContractsPanel({ projectId, metric, definitions, bindings,
   }
 
   const setTable = (role: 'fact' | 'dimension', table: string) => {
-    if (!registered) return;
-    const cols = tableColumns(registered, table);
-    const key = table === registered.fact.table ? registered.fact.key : table === registered.dimension.table ? registered.dimension.key : '';
+    if (!registered || !rawRegistered) return;
+    const view = role === 'dimension' ? lookupView(rawRegistered, table) : registered;
+    const cols = tableColumns(view, table);
+    const key = table === view.fact.table ? view.fact.key : table === view.dimension.table ? view.dimension.key : '';
     setRelForm(f => ({ ...f, [role]: { ...f[role], table, key: cols.includes(f[role].key) ? f[role].key : key },
+      ...(role === 'dimension' && rawRegistered.version === 2
+        ? { relationship: { ...f.relationship, fact_foreign_key: view.relationship.fact_foreign_key, dimension_key: view.dimension.key,
+              // Allow the join the approved implementation uses for this lookup (or both when it does not join it).
+              allowed_join_kinds: (() => { const role = rawRegistered.dimensions?.find(d => d.table === table)?.role;
+                const kind = role ? approvedJoins?.[role] : undefined; return kind ? [kind] : ['inner', 'left'] as Array<'inner' | 'left'>; })() } } : {}),
       expected_fields: f.expected_fields.filter(x => x.table !== f[role].table) }));
   };
   const toggleField = (table: string, column: string, on: boolean) => setRelForm(f => ({ ...f,
@@ -234,7 +259,8 @@ export function MetricContractsPanel({ projectId, metric, definitions, bindings,
     expected_fields: f.expected_fields.map(x => x.table === table && x.column === column ? { ...x, type } : x) }));
   const toggleJoin = (kind: 'inner' | 'left', on: boolean) => setRelForm(f => ({ ...f, relationship: { ...f.relationship,
     allowed_join_kinds: on ? [...new Set([...f.relationship.allowed_join_kinds, kind])].sort() as Array<'inner' | 'left'> : f.relationship.allowed_join_kinds.filter(k => k !== kind) } }));
-  const registeredTables = registered ? [registered.fact.table, registered.dimension.table] : [];
+  const registeredTables = registered ? [registered.fact.table,
+    ...(rawRegistered?.version === 2 ? (rawRegistered.dimensions || []).map(d => d.table) : [registered.dimension.table])] : [];
   const categorical = registered ? [
     ...registered.fact.categories.map(c => ({ table: registered.fact.table, column: c })),
     ...registered.dimension.categories.map(c => ({ table: registered.dimension.table, column: c }))] : [];

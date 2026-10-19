@@ -4,6 +4,7 @@ import csv
 import hashlib
 import json
 import re
+import shutil
 import tempfile
 import time
 from datetime import date, datetime, timezone
@@ -22,7 +23,16 @@ from .snapshot import MAX_BYTES, manifest_path
 POLICY = 'flat-snapshot-v1'
 MEASURE_POLICY_V6 = 'flat-subtraction-v1'
 MEASURE_POLICY_V7 = 'flat-case-v1'
-MAX_FLAT_ROWS = 100_000
+MEASURE_POLICY_V8 = 'flat-multi-measure-v1'
+MAX_AMOUNT_COLUMNS = 8
+# Snapshots up to FULL_EVIDENCE_ROWS list every record in their evidence, in memory.
+# Larger ones keep evidence in bounded temporary files (disk_evidence): SUM and COUNT(*)
+# list the records whose inclusion changed (every other record contributes identically
+# to both totals); COUNT(DISTINCT) and ratios list every entity or record as usual.
+# Subtraction (v6) and CASE (v7) datasets stay limited to FULL_EVIDENCE_ROWS.
+MAX_FLAT_ROWS = 5_000_000
+FULL_EVIDENCE_ROWS = 100_000
+MAX_FLAT_BYTES = 512 * 1024 * 1024
 NULL_MARKER = '__METRICGUARD_FLAT_NULL_82f3c47a__'
 IDENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,127}\Z')
 DECIMAL = re.compile(r'-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\Z')
@@ -36,6 +46,21 @@ FIELDS_V4 = FIELDS | {'dimension_types'}
 FIELDS_V6 = {'version', 'mode', 'name', 'row_key', 'decimal_columns', 'measure_expression',
              'measure_meaning', 'unit_label', 'scale', 'categories', 'dimension_types', 'values_comparable',
              'scope', 'null_policy', 'measure_policy', 'predicate_policy'}
+# Contract v8: 2-8 independent amount columns (e.g. revenue and cost), each with its own
+# precision, scale and unit, for totals of any one column and ratios between them.
+FIELDS_V8 = FIELDS_V6 - {'measure_expression'}
+
+
+def amount_columns(contract):
+    """Every registered amount column as {name, precision, scale, unit_label}."""
+    if contract['version'] in (6, 8):
+        return contract['decimal_columns']
+    return [{'name': contract['measure'], 'precision': contract['precision'], 'scale': contract['scale'],
+             'unit_label': contract['unit_label']}]
+
+
+def amount_column(contract, name):
+    return next((c for c in amount_columns(contract) if c['name'] == name), None)
 
 
 def _error(code, message):
@@ -80,7 +105,7 @@ def infer_dimension_type(values):
 
 
 def flat_schema(contract):
-    if contract['version'] == 6:
+    if contract['version'] in (6, 8):
         schema = {contract['row_key']: 'VARCHAR'}
         for col in contract['decimal_columns']:
             schema[col['name']] = f"DECIMAL({col['precision']},{col['scale']})"
@@ -120,6 +145,8 @@ def validate_contract(payload):
             req_fields |= {'measure_policy'}
     elif ver == 6:
         req_fields = FIELDS_V6
+    elif ver == 8 and type(ver) is int:
+        req_fields = FIELDS_V8
     else:
         _error('invalid_contract', 'Flat contract version, mode, or scope is unsupported')
 
@@ -128,7 +155,7 @@ def validate_contract(payload):
 
     if ver < 5 and 'predicate_policy' in payload:
         _error('invalid_contract', 'Boolean tree policy requires a new FlatContract v5 snapshot')
-    if ver in (5, 6, 7) and payload.get('predicate_policy') != PREDICATE_POLICY:
+    if ver in (5, 6, 7, 8) and payload.get('predicate_policy') != PREDICATE_POLICY:
         _error('invalid_contract', f'FlatContract v{ver} requires predicate_policy flat-boolean-v1')
     if ver < 6:
         if 'measure_policy' in payload:
@@ -147,6 +174,8 @@ def validate_contract(payload):
 
     if ver == 7 and payload.get('measure_policy') != MEASURE_POLICY_V7:
         _error('invalid_contract', 'FlatContract v7 requires measure_policy flat-case-v1')
+    if ver == 8 and payload.get('measure_policy') != MEASURE_POLICY_V8:
+        _error('invalid_contract', 'FlatContract v8 requires measure_policy flat-multi-measure-v1')
 
     value = {key: payload[key] for key in req_fields}
     if value['mode'] != 'flat_snapshot' or value['scope'] != 'entire_supplied_snapshot':
@@ -157,7 +186,26 @@ def validate_contract(payload):
     if value['values_comparable'] is not True:
         _error('invalid_contract', 'Comparable measure values must be confirmed')
 
-    if ver != 6:
+    if ver == 8:
+        decs = value['decimal_columns']
+        if not isinstance(decs, list) or not 2 <= len(decs) <= MAX_AMOUNT_COLUMNS:
+            _error('invalid_contract', f'FlatContract v8 requires 2 to {MAX_AMOUNT_COLUMNS} amount columns')
+        for col in decs:
+            if not isinstance(col, dict) or set(col) != {'name', 'precision', 'scale', 'unit_label'}:
+                _error('invalid_contract', 'Each amount column must specify name, precision, scale, and unit_label')
+            if not isinstance(col['name'], str) or not IDENT.fullmatch(col['name']) or col['name'] != col['name'].lower():
+                _error('invalid_contract', 'Amount column names must be plain lowercase identifiers')
+            if type(col['precision']) is not int or not 1 <= col['precision'] <= 38:
+                _error('invalid_contract', 'Amount column precision must be an integer between 1 and 38')
+            if type(col['scale']) is not int or not 0 <= col['scale'] <= min(col['precision'], 18):
+                _error('invalid_contract', 'Amount column scale is invalid')
+            if not isinstance(col['unit_label'], str) or not col['unit_label'].strip() or len(col['unit_label']) > 80:
+                _error('invalid_contract', 'Each amount column needs a unit label')
+        if type(value['scale']) is not int or value['scale'] != max(c['scale'] for c in decs):
+            _error('scale_mismatch', 'Contract scale must equal the largest amount-column scale')
+        if value['unit_label'] != decs[0]['unit_label']:
+            _error('invalid_contract', 'Contract unit_label must be the first amount column’s unit')
+    elif ver != 6:
         if type(value['precision']) is not int or type(value['scale']) is not int or not 1 <= value['precision'] <= 38 or not 0 <= value['scale'] <= min(value['precision'], 18):
             _error('invalid_contract', 'Decimal precision and scale are invalid')
     else:
@@ -201,7 +249,7 @@ def validate_contract(payload):
     if not isinstance(value['null_policy'], str) or value['null_policy'] not in {'blank_nullable', 'literal_NULL', 'native_null'}:
         _error('invalid_contract', 'NULL policy is unsupported')
     categories = value['categories']
-    names = [value['row_key']] + ([c0['name'], c1['name']] if ver == 6 else [value['measure']])
+    names = [value['row_key']] + ([c['name'] for c in value['decimal_columns']] if ver in (6, 8) else [value['measure']])
     if not isinstance(categories, list) or len(categories) > 8:
         _error('invalid_contract', 'Register at most 8 categorical fields')
     names += categories
@@ -291,22 +339,82 @@ def validate_preparation(raw: bytes, source_hash: str):
     return {'manifest': value, 'manifest_hash': hashlib.sha256(raw).hexdigest()}
 
 
+class _RowSink:
+    """Streams validated rows into the canonical CSV instead of holding the extract in memory.
+
+    Duplicate keys are tracked in memory for the first FULL_EVIDENCE_ROWS rows (so small
+    extracts report the exact line, as before); beyond that DuckDB checks them after loading.
+    """
+
+    def __init__(self, path, columns, contract):
+        self.path = path
+        self.stream = path.open('w', encoding='utf-8', newline='', buffering=4 * 1024 * 1024)
+        self.writer = csv.writer(self.stream)
+        self.writer.writerow(columns)
+        self.count = 0
+        self.keys = set()
+        self.categories = contract['categories']
+        self.cat_offset = 1 + (len(contract['decimal_columns']) if contract['version'] in (6, 8) else 1)
+        self.nullable = (set(contract['nullable_categories'])
+                         if contract['version'] >= 4 and 'nullable_categories' in contract else None)
+
+    def __len__(self):
+        return self.count
+
+    def seen(self, key):
+        """True if this key already appeared (while tracked); records it otherwise."""
+        if self.keys is None:
+            return False
+        if key in self.keys:
+            return True
+        self.keys.add(key)
+        if len(self.keys) > FULL_EVIDENCE_ROWS:
+            self.keys = None  # large extract: DuckDB checks uniqueness after loading
+        return False
+
+    def append(self, row):
+        if self.nullable is not None:
+            for name, value in zip(self.categories, row[self.cat_offset:]):
+                if value is None and name not in self.nullable:
+                    _error('invalid_row', f'{name} is not nullable at row {self.count + 2}')
+        self.writer.writerow(NULL_MARKER if value is None else value for value in row)
+        self.count += 1
+
+    def close(self):
+        if not self.stream.closed:
+            self.stream.close()
+
+
 def ingest_flat(source, destination, contract, preparation=None):
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    folder = Path(tempfile.mkdtemp(prefix='flat-', dir=destination.parent))
+    sinks = []
+    try:
+        return _ingest_flat(source, destination, contract, preparation, folder, sinks)
+    finally:
+        for sink in sinks:
+            sink.close()
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def _ingest_flat(source, destination, contract, preparation, folder, sinks):
     contract = validate_contract(contract)
     ver = contract['version']
     dim_types = contract.get('dimension_types', {})
     source, destination = Path(source), Path(destination)
     if destination.exists() or manifest_path(destination).exists():
         _error('immutable_snapshot', 'Snapshot destination already exists')
-    if source.stat().st_size > MAX_BYTES:
-        _error('file_too_large', 'Extract exceeds 25 MiB')
+    if source.stat().st_size > MAX_FLAT_BYTES:
+        _error('file_too_large', f'Extract exceeds {MAX_FLAT_BYTES // (1024 * 1024)} MiB')
     source_hash = file_hash(source)
-    if ver == 6:
-        col_a, col_b = contract['decimal_columns'][0]['name'], contract['decimal_columns'][1]['name']
-        columns = [contract['row_key'], col_a, col_b, *contract['categories']]
+    if ver in (6, 8):
+        amount_specs = contract['decimal_columns']
+        columns = [contract['row_key'], *[c['name'] for c in amount_specs], *contract['categories']]
     else:
         columns = [contract['row_key'], contract['measure'], *contract['categories']]
-    rows, keys = [], set()
+    rows = _RowSink(folder / 'validated.csv', columns, contract)
+    sinks.append(rows)
 
     if source.suffix.lower() == '.csv':
         if contract['null_policy'] == 'native_null':
@@ -321,18 +429,16 @@ def ingest_flat(source, destination, contract, preparation=None):
                     if len(rows) >= MAX_FLAT_ROWS: _error('too_many_rows', f'Flat snapshot exceeds {MAX_FLAT_ROWS} rows')
                     if None in raw or any(v is None for v in raw.values()): _error('invalid_row', f'Wrong field count at line {index}')
                     key = _text_value(raw[contract['row_key']], contract['row_key'], index)
-                    if not key or key == token or key in keys: _error('invalid_row', f'Missing or duplicate row key at line {index}')
-                    keys.add(key)
-                    if ver == 6:
-                        va, vb = raw[col_a], raw[col_b]
-                        c0, c1 = contract['decimal_columns'][0], contract['decimal_columns'][1]
-                        amt_a = _amount(None if va == token else va, {**contract, 'precision': c0['precision'], 'scale': c0['scale'], 'measure': col_a}, index)
-                        amt_b = _amount(None if vb == token else vb, {**contract, 'precision': c1['precision'], 'scale': c1['scale'], 'measure': col_b}, index)
+                    if not key or key == token or rows.seen(key): _error('invalid_row', f'Missing or duplicate row key at line {index}')
+                    if ver in (6, 8):
+                        amounts = [_amount(None if raw[c['name']] == token else raw[c['name']],
+                                           {**contract, 'precision': c['precision'], 'scale': c['scale'], 'measure': c['name']}, index)
+                                   for c in amount_specs]
                         cat_vals = [
                             _validate_flat_cell(None if raw[name] == token else raw[name], name, dim_types[name], index)
                             for name in contract['categories']
                         ]
-                        row = (key, amt_a, amt_b, *cat_vals)
+                        row = (key, *amounts, *cat_vals)
                     else:
                         amount = raw[contract['measure']]
                         amount = _amount(None if amount == token else amount, contract, index)
@@ -353,9 +459,10 @@ def ingest_flat(source, destination, contract, preparation=None):
             raise CoreError('invalid_csv', 'Source CSV could not be parsed') from exc
     elif source.suffix.lower() == '.parquet':
         if contract['null_policy'] != 'native_null': _error('invalid_contract', 'Parquet requires native NULL policy')
-        with duckdb.connect(':memory:') as con:
+        with duckdb.connect(':memory:', config={'memory_limit': '512MB', 'threads': '1',
+                                              'temp_directory': str(folder / 'duckdb-tmp')}) as con:
             schema_raw = {r[0]: r[1] for r in con.execute('DESCRIBE SELECT * FROM read_parquet(?)', [str(source.resolve())]).fetchall()}
-            if ver == 6:
+            if ver in (6, 8):
                 TYPE_MAP = {'string': 'VARCHAR', 'boolean': 'BOOLEAN', 'date': 'DATE', 'timestamp': 'TIMESTAMP'}
                 if schema_raw.get(contract['row_key']) != 'VARCHAR':
                     _error('invalid_schema', 'Registered Parquet fields require VARCHAR key')
@@ -370,17 +477,17 @@ def ingest_flat(source, destination, contract, preparation=None):
                         _error('invalid_schema', f'Registered Parquet field {name} requires {exp_type}, got {act_type}')
                 selected = ', '.join(_quote(name) for name in columns)
                 cursor = con.execute(f'SELECT {selected} FROM read_parquet(?)', [str(source.resolve())])
-                c0, c1 = contract['decimal_columns'][0], contract['decimal_columns'][1]
+                width = len(amount_specs)
                 while batch := cursor.fetchmany(10000):
                     for raw in batch:
                         if len(rows) >= MAX_FLAT_ROWS: _error('too_many_rows', f'Flat snapshot exceeds {MAX_FLAT_ROWS} rows')
                         key = _text_value(raw[0], contract['row_key'], len(rows) + 1)
-                        if not key or key in keys: _error('invalid_row', 'Missing or duplicate row key')
-                        keys.add(key)
-                        amt_a = _amount(None if raw[1] is None else format(raw[1], 'f'), {**contract, 'precision': c0['precision'], 'scale': c0['scale'], 'measure': col_a}, len(rows) + 1)
-                        amt_b = _amount(None if raw[2] is None else format(raw[2], 'f'), {**contract, 'precision': c1['precision'], 'scale': c1['scale'], 'measure': col_b}, len(rows) + 1)
+                        if not key or rows.seen(key): _error('invalid_row', 'Missing or duplicate row key')
+                        amounts = [_amount(None if value is None else format(value, 'f'),
+                                           {**contract, 'precision': c['precision'], 'scale': c['scale'], 'measure': c['name']}, len(rows) + 1)
+                                   for c, value in zip(amount_specs, raw[1:1 + width])]
                         cat_vals = []
-                        for name, value in zip(contract['categories'], raw[3:]):
+                        for name, value in zip(contract['categories'], raw[1 + width:]):
                             dt = dim_types[name]
                             if value is None:
                                 norm_val = None
@@ -391,7 +498,7 @@ def ingest_flat(source, destination, contract, preparation=None):
                             else:
                                 norm_val = str(value)
                             cat_vals.append(_validate_flat_cell(norm_val, name, dt, len(rows) + 1))
-                        row = (key, amt_a, amt_b, *cat_vals)
+                        row = (key, *amounts, *cat_vals)
                         if NULL_MARKER in row: _error('invalid_row', 'Source contains reserved NULL marker')
                         rows.append(row)
             else:
@@ -414,8 +521,7 @@ def ingest_flat(source, destination, contract, preparation=None):
                     for raw in batch:
                         if len(rows) >= MAX_FLAT_ROWS: _error('too_many_rows', f'Flat snapshot exceeds {MAX_FLAT_ROWS} rows')
                         key = _text_value(raw[0], contract['row_key'], len(rows) + 1)
-                        if not key or key in keys: _error('invalid_row', 'Missing or duplicate row key')
-                        keys.add(key)
+                        if not key or rows.seen(key): _error('invalid_row', 'Missing or duplicate row key')
                         amount = _amount(None if raw[1] is None else format(raw[1], 'f'), contract, len(rows) + 1)
                         if NULL_MARKER in raw: _error('invalid_row', 'Source contains reserved NULL marker')
                         if ver >= 4:
@@ -439,29 +545,23 @@ def ingest_flat(source, destination, contract, preparation=None):
                         rows.append((key, amount, *cat_vals))
     else:
         _error('invalid_schema', 'Only CSV and Parquet extracts are supported')
+    rows.close()
     if file_hash(source) != source_hash: _error('source_changed', 'Source changed during validation')
-    destination.parent.mkdir(parents=True, exist_ok=True)
 
     schema = flat_schema(contract)
-    if ver >= 4 and 'nullable_categories' in contract:
-        cat_offset = 3 if ver == 6 else 2
-        for index, row in enumerate(rows, 2):
-            for name, value in zip(contract['categories'], row[cat_offset:]):
-                if value is None and name not in contract['nullable_categories']:
-                    _error('invalid_row', f'{name} is not nullable at row {index}')
-
     try:
-        with tempfile.TemporaryDirectory(prefix='flat-', dir=destination.parent) as folder:
-            canonical = Path(folder) / 'validated.csv'
-            with canonical.open('w', encoding='utf-8', newline='') as output:
-                writer = csv.writer(output)
-                writer.writerow(columns)
-                writer.writerows(tuple(NULL_MARKER if value is None else value for value in row) for row in rows)
-            with duckdb.connect(str(destination)) as con:
-                con.execute('CREATE TABLE snapshot (' + ', '.join(_quote(name) + ' ' + kind for name, kind in schema.items()) + ')')
-                con.execute(f"COPY snapshot FROM ? (FORMAT CSV, HEADER TRUE, NULLSTR '{NULL_MARKER}')", [str(canonical)])
-                if con.execute('SELECT COUNT(*) FROM snapshot').fetchone()[0] != len(rows):
-                    _error('source_changed', 'Validated row count differs after loading')
+        canonical = rows.path
+        with duckdb.connect(str(destination), config={'memory_limit': '512MB', 'threads': '1',
+                                                    'temp_directory': str(folder / 'duckdb-tmp')}) as con:
+            con.execute('CREATE TABLE snapshot (' + ', '.join(_quote(name) + ' ' + kind for name, kind in schema.items()) + ')')
+            con.execute(f"COPY snapshot FROM ? (FORMAT CSV, HEADER TRUE, NULLSTR '{NULL_MARKER}')", [str(canonical)])
+            if con.execute('SELECT COUNT(*) FROM snapshot').fetchone()[0] != len(rows):
+                _error('source_changed', 'Validated row count differs after loading')
+            if rows.keys is None:  # large extract: uniqueness checked here rather than in memory
+                key = _quote(contract['row_key'])
+                duplicate = con.execute(f'SELECT {key} FROM snapshot GROUP BY {key} HAVING COUNT(*) > 1 LIMIT 1').fetchone()
+                if duplicate is not None:
+                    _error('invalid_row', f'Missing or duplicate row key {duplicate[0]!r}')
         if file_hash(source) != source_hash: _error('source_changed', 'Source changed during loading')
         manifest = {'mode': 'flat_snapshot', 'policy': POLICY, 'execution_policy': 'flat_snapshot_v1', 'contract_version': ver,
                     'contract_hash': contract['contract_hash'], 'contract': contract,
@@ -507,7 +607,7 @@ def _validate_typed_predicate(p, contract):
     for value in values:
         if kind == 'decimal':
             try:
-                if contract.get('version') == 6:
+                if contract.get('version') in (6, 8):
                     col_spec = next((c for c in contract.get('decimal_columns', []) if c['name'] == p['field']), None)
                     if col_spec:
                         _amount(value, {**contract, 'precision': col_spec['precision'], 'scale': col_spec['scale'], 'measure': p['field']}, 'predicate')
@@ -527,7 +627,7 @@ def _validate_typed_predicate(p, contract):
 
 
 def _typed_predicates(root, contract):
-    if contract.get('version') == 6:
+    if contract.get('version') in (6, 8):
         types = {**contract['dimension_types'], **{c['name']: 'decimal' for c in contract['decimal_columns']}}
     else:
         types = {**contract['dimension_types'], contract['measure']: 'decimal'}
@@ -645,7 +745,7 @@ def parse_flat(sql, contract):
         validate_case_ast(tree)
     if any(value is not None and value is not False and value != [] for key, value in tree.args.items()
            if key not in {'expressions', 'from_', 'where'}) or len(list(tree.walk())) > (250 if ver == 7 else 200) or len(tree.expressions) != 1:
-        _error('unsupported_sql', 'Only one SUM, or COUNT(*), over the whole snapshot is supported')
+        _error('unsupported_sql', 'Only a supported SUM, COUNT(*), COUNT(DISTINCT), AVG, or ratio of supported aggregates over the whole snapshot is supported')
     source = tree.args.get('from_')
     if not isinstance(source, exp.From) or not isinstance(source.this, exp.Table) or any(value is not None and value is not False and value != [] for key, value in source.this.args.items() if key != 'this') or _identifier(source.this.this) != 'snapshot':
         _error('unsupported_sql', 'FROM snapshot is required without joins or aliases')
@@ -654,17 +754,27 @@ def parse_flat(sql, contract):
         if ver == 7:
             _error('unsupported_sql', 'Aliases are not supported by the CASE policy')
         _identifier(aggregate.args['alias']); aggregate = aggregate.this
+    # COUNT(DISTINCT) and ratios carry an explicit aggregate_policy that SUM and
+    # COUNT(*) IRs never have, so existing IRs, hashes and replays are unchanged.
+    from .flat_distinct import DISTINCT_POLICY, distinct_column, is_distinct_count
+    from .flat_ratio import is_ratio_aggregate, parse_ratio
+    distinct = distinct_column(aggregate, contract) if is_distinct_count(aggregate) else None
+    if distinct is None and is_ratio_aggregate(aggregate):
+        return parse_ratio(aggregate, tree.args.get('where'), contract,
+                           lambda node: _typed_predicates(node, contract)[0],
+                           lambda p: _check_flat_predicates([p], contract))
     # COUNT(*) counts records (each included row contributes exactly 1). It is a
     # separate aggregate in the frozen IR, so existing SUM IRs and hashes are unchanged.
-    is_count = isinstance(aggregate, exp.Count)
+    is_count = isinstance(aggregate, exp.Count) and distinct is None
+    summed = None
     if is_count:
         if ver in (6, 7):
             _error('unsupported_sql', 'COUNT(*) is available on datasets with a single amount column, not on subtraction or CASE datasets')
         if (not isinstance(aggregate.this, exp.Star) or
                 any(value is not None and value is not False and value != [] for key, value in aggregate.args.items() if key not in ('this', 'big_int'))):
-            _error('unsupported_sql', 'Only COUNT(*) is supported; COUNT(DISTINCT ...) and COUNT(column) are not')
-    elif not isinstance(aggregate, exp.Sum) or any(value is not None and value is not False and value != [] for key, value in aggregate.args.items() if key != 'this'):
-        _error('unsupported_sql', 'Only one SUM, or COUNT(*), over the whole snapshot is supported')
+            _error('unsupported_sql', 'Only COUNT(*) and COUNT(DISTINCT column) are supported here; COUNT(column) is not')
+    elif distinct is None and (not isinstance(aggregate, exp.Sum) or any(value is not None and value is not False and value != [] for key, value in aggregate.args.items() if key != 'this')):
+        _error('unsupported_sql', 'Use one SUM, COUNT(*), COUNT(DISTINCT column), AVG or ratio over the whole snapshot')
 
     if ver == 7:
         from .flat_case import parse_case
@@ -691,13 +801,30 @@ def parse_flat(sql, contract):
             _error('unsupported_sql', f'Operands must be registered decimal columns: {dec_names}')
         if minuend != contract['measure_expression']['minuend'] or subtrahend != contract['measure_expression']['subtrahend']:
             _error('different_measure_expressions', f"Expression must match contract measure expression: {contract['measure_expression']['minuend']} - {contract['measure_expression']['subtrahend']}")
-    elif not is_count:
+    elif not is_count and distinct is None:
         if isinstance(aggregate.this, exp.Sub):
             _error('unsupported_sql', 'Measure expressions require a FlatContract v6 snapshot')
-        if not isinstance(aggregate.this, exp.Column) or any(value is not None and value is not False and value != [] for key, value in aggregate.this.args.items() if key != 'this') or _identifier(aggregate.this.this) != contract['measure']:
+        if not isinstance(aggregate.this, exp.Column) or any(value is not None and value is not False and value != [] for key, value in aggregate.this.args.items() if key != 'this'):
+            _error('unsupported_sql', 'Only SUM of the registered measure is supported')
+        summed = _identifier(aggregate.this.this)
+        if ver == 8:
+            if amount_column(contract, summed) is None:
+                _error('unsupported_sql', f'SUM must add up one registered amount column: {", ".join(c["name"] for c in contract["decimal_columns"])}')
+        elif summed != contract['measure']:
             _error('unsupported_sql', 'Only SUM of the registered measure is supported')
 
     where = tree.args.get('where')
+    if ver == 8:
+        ir = {'mode': 'flat_snapshot', 'policy': POLICY, 'contract_version': 8,
+              'contract_hash': contract['contract_hash'],
+              'measure_policy': MEASURE_POLICY_V8, 'predicate_policy': PREDICATE_POLICY,
+              'table': 'snapshot', 'aggregate': 'count' if is_count else 'sum',
+              'measure': '*' if is_count or summed is None else summed,
+              'predicate_tree': lower_boolean(where.this if where else None, lambda node: _typed_predicates(node, contract)[0])}
+        if distinct is not None:
+            ir.update(aggregate='count_distinct', measure=distinct, aggregate_policy=DISTINCT_POLICY)
+        validate_boolean(ir['predicate_tree'], lambda p: _check_flat_predicates([p], contract))
+        return {**ir, 'ir_hash': digest(ir)}
     if ver == 6:
         ir = {'mode': 'flat_snapshot', 'policy': POLICY, 'contract_version': 6,
               'contract_hash': contract['contract_hash'],
@@ -712,6 +839,8 @@ def parse_flat(sql, contract):
               'table': 'snapshot', 'aggregate': 'count' if is_count else 'sum', 'measure': '*' if is_count else contract['measure'],
               'predicate_policy': PREDICATE_POLICY,
               'predicate_tree': lower_boolean(where.this if where else None, lambda node: _typed_predicates(node, contract)[0])}
+        if distinct is not None:
+            ir.update(aggregate='count_distinct', measure=distinct, aggregate_policy=DISTINCT_POLICY)
         validate_boolean(ir['predicate_tree'], lambda p: _check_flat_predicates([p], contract))
         return {**ir, 'ir_hash': digest(ir)}
     else:
@@ -839,6 +968,8 @@ def parse_flat(sql, contract):
                 lower(where.this)
         ir = {'mode': 'flat_snapshot', 'policy': POLICY, 'contract_hash': contract['contract_hash'],
               'table': 'snapshot', 'aggregate': 'count' if is_count else 'sum', 'measure': '*' if is_count else contract['measure'], 'predicates': predicates}
+        if distinct is not None:
+            ir.update(aggregate='count_distinct', measure=distinct, aggregate_policy=DISTINCT_POLICY)
         return {**ir, 'ir_hash': digest(ir)}
 
 
@@ -846,7 +977,7 @@ def _check_flat_predicates(predicates, contract):
     if not isinstance(predicates, list) or len(predicates) > 8: _error('invalid_ir', 'Flat predicates are invalid')
     allowed_ops = {'eq', 'neq', 'in', 'gt', 'gte', 'lt', 'lte', 'between', 'is_null', 'is_not_null', 'is_true', 'is_not_true', 'is_false', 'is_not_false', 'eq_bool', 'bare_bool', 'not_bool'}
     ver = contract['version']
-    if ver == 6:
+    if ver in (6, 8):
         allowed_fields = contract['categories'] + [c['name'] for c in contract['decimal_columns']]
         types_dict = {**contract['dimension_types'], **{c['name']: 'decimal' for c in contract['decimal_columns']}}
     elif ver >= 4:
@@ -880,6 +1011,30 @@ def _check_ir(ir, contract):
     if ver == 7:
         from .flat_case import check_case_ir
         return check_case_ir(ir, contract)
+    if ver == 8:
+        from .flat_distinct import DISTINCT_POLICY
+        from .flat_ratio import RATIO_POLICY, check_ratio_ir
+        if isinstance(ir, dict) and ir.get('aggregate_policy') == RATIO_POLICY:
+            return check_ratio_ir(ir, contract, lambda p: _check_flat_predicates([p], contract))
+        fields = {'mode', 'policy', 'contract_version', 'contract_hash', 'measure_policy', 'predicate_policy',
+                  'table', 'aggregate', 'measure', 'predicate_tree', 'ir_hash'}
+        allowed = [('sum', c['name']) for c in contract['decimal_columns']] + [('count', '*')]
+        if isinstance(ir, dict) and 'aggregate_policy' in ir:
+            if ir['aggregate_policy'] != DISTINCT_POLICY:
+                _error('invalid_ir', 'Unknown aggregate policy')
+            fields = fields | {'aggregate_policy'}
+            allowed = [('count_distinct', name) for name in contract['categories']]
+        if not isinstance(ir, dict) or set(ir) != fields:
+            _error('invalid_ir', 'Flat IR shape is invalid for FlatContract v8')
+        if (ir['mode'] != 'flat_snapshot' or ir['policy'] != POLICY or ir['contract_version'] != 8 or
+                ir['contract_hash'] != contract['contract_hash'] or ir['table'] != 'snapshot' or
+                ir['measure_policy'] != MEASURE_POLICY_V8 or ir['predicate_policy'] != PREDICATE_POLICY or
+                (ir['aggregate'], ir['measure']) not in allowed):
+            _error('invalid_ir', 'Flat IR policy or contract differs')
+        validate_boolean(ir['predicate_tree'], lambda p: _check_flat_predicates([p], contract))
+        if digest({k: v for k, v in ir.items() if k != 'ir_hash'}) != ir['ir_hash']:
+            _error('invalid_ir', 'Flat IR hash differs')
+        return ir
     if ver == 6:
         fields = {'mode', 'policy', 'contract_version', 'contract_hash', 'measure_policy', 'predicate_policy',
                   'table', 'aggregate', 'measure_expression', 'predicate_tree', 'ir_hash'}
@@ -909,10 +1064,20 @@ def _check_ir(ir, contract):
 
     fields = {'mode', 'policy', 'contract_hash', 'table', 'aggregate', 'measure', 'ir_hash'}
     fields |= {'predicate_policy', 'predicate_tree'} if ver == 5 else {'predicates'}
+    allowed = (('sum', contract['measure']), ('count', '*'))
+    if isinstance(ir, dict) and 'aggregate_policy' in ir:
+        from .flat_distinct import DISTINCT_POLICY
+        from .flat_ratio import RATIO_POLICY, check_ratio_ir
+        if ir['aggregate_policy'] == RATIO_POLICY:
+            return check_ratio_ir(ir, contract, lambda p: _check_flat_predicates([p], contract))
+        if ir['aggregate_policy'] != DISTINCT_POLICY:
+            _error('invalid_ir', 'Unknown aggregate policy')
+        fields |= {'aggregate_policy'}
+        allowed = tuple(('count_distinct', name) for name in contract['categories'])
     if not isinstance(ir, dict) or set(ir) != fields:
         _error('invalid_ir', 'Flat IR shape is invalid for the frozen contract version')
     if (ir['mode'] != 'flat_snapshot' or ir['policy'] != POLICY or ir['contract_hash'] != contract['contract_hash'] or ir['table'] != 'snapshot' or
-            (ir['aggregate'], ir['measure']) not in (('sum', contract['measure']), ('count', '*'))):
+            (ir['aggregate'], ir['measure']) not in allowed):
         _error('invalid_ir', 'Flat IR policy or contract differs')
     if ver == 5:
         if ir['predicate_policy'] != PREDICATE_POLICY:
@@ -937,7 +1102,7 @@ def _predicates_sql(ir, contract=None):
         is_date = (col_type == 'date')
         if col_type in {'date', 'timestamp', 'decimal', 'boolean'} and op in {'eq', 'neq', 'in', 'gt', 'gte', 'lt', 'lte', 'between'}:
             if col_type == 'decimal':
-                if contract and contract.get('version') == 6:
+                if contract and contract.get('version') in (6, 8):
                     col_spec = next((c for c in contract.get('decimal_columns', []) if c['name'] == p['field']), None)
                     cast_type = f"DECIMAL({col_spec['precision']},{col_spec['scale']})" if col_spec else f"DECIMAL({contract['precision']},{contract['scale']})"
                 else:
@@ -1020,7 +1185,7 @@ def _query(ir, key, measure=None, contract=None):
         me = ir['measure_expression']
         expr = f'({_quote(me["minuend"])} - {_quote(me["subtrahend"])})'
         return f'SELECT {_quote(key)}, {predicate} AS included, {expr} AS measure_val, {_quote(me["minuend"])} AS op_a, {_quote(me["subtrahend"])} AS op_b FROM snapshot ORDER BY {_quote(key)}', params
-    if contract and contract['version'] == 5:
+    if contract and contract['version'] in (5, 8):
         predicate, params = compile_boolean(ir['predicate_tree'], lambda p: _predicates_sql({'predicates': [p]}, contract))
     else:
         predicate, params = _predicates_sql(ir, contract)
@@ -1042,8 +1207,12 @@ def compare_flat(database, baseline_ir, target_ir, context):
     contract = validate_contract(manifest['contract'])
     baseline_ir, target_ir = _check_ir(baseline_ir, contract), _check_ir(target_ir, contract)
     if baseline_ir.get('aggregate') != target_ir.get('aggregate'):
-        _error('different_aggregates', 'Both definitions must use the same aggregate: both SUM or both COUNT(*)')
+        names = {'sum': 'SUM', 'count': 'COUNT(*)', 'count_distinct': 'COUNT(DISTINCT)', 'ratio': 'a ratio or average'}
+        _error('different_aggregates', 'Both definitions must use the same aggregate: '
+               f'one uses {names.get(baseline_ir.get("aggregate"), "?")}, the other {names.get(target_ir.get("aggregate"), "?")}')
     counting = baseline_ir.get('aggregate') == 'count'
+    if contract['version'] == 8 and baseline_ir.get('aggregate') == 'sum' and baseline_ir['measure'] != target_ir['measure']:
+        _error('different_measures', 'Both definitions must add up the same amount column')
     if contract['version'] == 6:
         if baseline_ir['measure_expression'] != target_ir['measure_expression']:
             _error('different_measure_expressions', 'Both definitions must evaluate the identical declared measure expression')
@@ -1051,6 +1220,16 @@ def compare_flat(database, baseline_ir, target_ir, context):
         _error('not_comparable', 'Whole-snapshot comparison context differs from contract')
     for key in ('source_hash', 'manifest_hash'):
         if context.get(key) and context[key] != manifest[key]: _error('snapshot_integrity', f'{key} differs from frozen snapshot')
+    if manifest['row_count'] > MAX_FLAT_ROWS:
+        _error('too_many_rows', 'Flat snapshot exceeds the supported row bound')
+    if baseline_ir['aggregate'] in ('count_distinct', 'ratio'):
+        return _compare_extended(database, manifest, contract, baseline_ir, target_ir, context)
+    if manifest['row_count'] > FULL_EVIDENCE_ROWS:
+        if contract['version'] in (3, 4, 5, 8):
+            return _compare_large(database, manifest, contract, baseline_ir, target_ir, context)
+        # The API refuses these before queuing (validated_flat); this is the engine's own guard.
+        _error('too_many_rows', f'Subtraction and CASE datasets over {FULL_EVIDENCE_ROWS:,} rows cannot be compared; '
+               'use a smaller extract or a dataset with plain amount columns.')
     started = time.monotonic()
     with localcontext() as dc:
         dc.prec = 100
@@ -1059,7 +1238,7 @@ def compare_flat(database, baseline_ir, target_ir, context):
             endpoints = []
             query_hashes = []
             for ir in (baseline_ir, target_ir):
-                sql, params = _query(ir, contract['row_key'], contract.get('measure'), contract=contract)
+                sql, params = _query(ir, contract['row_key'], ir['measure'] if contract['version'] == 8 else contract.get('measure'), contract=contract)
                 try:
                     rows = con.execute(sql, params).fetchall()
                 except duckdb.Error as exc:
@@ -1102,6 +1281,10 @@ def compare_flat(database, baseline_ir, target_ir, context):
                     endpoint_val = sum(terms, Decimal(0)) if terms else None
                     if counting and endpoint_val is None:
                         endpoint_val = Decimal(0)  # SQL: COUNT over no rows is 0, unlike SUM
+                    if contract['version'] == 8 and endpoint_val is not None and not counting:
+                        column_scale = amount_column(contract, ir['measure'])['scale']
+                        if abs(endpoint_val * (Decimal(10) ** column_scale)) > (Decimal(10) ** 38 - 1):
+                            _error('arithmetic_overflow', f'Endpoint aggregate exceeds DECIMAL(38, {column_scale}) capacity')
                     if contract['version'] == 6 and endpoint_val is not None:
                         scaled_endpoint = abs(endpoint_val * (Decimal(10) ** contract['scale']))
                         if scaled_endpoint > (Decimal(10) ** 38 - 1):
@@ -1144,7 +1327,7 @@ def compare_flat(database, baseline_ir, target_ir, context):
                 _error('reconciliation_failure', 'Flat evidence does not reconcile')
         number = lambda value: (None if value is None else value.to_fixed_string()
                                 if isinstance(value, ScaledInteger) else format(value, 'f'))
-        filter_key = 'predicate_tree' if contract['version'] in (5, 6, 7) else 'predicates'
+        filter_key = 'predicate_tree' if contract['version'] in (5, 6, 7, 8) else 'predicates'
         step = {'rule':'eligibility_predicate','baseline':baseline_ir[filter_key],'target':target_ir[filter_key],
                 'changed':baseline_ir[filter_key] != target_ir[filter_key],
                 'position':1,'previous_value':number(av),'next_value':number(bv),
@@ -1156,7 +1339,7 @@ def compare_flat(database, baseline_ir, target_ir, context):
                         changed=baseline_ir != target_ir)
         return {'baseline_value':number(av),'target_value':number(bv),'delta_target_minus_baseline':number(gap),
                 'absolute_gap':number(abs(gap)) if gap is not None else None,'relative_change_percent_display':None,
-                'residual':'0' if gap is not None else None,'currency':None,'unit_label':contract['unit_label'],'measure_meaning':contract['measure_meaning'],
+                'residual':'0' if gap is not None else None,'currency':None,'unit_label':(amount_column(contract, baseline_ir['measure'])['unit_label'] if contract['version'] == 8 and not counting else contract['unit_label']),'measure_meaning':contract['measure_meaning'],
                 'numeric_tolerance':'0','method':'flat_case_change' if contract['version'] == 7 else 'flat_filter_change','definition_status':'same_supported_representation' if baseline_ir == target_ir else 'different',
                 'value_status':'defined' if gap is not None else 'undefined','explanation_status':('complete_case_definition_change' if contract['version'] == 7 else 'complete_eligibility_change') if gap is not None else 'unavailable',
                 'steps':[step] if gap is not None else [],'shapley':None,'evidence':evidence,
@@ -1169,6 +1352,7 @@ def compare_flat(database, baseline_ir, target_ir, context):
                               **({'predicate_policy': PREDICATE_POLICY, 'contract_version': 5} if contract['version'] == 5 else {}),
                               **({'measure_policy': MEASURE_POLICY_V6, 'predicate_policy': PREDICATE_POLICY, 'contract_version': 6} if contract['version'] == 6 else {}),
                               **({'measure_policy': MEASURE_POLICY_V7, 'predicate_policy': PREDICATE_POLICY, 'contract_version': 7} if contract['version'] == 7 else {}),
+                              **({'measure_policy': MEASURE_POLICY_V8, 'predicate_policy': PREDICATE_POLICY, 'contract_version': 8} if contract['version'] == 8 else {}),
                               'context':context,'baseline_query_hash':query_hashes[0],
                               'target_query_hash':query_hashes[1],'query_count':2,'elapsed_ms':round((time.monotonic()-started)*1000),
                               'evidence_unit':'row_key'},
@@ -1179,3 +1363,292 @@ def compare_flat(database, baseline_ir, target_ir, context):
                                (['An endpoint SUM is NULL because no non-NULL terms matched; the gap is undefined.'] if gap is None else []) +
                                (['COUNT(*) counts records; the dataset unit does not apply to these totals.'] if counting else []),
                 **({'aggregate': 'count'} if counting else {})}
+
+
+def _connect(database):
+    con = duckdb.connect(str(database), read_only=True, config={
+        'enable_external_access': 'false', 'autoinstall_known_extensions': 'false',
+        'autoload_known_extensions': 'false', 'memory_limit': '512MB', 'threads': '1'})
+    con.execute('SET lock_configuration = true')
+    return con
+
+
+def _filter_sql(ir, contract):
+    if contract['version'] in (5, 8):
+        return compile_boolean(ir['predicate_tree'], lambda p: _predicates_sql({'predicates': [p]}, contract))
+    return _predicates_sql(ir, contract)
+
+
+def _base_provenance(manifest, contract, baseline_ir, target_ir, context, query_hashes, started, unit):
+    return {'execution_policy': POLICY, 'baseline_ir_hash': baseline_ir['ir_hash'], 'target_ir_hash': target_ir['ir_hash'],
+            'snapshot_manifest_hash': manifest['manifest_hash'], 'database_hash': manifest['database_hash'],
+            'source_hash': manifest['source_hash'], 'contract_hash': contract['contract_hash'],
+            'parser_version': sqlglot.__version__, 'duckdb_version': duckdb.__version__, 'engine_version': POLICY,
+            **({'predicate_policy': PREDICATE_POLICY, 'contract_version': contract['version']} if contract['version'] in (5, 8) else {}),
+            **({'measure_policy': MEASURE_POLICY_V8} if contract['version'] == 8 else {}),
+            'aggregate_policy': baseline_ir['aggregate_policy'],
+            'context': context, 'baseline_query_hash': query_hashes[0], 'target_query_hash': query_hashes[1],
+            'query_count': 4, 'elapsed_ms': round((time.monotonic() - started) * 1000), 'evidence_unit': unit,
+            **({'evidence_storage_policy': 'flat-disk-evidence-v1'} if manifest['row_count'] > FULL_EVIDENCE_ROWS else {})}
+
+
+MAX_LISTED_RECORDS = 100_000  # historical unversioned artifact policy
+MAX_LISTED_BYTES = 256 * 1024 * 1024  # matches the artifact's encoded byte limit
+
+
+def _compare_large(database, manifest, contract, baseline_ir, target_ir, context):
+    """SUM / COUNT(*) on a snapshot over FULL_EVIDENCE_ROWS records.
+
+    A bounded cursor accumulates exact scaled-integer endpoint totals in one pass,
+    avoiding intermediate DECIMAL(38) overflow before cancellation. DuckDB then
+    returns only the records whose inclusion differs between the two definitions. A
+    record included by both (or neither) contributes the same amount to both totals,
+    so its change is zero; the listed changes therefore add up exactly to the total
+    change, which is checked here against the database totals.
+    """
+    started = time.monotonic()
+    counting = baseline_ir['aggregate'] == 'count'
+    measure = None if counting else (baseline_ir['measure'] if contract['version'] == 8 else contract['measure'])
+    value = '1' if counting else _quote(measure)
+    (bp, bparams), (tp, tparams) = _filter_sql(baseline_ir, contract), _filter_sql(target_ir, contract)
+    inner = (f'SELECT {_quote(contract["row_key"])} AS k, ({bp}) IS TRUE AS b, ({tp}) IS TRUE AS t, {value} AS v '
+             f'FROM snapshot')
+    params = [*bparams, *tparams]
+    totals_sql = f'SELECT b, t, v FROM ({inner})'
+    changed_sql = f'SELECT k, b, t, v FROM ({inner}) WHERE b <> t ORDER BY k'
+    from .disk_evidence import DiskRows, STORAGE_POLICY
+    evidence = DiskRows()
+    with localcontext() as dc:
+        dc.prec = 100
+        with _connect(database) as con:
+            try:
+                b_sum = t_sum = ScaledInteger.zero()
+                b_terms = t_terms = both = neither = total = 0
+                cursor = con.execute(totals_sql, params)
+                while batch := cursor.fetchmany(10_000):
+                    for b, t, v in batch:
+                        total += 1
+                        both += b and t
+                        neither += not b and not t
+                        if v is not None and (b or t):
+                            term = ScaledInteger(1, 0) if counting else ScaledInteger.parse(format(v, 'f'))
+                            if b:
+                                b_sum += term
+                                b_terms += 1
+                            if t:
+                                t_sum += term
+                                t_terms += 1
+                cursor = con.execute(changed_sql, params)
+                while batch := cursor.fetchmany(10_000):
+                    for k, b, t, v in batch:
+                        amount = Decimal(v) if v is not None else None
+                        bc = amount if b and amount is not None else Decimal(0)
+                        tc = amount if t and amount is not None else Decimal(0)
+                        row = {'order_id': k, 'baseline_included': b, 'target_included': t,
+                                         'baseline_contribution': format(bc, 'f'), 'target_contribution': format(tc, 'f'),
+                                         'delta': format(tc - bc, 'f'), 'baseline_null_term': b and amount is None,
+                                         'target_null_term': t and amount is None,
+                                         'membership': 'baseline_only' if b else 'target_only'}
+                        evidence.append(row)
+            except duckdb.Error as exc:
+                if 'overflow' in str(exc).lower():
+                    _error('arithmetic_overflow', f'Row or aggregate arithmetic overflow: {exc}')
+                raise
+        if total != manifest['row_count']:
+            _error('snapshot_integrity', 'Snapshot row count differs from its manifest')
+        if counting:
+            av, bv = b_sum.to_decimal(), t_sum.to_decimal()
+        else:
+            av = b_sum.to_decimal() if b_terms else None
+            bv = t_sum.to_decimal() if t_terms else None
+            scale = (amount_column(contract, measure)['scale'])
+            for endpoint in (av, bv):
+                if endpoint is not None and abs(endpoint * (Decimal(10) ** scale)) > Decimal(10) ** 38 - 1:
+                    _error('arithmetic_overflow', f'Endpoint aggregate exceeds DECIMAL(38, {scale}) capacity')
+        gap = bv - av if av is not None and bv is not None else None
+        if gap is not None and sum((Decimal(row['delta']) for row in evidence), Decimal(0)) != gap:
+            _error('reconciliation_failure', 'Listed record changes do not reconcile with the database totals')
+    number = lambda v: None if v is None else format(v, 'f')
+    filter_key = 'predicate_tree' if contract['version'] in (5, 8) else 'predicates'
+    step = {'rule': 'eligibility_predicate', 'baseline': baseline_ir[filter_key], 'target': target_ir[filter_key],
+            'changed': baseline_ir[filter_key] != target_ir[filter_key], 'position': 1,
+            'previous_value': number(av), 'next_value': number(bv), 'value_before': number(av), 'value_after': number(bv),
+            'contribution': number(gap)}
+    unchanged = total - len(evidence)
+    coverage = {'mode': 'changed_records', 'total_records': total, 'listed_records': len(evidence),
+                'unchanged_records': unchanged,
+                'unchanged_included_in_both': both, 'unchanged_included_in_neither': neither}
+    provenance = {'execution_policy': POLICY, 'baseline_ir_hash': baseline_ir['ir_hash'], 'target_ir_hash': target_ir['ir_hash'],
+                  'snapshot_manifest_hash': manifest['manifest_hash'], 'database_hash': manifest['database_hash'],
+                  'source_hash': manifest['source_hash'], 'contract_hash': contract['contract_hash'],
+                  'parser_version': sqlglot.__version__, 'duckdb_version': duckdb.__version__, 'engine_version': POLICY,
+                  **({'predicate_policy': PREDICATE_POLICY, 'contract_version': 5} if contract['version'] == 5 else {}),
+                  **({'measure_policy': MEASURE_POLICY_V8, 'predicate_policy': PREDICATE_POLICY, 'contract_version': 8}
+                     if contract['version'] == 8 else {}),
+                  'context': context, 'baseline_query_hash': digest({'sql': totals_sql, 'params': params}),
+                  'target_query_hash': digest({'sql': changed_sql, 'params': params}), 'query_count': 2,
+                  'elapsed_ms': round((time.monotonic() - started) * 1000), 'evidence_unit': 'row_key',
+                  'evidence_coverage': 'changed_records', 'evidence_storage_policy': STORAGE_POLICY}
+    unit_label = (amount_column(contract, measure)['unit_label'] if contract['version'] == 8 and not counting
+                  else contract['unit_label'])
+    return {'baseline_value': number(av), 'target_value': number(bv), 'delta_target_minus_baseline': number(gap),
+            'absolute_gap': number(abs(gap)) if gap is not None else None, 'relative_change_percent_display': None,
+            'residual': '0' if gap is not None else None, 'currency': None, 'unit_label': unit_label,
+            'measure_meaning': contract['measure_meaning'], 'numeric_tolerance': '0', 'method': 'flat_filter_change',
+            'definition_status': 'same_supported_representation' if baseline_ir == target_ir else 'different',
+            'value_status': 'defined' if gap is not None else 'undefined',
+            'explanation_status': 'complete_eligibility_change' if gap is not None else 'unavailable',
+            'steps': [step] if gap is not None else [], 'shapley': None, 'evidence': evidence,
+            'definition_differences': [step], 'provenance': provenance, 'evidence_coverage': coverage,
+            'limitations': ['Observed equality applies only to this frozen whole snapshot.',
+                            'Unknown currency remains unknown; no verified financial loss is claimed.',
+                            f'Only the {len(evidence):,} records whose inclusion changed are listed. The other {unchanged:,} '
+                            'records are included by both calculations or by neither, so each contributes the same '
+                            'amount to both totals and nothing to the change.'] +
+                           (['An endpoint SUM is NULL because no non-NULL terms matched; the gap is undefined.'] if gap is None else []) +
+                           (['COUNT(*) counts records; the dataset unit does not apply to these totals.'] if counting else []),
+            **({'aggregate': 'count'} if counting else {})}
+
+
+def _compare_extended(database, manifest, contract, baseline_ir, target_ir, context):
+    """COUNT(DISTINCT) and ratio comparisons; SUM and COUNT(*) never reach this path."""
+    if baseline_ir['aggregate'] == 'count_distinct':
+        return _compare_distinct(database, manifest, contract, baseline_ir, target_ir, context)
+    return _compare_ratio(database, manifest, contract, baseline_ir, target_ir, context)
+
+
+def _compare_distinct(database, manifest, contract, baseline_ir, target_ir, context):
+    from . import flat_distinct
+    started = time.monotonic()
+    key, column = contract['row_key'], baseline_ir['measure']
+    if target_ir['measure'] != column:
+        _error('different_distinct_columns', 'Both definitions must count distinct values of the same column')
+    filter_key = 'predicate_tree' if contract['version'] in (5, 8) else 'predicates'
+    from .disk_evidence import DiskRows, DiskBudget, cursor_rows
+    disk = manifest['row_count'] > FULL_EVIDENCE_ROWS
+    budget = DiskBudget()
+    rows, checks, query_hashes = [], [], []
+    with _connect(database) as con:
+        for ir in (baseline_ir, target_ir):
+            predicate, params = _filter_sql(ir, contract)
+            sql = f'SELECT {_quote(key)}, {predicate} AS included, {_quote(column)} FROM snapshot ORDER BY {_quote(key)}'
+            cursor = con.execute(sql, params)
+            rows.append(DiskRows(cursor_rows(cursor), budget=budget) if disk else cursor.fetchall())
+            checks.append(con.execute(f'SELECT COUNT(DISTINCT {_quote(column)}) FILTER (WHERE {predicate}) FROM snapshot',
+                                      params).fetchone()[0])
+            query_hashes.append(digest({'sql': sql, 'params': params}))
+    av, bv, evidence, members, summary = flat_distinct.compare_endpoints(column, rows[0], rows[1])
+    if [av, bv] != checks:
+        _error('reconciliation_failure', 'Distinct count differs from the database count')
+    gap = bv - av
+    if sum(int(row['delta']) for row in evidence) != gap:
+        _error('reconciliation_failure', 'Entity evidence does not reconcile')
+    step = {'rule': 'eligibility_predicate', 'baseline': baseline_ir[filter_key], 'target': target_ir[filter_key],
+            'changed': baseline_ir[filter_key] != target_ir[filter_key], 'position': 1,
+            'previous_value': str(av), 'next_value': str(bv), 'value_before': str(av), 'value_after': str(bv),
+            'contribution': str(gap)}
+    limitations = ['Observed equality applies only to this frozen whole snapshot.',
+                   f'Evidence rows are distinct {column} values, not records.',
+                   f'A {column} value is counted once however many of its records match.']
+    if summary['baseline_null_entity_rows'] or summary['target_null_entity_rows']:
+        limitations.append(f'Records with no {column} are not counted by COUNT(DISTINCT) '
+                           f"({summary['baseline_null_entity_rows']} in the current calculation, "
+                           f"{summary['target_null_entity_rows']} in the proposed one).")
+    return {'baseline_value': str(av), 'target_value': str(bv), 'delta_target_minus_baseline': str(gap),
+            'absolute_gap': str(abs(gap)), 'relative_change_percent_display': None, 'residual': '0',
+            'currency': None, 'unit_label': contract['unit_label'], 'measure_meaning': contract['measure_meaning'],
+            'numeric_tolerance': '0', 'method': 'flat_distinct_membership_change',
+            'definition_status': 'same_supported_representation' if baseline_ir == target_ir else 'different',
+            'value_status': 'defined', 'explanation_status': 'complete_entity_membership_change',
+            'steps': [step], 'shapley': None, 'evidence': evidence, 'definition_differences': [step],
+            'provenance': _base_provenance(manifest, contract, baseline_ir, target_ir, context, query_hashes,
+                                           started, f'entity:{column}'),
+            'limitations': limitations, 'aggregate': 'count_distinct', 'distinct': summary, 'members': members}
+
+
+RATIO_UNDEFINED_TEXT = {'null_numerator': 'its numerator has no values to add up (NULL)',
+                        'null_denominator': 'its denominator has no values to add up (NULL)',
+                        'zero_denominator': 'its denominator is 0, so the division is undefined'}
+
+
+def _compare_ratio(database, manifest, contract, baseline_ir, target_ir, context):
+    from . import flat_ratio
+    from fractions import Fraction
+    started = time.monotonic()
+    flat_ratio.check_comparable(baseline_ir, target_ir, contract)
+    leaf = lambda p: _predicates_sql({'predicates': [p]}, contract)
+    key = contract['row_key']
+    from .disk_evidence import DiskRows, DiskBudget, cursor_rows
+    disk = manifest['row_count'] > FULL_EVIDENCE_ROWS
+    budget = DiskBudget()
+    rows, query_hashes = [], []
+    with _connect(database) as con:
+        for ir in (baseline_ir, target_ir):
+            sql, params = flat_ratio.build_query(ir, key, leaf)
+            check_sql, check_params = flat_ratio.check_query(ir, leaf)
+            try:
+                cursor = con.execute(sql, params)
+                fetched = DiskRows(cursor_rows(cursor), budget=budget) if disk else cursor.fetchall()
+                check = con.execute(check_sql, check_params).fetchone()
+            except duckdb.Error as exc:
+                if 'overflow' in str(exc).lower():
+                    _error('arithmetic_overflow', f'Aggregate arithmetic overflow: {exc}')
+                raise
+            totals, records = flat_ratio.endpoint(fetched, ir, contract)
+            if disk:
+                records.close()
+            for name, database_total in zip(('numerator', 'denominator'), check):
+                theirs = None if database_total is None else Fraction(database_total)
+                if totals[name] != theirs:
+                    _error('reconciliation_failure', f'Ratio {name} differs from the database total')
+                part_scale = flat_ratio.part_scale(ir[name], contract)
+                if theirs is not None and abs(theirs) * 10 ** part_scale > 10 ** 38 - 1:
+                    _error('arithmetic_overflow', f'Ratio {name} exceeds DECIMAL(38, {part_scale}) capacity')
+            rows.append(fetched)
+            query_hashes.append(digest({'sql': sql, 'params': params}))
+    ratio, evidence, (r0, r1) = flat_ratio.compare_endpoints(baseline_ir, target_ir, contract, rows[0], rows[1])
+    shown_b, shown_t, delta = flat_ratio.result_fields(ratio, r0, r1)
+    defined = ratio['status'] == 'defined'
+    shape = lambda ir: {'where': ir['predicate_tree'], 'numerator': ir['numerator'], 'denominator': ir['denominator']}
+    step = {'rule': 'ratio_definition_change', 'baseline': shape(baseline_ir), 'target': shape(target_ir),
+            'changed': baseline_ir != target_ir, 'position': 1, 'previous_value': shown_b, 'next_value': shown_t,
+            'value_before': shown_b, 'value_after': shown_t, 'contribution': delta}
+    differences = [{'rule': rule, 'baseline': baseline_ir[field], 'target': target_ir[field],
+                    'changed': baseline_ir[field] != target_ir[field]}
+                   for rule, field in (('shared_filter', 'predicate_tree'), ('numerator', 'numerator'),
+                                       ('denominator', 'denominator'))]
+    if defined:
+        contributions = []
+        for effect in ratio['effects']:
+            value = flat_ratio.parse_fraction_text(effect['exact'])
+            contributions.append({'rule': effect['rule'], 'numerator': str(value.numerator),
+                                  'denominator': str(value.denominator), 'display_decimal': effect['display']})
+        shapley = {'status': 'complete', 'method': 'exact_two_part_shapley', 'gap': ratio['gap_exact'],
+                   'evaluated_hybrids': 4, 'undefined_hybrids': [], 'contributions': contributions,
+                   'limitation': 'Averages the two orders of changing the numerator and the denominator; it is not causal. '
+                                 'Display decimals are rounded; the fractions are exact.'}
+    else:
+        shapley = {'status': 'unavailable', 'method': 'exact_two_part_shapley', 'contributions': [],
+                   'limitation': 'An undefined ratio has no exact split.'}
+    limitations = ['Observed equality applies only to this frozen whole snapshot.',
+                   f'Ratios are exact fractions; shown values are rounded to {ratio["display_places"]} decimal places, '
+                   'and the shown change is the difference of the rounded values.',
+                   'The numerator and the denominator are each added up separately over their own records '
+                   '(this is not an average of per-record ratios).',
+                   'Record effects share the ratio change through its numerator and denominator effects; they are not causal claims.']
+    for side, label in (('baseline', 'current'), ('target', 'proposed')):
+        reason = ratio[side]['undefined_reason']
+        if reason:
+            limitations.append(f'The {label} ratio is undefined because {RATIO_UNDEFINED_TEXT[reason]}.')
+    return {'baseline_value': shown_b, 'target_value': shown_t, 'delta_target_minus_baseline': delta,
+            'absolute_gap': None if delta is None else delta.lstrip('-'), 'relative_change_percent_display': None,
+            'residual': '0' if defined else None, 'currency': None, 'unit_label': contract['unit_label'],
+            'measure_meaning': contract['measure_meaning'], 'numeric_tolerance': '0', 'method': 'flat_ratio_shapley',
+            'definition_status': 'same_supported_representation' if baseline_ir == target_ir else 'different',
+            'value_status': 'defined' if defined else 'undefined',
+            'explanation_status': 'complete_ratio_bridge' if defined else 'components_only',
+            'steps': [step] if defined else [], 'shapley': shapley, 'evidence': evidence,
+            'definition_differences': differences,
+            'provenance': _base_provenance(manifest, contract, baseline_ir, target_ir, context, query_hashes,
+                                           started, 'row_key'),
+            'limitations': limitations, 'aggregate': 'ratio', 'value_is_rounded': True, 'ratio': ratio}

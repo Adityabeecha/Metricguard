@@ -55,11 +55,11 @@ def validate_definition(version, contract, error):
 def validate_proposal(expectations, contract, error):
     """Reject unregistered or non-categorical qualified references against the approved contract."""
     table_schemas = schemas(contract)
-    roles = {contract['fact']['table']: 'fact', contract['dimension']['table']: 'dimension'}
+    tables = _tables(contract)
     problems = []
     for role in ('fact', 'dimension'):
         name = expectations[role]['table']
-        if name not in roles:
+        if name not in tables or (role == 'fact' and name != contract['fact']['table']) or (role == 'dimension' and name == contract['fact']['table']):
             problems.append(f'{role} table {name} is not registered in the approved relational contract')
     if not problems:
         fact, dim = expectations['fact']['table'], expectations['dimension']['table']
@@ -70,7 +70,7 @@ def validate_proposal(expectations, contract, error):
                 problems.append(f'{label} {table}.{column} is not a registered column')
         for field in expectations['expected_fields']:
             table, column = field['table'], field['column']
-            if column not in contract[roles[table]]['categories']:
+            if table not in tables or column not in tables[table]['categories']:
                 problems.append(f'{table}.{column} is not a registered categorical field')
     if problems:
         raise error('METRIC_CONTRACT_INVALID', 'Relational governance references are invalid: ' + '; '.join(problems) + '.')
@@ -78,6 +78,19 @@ def validate_proposal(expectations, contract, error):
 
 def _unknown(value):
     return not value or str(value).strip().lower() in _UNKNOWN_UNITS
+
+
+def _tables(contract):
+    lookups = contract['dimensions'] if contract.get('version') == 2 else [contract['dimension']]
+    return {t['table']: t for t in [contract['fact'], *lookups]}
+
+
+def _selected_lookup(contract, table):
+    if contract is None:
+        return None
+    if contract.get('version') != 2:
+        return contract['dimension']
+    return next((d for d in contract['dimensions'] if d['table'] == table), None)
 
 
 def relational_checks(revision, metric, version, definition, snapshot, binding, definition_contract, error):
@@ -108,6 +121,21 @@ def relational_checks(revision, metric, version, definition, snapshot, binding, 
                 snapshot.get('execution_policy') != EXECUTION_POLICY):
             raise error('SNAPSHOT_INTEGRITY', 'Snapshot record identity does not match its frozen relational manifest.')
     ir = validate_definition(version, definition_contract, error) if definition_contract is not None else None
+    selected = _selected_lookup(contract, expected['dimension']['table'])
+    definition_lookup = _selected_lookup(definition_contract, expected['dimension']['table'])
+    selected_join = None
+    if ir is not None:
+        selected_join = ir['joins'].get(definition_lookup['role']) if 'joins' in ir and definition_lookup else ir.get('join')
+    observed_relationship = ({'fact_foreign_key': selected['fact_foreign_key'], 'dimension_key': selected['key'],
+                              'cardinality': 'many_to_one', 'missing_dimension_policy': 'preserve_and_report'}
+                             if selected and contract.get('version') == 2 else contract['relationship'] if contract and selected else None)
+    structure = {'fact': contract['fact'], 'dimension': selected, 'relationship': observed_relationship} if contract else None
+    if contract and contract.get('version') == 2 and len(contract['dimensions']) > 1:
+        check('structure', 'lookup_governance_coverage', 'all lookup relationships',
+              {'selected_table': expected['dimension']['table'],
+               'uncovered_tables': [d['table'] for d in contract['dimensions'] if d is not selected]},
+              status='unverified', note='Schema-2 governance covers only its explicitly selected lookup. '
+              'Other lookup semantics are not governed, so this check is inconclusive for the complete star schema.')
 
     # Identity and pinned baseline.
     identity = revision['metric_identity']
@@ -140,17 +168,18 @@ def relational_checks(revision, metric, version, definition, snapshot, binding, 
     check('policy', 'selected_definition_contract', snapshot_hash, version.get('contract_hash'),
           note='The selected definition IR was validated against its own registered contract; a matching hash binds it to this frozen snapshot.')
 
-    missing = 'Not evaluated: the selected snapshot is not a relational_snapshot_v1 snapshot.'
+    missing = ('Not evaluated: the selected snapshot is not a relational_snapshot_v1 snapshot.' if contract is None else
+               'Not evaluated: the governed lookup table is absent from the frozen relational snapshot.')
 
     # Declared relational structure versus the frozen contract.
     def structural(field, wanted, path):
         if contract is None:
             check('structure', field, wanted, None, note=missing)
             return
-        value = contract
+        value = structure
         for part in path:
-            value = value[part]
-        check('structure', field, wanted, value)
+            value = value.get(part) if isinstance(value, dict) else None
+        check('structure', field, wanted, value, status='mismatch' if value is None else None)
 
     structural('fact.table', expected['fact']['table'], ('fact', 'table'))
     structural('dimension.table', expected['dimension']['table'], ('dimension', 'table'))
@@ -165,8 +194,8 @@ def relational_checks(revision, metric, version, definition, snapshot, binding, 
         check('structure', 'relationship.join_kind', relationship['allowed_join_kinds'], None,
               note='Not evaluated: the selected definition is not a relational implementation.')
     else:
-        check('structure', 'relationship.join_kind', relationship['allowed_join_kinds'], ir['join'],
-              status='match' if ir['join'] in relationship['allowed_join_kinds'] else 'mismatch',
+        check('structure', 'relationship.join_kind', relationship['allowed_join_kinds'], selected_join,
+              status='match' if selected_join in relationship['allowed_join_kinds'] else 'mismatch',
               note='The selected definition join kind must be one of the allowed join kinds.')
 
     for item in expected['expected_fields']:
@@ -175,8 +204,8 @@ def relational_checks(revision, metric, version, definition, snapshot, binding, 
             check('structure', name, item['type'], None, note=missing)
             continue
         table_schemas = schemas(contract)
-        roles = {contract['fact']['table']: 'fact', contract['dimension']['table']: 'dimension'}
-        if item['table'] not in roles:
+        tables = _tables(contract)
+        if item['table'] not in tables:
             check('structure', name, item['type'], None, status='mismatch',
                   note='Qualified table is not registered in the frozen relational contract.')
             continue
@@ -186,7 +215,7 @@ def relational_checks(revision, metric, version, definition, snapshot, binding, 
             hint = f' A column with this name exists only in {elsewhere[0]}; qualification is not inferred.' if elsewhere else ''
             check('structure', name, item['type'], None, status='mismatch',
                   note='Expected field is absent from the registered table.' + hint)
-        elif item['column'] not in contract[roles[item['table']]]['categories']:
+        elif item['column'] not in tables[item['table']]['categories']:
             check('structure', name, item['type'], None, status='mismatch',
                   note='Registered column is a key or measure, not a categorical field.')
         else:
@@ -202,11 +231,17 @@ def relational_checks(revision, metric, version, definition, snapshot, binding, 
           unknown=_unknown(observed_unit) or _unknown(expected['unit_label']),
           note='Declared labels are compared without currency inference or conversion; unknown currency remains unverified.')
     for role in ('fact', 'dimension'):
-        check('declaration', f'{role}.grain', expected[role]['grain'], contract[role]['grain'] if contract else None,
+        table = structure[role] if structure else None
+        check('declaration', f'{role}.grain', expected[role]['grain'], table['grain'] if table else None,
               note='Matching declared grain text is metadata agreement, not proof of business grain.' if contract else missing)
 
     # Observed structural proof recorded when the snapshot was frozen.
-    proof = manifest.get('join_proof') if contract is not None else None
+    complete_proof = manifest.get('join_proof') if contract is not None else None
+    proof = complete_proof
+    if proof is not None and contract.get('version') == 2:
+        item = proof['dimensions'].get(selected['role']) if selected else None
+        proof = ({**{k: v for k, v in proof.items() if k != 'dimensions'}, **item,
+                  'max_dimension_matches_per_fact': 1 if item['matched_fact_rows'] else 0} if item else None)
     if proof is None:
         for field in ('fact_key_unique', 'dimension_key_unique', 'row_preservation', 'fanout_rows',
                       'max_dimension_matches_per_fact', 'unmatched_fact_rows'):
@@ -224,21 +259,24 @@ def relational_checks(revision, metric, version, definition, snapshot, binding, 
                      'null_foreign_key_rows': proof['null_foreign_key_rows'],
                      'missing_nonnull_foreign_key_rows': proof['missing_nonnull_foreign_key_rows']}
         join_note = ''
-        if ir is not None and proof['unmatched_fact_rows']:
-            join_note = (f" The selected {ir['join'].upper()} join "
-                         f"{'retains' if ir['join'] == 'left' else 'excludes'} {proof['unmatched_fact_rows']} unmatched facts.")
-        reported = contract['relationship']['missing_dimension_policy'] == 'preserve_and_report'
+        if selected_join is not None and proof['unmatched_fact_rows']:
+            join_note = (f" The selected {selected_join.upper()} join "
+                         f"{'retains' if selected_join == 'left' else 'excludes'} {proof['unmatched_fact_rows']} unmatched facts.")
+        reported = observed_relationship['missing_dimension_policy'] == 'preserve_and_report'
         check('join_proof', 'join_proof.unmatched_fact_rows', 'preserve_and_report', unmatched,
               status='match' if reported else 'mismatch',
               note='Unmatched facts are preserved and reported, never imputed.' + join_note)
 
     observed = {'snapshot_contract_hash': snapshot_hash,
                 'definition_contract_hash': version.get('contract_hash'),
-                'definition_join_kind': ir['join'] if ir else None,
-                'relationship': contract['relationship'] if contract else None,
+                'definition_join_kind': selected_join,
+                'relationship': observed_relationship,
                 'fact': {k: contract['fact'][k] for k in ('table', 'key', 'grain')} if contract else None,
-                'dimension': {k: contract['dimension'][k] for k in ('table', 'key', 'grain')} if contract else None,
+                'dimension': {k: selected[k] for k in ('table', 'key', 'grain')} if selected else None,
                 'join_proof': proof}
+    if contract and contract.get('version') == 2:
+        observed.update(definition_joins=ir.get('joins') if ir else None, all_join_proof=complete_proof,
+                        governance_scope='selected_lookup_only')
     assurance = {
         'declared_business_semantics': {
             'status': 'declared_not_proven',

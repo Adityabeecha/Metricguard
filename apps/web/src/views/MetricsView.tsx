@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { calculationPage, splitCalculations } from '../guidedWorkflow';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -61,6 +62,10 @@ export function MetricsView({
 
   // Search & Filter Toolbar
   const [searchQuery, setSearchQuery] = useState('');
+  const [showCalculations, setShowCalculations] = useState(false);
+  const [calculationQuery, setCalculationQuery] = useState('');
+  const [calculationPageIndex, setCalculationPageIndex] = useState(0);
+  const [calculationGroup, setCalculationGroup] = useState<'imported' | 'comparisons'>('imported');
   const [importanceFilter, setImportanceFilter] = useState<'all' | 'critical' | 'important' | 'standard' | 'unclassified'>('all');
   const [supportFilter, setSupportFilter] = useState<'all' | 'analyzable' | 'limited' | 'unbound'>('all');
 
@@ -181,6 +186,22 @@ export function MetricsView({
   const unassignedDefinitions = useMemo(() => {
     return definitions.filter((d) => !boundDefinitionIds.has(d.id));
   }, [definitions, boundDefinitionIds]);
+  // Guided comparisons save one calculation per new formula; keep those apart so imported queries stay findable.
+  const calculationGroups = useMemo(() => splitCalculations(unassignedDefinitions), [unassignedDefinitions]);
+  const shownGroup = calculationGroup === 'imported' && !calculationGroups.imported.length ? 'comparisons' : calculationGroup;
+  const calculations = calculationPage(shownGroup === 'imported' ? calculationGroups.imported : calculationGroups.fromComparisons,
+    calculationQuery, calculationPageIndex);
+  const definitionOptions = (versionsLabel: boolean) => ([
+    ['Imported queries', calculationGroups.imported], ['Saved from guided comparisons', calculationGroups.fromComparisons],
+  ] as const).filter(([, items]) => items.length).map(([label, items]) => (
+    <optgroup key={label} label={label}>
+      {items.map((d) => (
+        <option key={d.id} value={d.id}>
+          {d.name} ({d.source_label}){versionsLabel ? ` · ${d.versions.length} versions` : ''}
+        </option>
+      ))}
+    </optgroup>
+  ));
 
   // Selected Metric Object
   const selectedMetric = useMemo(() => {
@@ -1047,11 +1068,7 @@ export function MetricsView({
                           style={{ width: '100%' }}
                         >
                           <option value="">Select an unassigned definition…</option>
-                          {unassignedDefinitions.map((d) => (
-                            <option key={d.id} value={d.id}>
-                              {d.name} ({d.source_label}) · {d.versions.length} versions
-                            </option>
-                          ))}
+                          {definitionOptions(true)}
                         </select>
                       ) : (
                         <p className="muted-text font-small" style={{ margin: '4px 0 0', color: '#667085' }}>
@@ -1381,13 +1398,28 @@ export function MetricsView({
       {/* UNASSIGNED DEFINITIONS SECTION */}
       <div className="unassigned-section">
         <div className="unassigned-header">
-          <h3>Unassigned Query Definitions ({unassignedDefinitions.length})</h3>
-          <p>Extracted dbt models and SQL queries not currently bound to any declared business metric.</p>
+          <h3>Saved calculations ({unassignedDefinitions.length})</h3>
+          <p>Ad-hoc calculations and imported queries remain available for reuse. Create a metric when a calculation needs ongoing governance.</p>
+          <p className="muted-text font-small">{calculationGroups.imported.length} imported · {calculationGroups.fromComparisons.length} saved from guided comparisons</p>
+          <button type="button" className="button secondary" aria-expanded={showCalculations} aria-controls="saved-calculations" onClick={() => setShowCalculations(v => !v)}>
+            {showCalculations ? 'Hide saved calculations' : 'Browse saved calculations'}
+          </button>
         </div>
 
-        {unassignedDefinitions.length > 0 ? (
+        {showCalculations && <div id="saved-calculations">
+          <div className="report-actions" role="group" aria-label="Calculation source" style={{ marginBottom: 12 }}>
+            {([['imported', `Imported queries (${calculationGroups.imported.length})`], ['comparisons', `From guided comparisons (${calculationGroups.fromComparisons.length})`]] as const).map(([group, label]) => (
+              <button key={group} type="button" className={`button ${shownGroup === group ? 'primary' : 'secondary'}`} aria-pressed={shownGroup === group}
+                onClick={() => { setCalculationGroup(group); setCalculationPageIndex(0); }}>{label}</button>
+            ))}
+          </div>
+          <label className="form-label" htmlFor="calculation-search">Find a saved calculation</label>
+          <input id="calculation-search" className="form-input" type="search" placeholder="Search name, source or ID" value={calculationQuery}
+            onChange={e => { setCalculationQuery(e.target.value); setCalculationPageIndex(0); }} />
+          <p role="status">{calculations.total} matching calculations · Page {calculations.current + 1} of {calculations.pages}</p>
+        {calculations.total > 0 ? (
           <div className="unassigned-card-grid">
-            {unassignedDefinitions.map((d) => {
+            {calculations.items.map((d) => {
               const latestVer = latest(d);
               const isAnalyzable = latestVer?.support_state === 'executable';
 
@@ -1434,9 +1466,16 @@ export function MetricsView({
           </div>
         ) : (
           <div style={{ padding: '16px', background: '#FFFFFF', border: '1px solid #E4E7EC', borderRadius: '6px', color: '#667085', fontSize: '13px' }}>
-            All query definitions in this workspace are bound to declared metrics.
+            {!unassignedDefinitions.length ? 'No unassigned calculations. Calculations bound to metrics appear in metric details.'
+              : calculationQuery.trim() ? 'No saved calculations match this search. Clear the search to browse all calculations.'
+              : 'No calculations in this group. Switch groups to see the others.'}
           </div>
         )}
+        {calculations.pages > 1 && <div className="report-actions" style={{ marginTop: 12 }}>
+          <button className="button secondary" disabled={calculations.current === 0} onClick={() => setCalculationPageIndex(calculations.current - 1)}>Previous calculations</button>
+          <button className="button secondary" disabled={calculations.current + 1 >= calculations.pages} onClick={() => setCalculationPageIndex(calculations.current + 1)}>Next calculations</button>
+        </div>}
+        </div>}
       </div>
 
       {/* Create Metric Modal */}
@@ -1517,11 +1556,7 @@ export function MetricsView({
                       onChange={(e) => setNewMetricAttachDefId(e.target.value)}
                     >
                       <option value="">None (Leave unbound for now)</option>
-                      {unassignedDefinitions.map((d) => (
-                        <option key={d.id} value={d.id}>
-                          {d.name} ({d.source_label})
-                        </option>
-                      ))}
+                      {definitionOptions(false)}
                     </select>
                     <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#667085' }}>
                       You can attach or change implementations at any time from the metric detail view.

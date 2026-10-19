@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import threading
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, Header, Query, Request, UploadFile
@@ -19,7 +20,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .models import (BaselineInput, ColumnMappingInput, ComparisonInput,
                      DatasetContractInput, DefinitionInput, DependencyInput,
                      InvestigationInput, PairReview, FlatContractInput,
-                     FlatDefinitionInput, FlatComparisonInput,
+                     FlatDefinitionInput, FlatComparisonInput, FlatSnapshotChangeInput,
                      UserCreateInput, ProjectCreateInput, ProjectMemberInput,
                      ReviewRequestInput, DecisionInput, MonitoringPolicyInput,
                      AlertAcknowledgeInput, ProjectQuotaInput, PostgresExtractionInput,
@@ -39,7 +40,9 @@ from .monitoring import classify_change, evaluate_materiality, compute_event_has
 from .relational_routes import verify_shared_access
 from .backup import backup_project, restore_project
 from . import evidence_cache
-from services.supervisor.evidence_artifact import explain_row, verify_artifact
+from services.supervisor.evidence_artifact import (
+    aggregate_contexts, expected_artifact_delta, explain_row, verify_artifact,
+)
 from services.supervisor.collector import CollectorError, PostgresCollector, PostgresSourceSelection
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -127,8 +130,12 @@ def create_app(database_url=None, data_dir=None, mode=None):
             if urlparse(origin).hostname not in ('localhost', '127.0.0.1', '::1'):
                 return JSONResponse({'error': {'code': 'LOCAL_ONLY', 'message': 'MetricGuard accepts local browser requests only.'}}, status_code=403)
         try:
-            if int(request.headers.get('content-length', '0')) > 26 * 1024 * 1024:
-                return JSONResponse({'error': {'code': 'UPLOAD_LIMIT', 'message': 'Upload exceeds the 25 MiB limit.'}}, status_code=413)
+            # Single-table extracts may be large (streamed to disk); every other request stays small.
+            from packages.metricguard_core.flat import MAX_FLAT_BYTES
+            large = request.url.path == '/api/v1/flat/snapshots'
+            limit = MAX_FLAT_BYTES + 1024 * 1024 if large else 26 * 1024 * 1024
+            if int(request.headers.get('content-length', '0')) > limit:
+                return JSONResponse({'error': {'code': 'UPLOAD_LIMIT', 'message': f'Upload exceeds the {(limit // (1024 * 1024)) - 1} MiB limit.'}}, status_code=413)
         except ValueError:
             return JSONResponse({'error': {'code': 'BAD_REQUEST', 'message': 'Invalid content length.'}}, status_code=400)
         response = await call_next(request)
@@ -709,26 +716,42 @@ def create_app(database_url=None, data_dir=None, mode=None):
             raise DomainError('INVALID_CONTRACT', 'The approved NULL policy does not match the source format.')
         if not 1 <= len(name) <= 160:
             raise DomainError('INVALID_METADATA', 'A dataset name of 1–160 characters is required.')
-        content = await file.read(25 * 1024 * 1024 + 1)
-        if not content or len(content) > 25 * 1024 * 1024:
-            raise DomainError('UPLOAD_LIMIT', 'Dataset must contain 1 byte to 25 MiB.', 413)
-        store.check_storage_quota(pid, len(content), data_dir)
-        source_hash = hashlib.sha256(content).hexdigest()
-        preparation = None
-        if preparation_manifest is not None:
-            from packages.metricguard_core.flat import validate_preparation
-            preparation = validate_preparation(await preparation_manifest.read(16 * 1024 + 1), source_hash)
-        for existing in store.bootstrap(pid)['snapshots']:
-            if (existing['source_hash'] == source_hash and
-                    existing.get('contract_hash') == contract['contract_hash'] and
-                    existing.get('execution_policy') == 'flat_snapshot_v1' and
-                    existing.get('manifest', {}).get('flat_preparation') == preparation):
-                return public_snapshot(existing)
+        # Stream to disk in chunks: large extracts (millions of rows) never sit in memory.
+        from packages.metricguard_core.flat import MAX_FLAT_BYTES
         stage = data_dir / 'uploads' / f'{uuid4()}{suffix}'
         stage.parent.mkdir(parents=True, exist_ok=True)
+        hasher, size = hashlib.sha256(), 0
         try:
             with stage.open('xb') as output:
-                output.write(content)
+                while chunk := await file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_FLAT_BYTES:
+                        raise DomainError('UPLOAD_LIMIT', f'Dataset must contain 1 byte to {MAX_FLAT_BYTES // (1024 * 1024)} MiB.', 413)
+                    hasher.update(chunk)
+                    output.write(chunk)
+            if not size:
+                raise DomainError('UPLOAD_LIMIT', f'Dataset must contain 1 byte to {MAX_FLAT_BYTES // (1024 * 1024)} MiB.', 413)
+            store.check_storage_quota(pid, size, data_dir)
+        except Exception:
+            stage.unlink(missing_ok=True)
+            raise
+        source_hash = hasher.hexdigest()
+        preparation = None
+        try:
+            if preparation_manifest is not None:
+                from packages.metricguard_core.flat import validate_preparation
+                preparation = validate_preparation(await preparation_manifest.read(16 * 1024 + 1), source_hash)
+            for existing in store.bootstrap(pid)['snapshots']:
+                if (existing['source_hash'] == source_hash and
+                        existing.get('contract_hash') == contract['contract_hash'] and
+                        existing.get('execution_policy') == 'flat_snapshot_v1' and
+                        existing.get('manifest', {}).get('flat_preparation') == preparation):
+                    stage.unlink(missing_ok=True)
+                    return public_snapshot(existing)
+        except Exception:
+            stage.unlink(missing_ok=True)
+            raise
+        try:
             queued = store.queue_import(stage, source_hash, name, {'flat_contract': contract, **({'flat_preparation': preparation} if preparation else {})}, project_id=pid)
             if queued['reused']:
                 stage.unlink(missing_ok=True)
@@ -963,6 +986,11 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 payload['context']['contract_hash'] != contract_hash):
             raise DomainError('NOT_COMPARABLE', 'The flat contract changed; select definitions bound to this snapshot.')
         flat_contract = snapshot['manifest']['contract']
+        from packages.metricguard_core.flat import FULL_EVIDENCE_ROWS
+        if flat_contract.get('version') in (6, 7) and (snapshot['manifest'].get('row_count') or 0) > FULL_EVIDENCE_ROWS:
+            # The one row limit left: refuse before queuing instead of after the run starts.
+            raise DomainError('TOO_MANY_ROWS', f'Subtraction and CASE datasets over {FULL_EVIDENCE_ROWS:,} rows cannot be '
+                              'compared yet; use a smaller extract or a dataset with plain amount columns.', 422)
         if flat_contract.get('version') == 7:
             from packages.metricguard_core.common import CoreError
             from packages.metricguard_core.flat_case import check_case_ir
@@ -976,7 +1004,22 @@ def create_app(database_url=None, data_dir=None, mode=None):
                     a['ir'].get('measure_expression') != snapshot['manifest']['contract'].get('measure_expression')):
                 raise DomainError('DIFFERENT_MEASURE_EXPRESSIONS', 'Both definitions must evaluate the identical declared measure expression.', 422)
         elif a['ir'].get('aggregate') != b['ir'].get('aggregate'):
-            raise DomainError('NOT_COMPARABLE', 'Both definitions must use the same aggregate: both SUM or both COUNT(*).', 422)
+            raise DomainError('NOT_COMPARABLE', 'Both definitions must use the same kind of calculation: both totals (SUM), '
+                              'both record counts, both distinct counts, or both ratios/averages.', 422)
+        elif a['ir'].get('aggregate') == 'count_distinct':
+            if a['ir']['measure'] != b['ir']['measure']:
+                raise DomainError('NOT_COMPARABLE', 'Both definitions must count distinct values of the same column.', 422)
+        elif a['ir'].get('aggregate') == 'ratio':
+            from packages.metricguard_core.common import CoreError
+            from packages.metricguard_core.flat_ratio import check_comparable
+            try:
+                check_comparable(a['ir'], b['ir'], flat_contract)
+            except CoreError as error:
+                raise DomainError('NOT_COMPARABLE', error.message, 422) from error
+        elif flat_contract.get('version') == 8:
+            if a['ir'].get('aggregate') == 'sum' and (a['ir']['measure'] != b['ir']['measure'] or
+                    a['ir']['measure'] not in {c['name'] for c in flat_contract['decimal_columns']}):
+                raise DomainError('NOT_COMPARABLE', 'Both definitions must SUM the same amount column.', 422)
         elif a['ir'].get('aggregate') != 'count' and (a['ir']['measure'] != b['ir']['measure'] or
                 a['ir']['measure'] != snapshot['manifest']['contract']['measure']):
             raise DomainError('NOT_COMPARABLE', 'Both definitions must SUM the same declared measure.')
@@ -1017,6 +1060,77 @@ def create_app(database_url=None, data_dir=None, mode=None):
         if execution_mode != 'isolated':
             raise DomainError('ISOLATION_REQUIRED', 'Flat comparisons require the local isolated runner.')
         payload['purpose'] = 'flat_comparison'
+        payload['execution_policy'] = 'flat_snapshot_v1'
+        return store.queue(payload, idempotency_key, execution_mode, project_id=pid)
+
+    def validated_snapshot_change(body, auth=None, pid=None):
+        """One flat definition on two snapshots of the same dataset contract (baseline load vs target load)."""
+        from packages.metricguard_core.common import CoreError
+        from packages.metricguard_core.flat_change import check_definition
+        version = store.version(body.version_id)
+        before, after = store.snapshot(body.baseline_snapshot_id), store.snapshot(body.target_snapshot_id)
+        objects = (version, before, after)
+        if pid and any(item.get('project_id', store.project_id) != pid for item in objects):
+            raise DomainError('FORBIDDEN', 'The definition and both snapshots must belong to the authorized project.', 403)
+        if auth:
+            for item in objects:
+                verify_object_access(store, item, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        if len({item.get('project_id', store.project_id) for item in objects}) != 1:
+            raise DomainError('FORBIDDEN', 'The definition and both snapshots must belong to the same project.', 403)
+        if any(item.get('execution_policy') != 'flat_snapshot_v1' for item in objects):
+            raise DomainError('POLICY_MISMATCH', 'The definition and both snapshots must be single-table (flat) data.')
+        if body.baseline_snapshot_id == body.target_snapshot_id or \
+                before['manifest']['manifest_hash'] == after['manifest']['manifest_hash']:
+            raise DomainError('NOT_COMPARABLE', 'Choose two different data loads to compare.', 422)
+        contract_hash = before.get('contract_hash')
+        if not contract_hash or after.get('contract_hash') != contract_hash:
+            raise DomainError('SNAPSHOT_CONTRACT_MISMATCH', 'The two snapshots were loaded under different dataset contracts '
+                              '(row key, columns or units differ); compare loads of the same dataset.', 422)
+        if version.get('contract_hash') != contract_hash or body.context.contract_hash != contract_hash:
+            raise DomainError('NOT_COMPARABLE', 'The definition is bound to a different dataset contract than these snapshots.', 422)
+        try:
+            check_definition(version['ir'], before['manifest']['contract'])
+        except CoreError as error:
+            raise DomainError('NOT_COMPARABLE', error.message, 422) from error
+        if body.context.unit_label != before['manifest']['unit_label'] or body.context.scope != before['scope']:
+            raise DomainError('NOT_COMPARABLE', 'Unit or whole-snapshot scope differs from the frozen contract.')
+        for item in (before, after):
+            if not Path(item['artifact_path']).is_file():
+                raise DomainError('SNAPSHOT_MISSING', 'One of these snapshots is missing and cannot be replayed.')
+        context = {**body.context.model_dump(mode='json'), 'comparison': 'snapshot_change',
+                   'manifest_hash': before['manifest']['manifest_hash'],
+                   'target_manifest_hash': after['manifest']['manifest_hash']}
+        return {'baseline_version_id': body.version_id, 'target_version_id': body.version_id,
+                'snapshot_id': body.baseline_snapshot_id, 'target_snapshot_id': body.target_snapshot_id,
+                'context': context, 'relationship': 'candidate'}
+
+    def _snapshot_change_access(body, request, roles):
+        auth = get_auth_context(request, store)
+        snap = None
+        try:
+            snap = store.snapshot(body.baseline_snapshot_id)
+        except Exception:
+            pass
+        pid = resolve_project_id(request, auth, store=store, fallback_object=snap)
+        verify_project_access(store, pid, auth, allowed_roles=roles)
+        return auth, pid
+
+    @app.post('/api/v1/flat/snapshot-changes/validate')
+    def validate_snapshot_change(body: FlatSnapshotChangeInput, request: Request):
+        auth, pid = _snapshot_change_access(body, request, ('owner', 'analyst', 'reader'))
+        validated_snapshot_change(body, auth=auth, pid=pid)
+        if execution_mode != 'isolated':
+            raise DomainError('ISOLATION_REQUIRED', 'Comparing two data loads requires the local isolated runner.')
+        return {'comparability_status': 'comparable', 'execution_mode': execution_mode}
+
+    @app.post('/api/v1/flat/snapshot-changes', status_code=202)
+    def compare_snapshot_change(body: FlatSnapshotChangeInput, request: Request,
+                                idempotency_key: str = Header(..., min_length=1, max_length=200)):
+        auth, pid = _snapshot_change_access(body, request, ('owner', 'analyst'))
+        payload = validated_snapshot_change(body, auth=auth, pid=pid)
+        if execution_mode != 'isolated':
+            raise DomainError('ISOLATION_REQUIRED', 'Comparing two data loads requires the local isolated runner.')
+        payload['purpose'] = 'snapshot_change'
         payload['execution_policy'] = 'flat_snapshot_v1'
         return store.queue(payload, idempotency_key, execution_mode, project_id=pid)
 
@@ -1100,7 +1214,30 @@ def create_app(database_url=None, data_dir=None, mode=None):
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        prefetch_evidence(run)
         return run
+
+    def prefetch_evidence(run):
+        """Start the full evidence verification as soon as a finished run is first seen.
+
+        The check itself is unchanged (every byte and row, before any page is served);
+        it simply runs while the person reads the headline instead of on their first click.
+        """
+        if run.get('state') not in ('succeeded', 'partial') or not (run.get('result') or {}).get('evidence_artifact'):
+            return
+        try:
+            path, key, verify_all = evidence_access(run)
+        except (KeyError, TypeError):
+            return
+        if not Path(path).is_file() or evidence_cache.is_ready(path, key):
+            return
+
+        def work():
+            try:
+                evidence_cache.summary(path, key, verify_all)
+            except Exception:  # a failure is reported on the next real read, with its own message
+                pass
+        threading.Thread(target=work, name=f'evidence-prefetch-{run["id"]}', daemon=True).start()
 
     @app.post('/api/v1/investigations', status_code=201)
     def save_investigation(body: InvestigationInput, request: Request):
@@ -1211,6 +1348,19 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 raise DomainError('ISOLATION_REQUIRED', 'Relational replay requires local isolated execution.')
             payload.update(purpose='investigation_replay', execution_policy='relational_snapshot_v1')
             return store.queue(payload, idempotency_key, execution_mode, project_id=pid)
+        if item['context'].get('comparison') == 'snapshot_change':
+            context = {k: v for k, v in item['context'].items()
+                       if k not in ('comparison', 'manifest_hash', 'target_manifest_hash')}
+            body = FlatSnapshotChangeInput.model_validate({
+                'version_id': item['baseline_version_id'], 'baseline_snapshot_id': item['snapshot_id'],
+                'target_snapshot_id': item.get('target_snapshot_id'), 'context': context})
+            payload = validated_snapshot_change(body, auth=auth, pid=pid)
+            if payload['context'] != item['context']:
+                raise DomainError('REPLAY_PIN_MISMATCH', 'A saved snapshot changed; replay is unavailable.')
+            if execution_mode != 'isolated':
+                raise DomainError('ISOLATION_REQUIRED', 'Replay requires the local isolated runner.')
+            payload.update(purpose='investigation_replay', execution_policy='flat_snapshot_v1')
+            return store.queue(payload, idempotency_key, execution_mode, project_id=pid)
         if item['context'].get('mode') == 'flat_snapshot':
             body = FlatComparisonInput.model_validate({
                 'baseline_version_id': item['baseline_version_id'],
@@ -1253,6 +1403,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
         page = evidence_page(run, offset, limit, changed_only=changed_only, query=q, order=order)
+        page['items'] = evidence_cache.annotate_ratio(page['items'], (run.get('result') or {}).get('ratio'))
         if with_context:
             context, _ = run_context(run)
             if context is not None or run.get('execution_policy') == 'relational_snapshot_v1':
@@ -1263,8 +1414,11 @@ def create_app(database_url=None, data_dir=None, mode=None):
         """(record context or None, available column names) for one run; never raises for missing context."""
         if run.get('execution_policy') == 'relational_snapshot_v1':
             contract = (store.snapshot(run['snapshot_id']).get('manifest') or {}).get('contract') or {}
-            columns = [f'fact.{c}' for c in (contract.get('fact') or {}).get('categories', [])] + \
-                      [f'dimension.{c}' for c in (contract.get('dimension') or {}).get('categories', [])]
+            columns = [f'fact.{c}' for c in (contract.get('fact') or {}).get('categories', [])]
+            if contract.get('version') == 2:  # several lookup tables: <role>.<column>
+                columns += [f"{d['role']}.{c}" for d in contract.get('dimensions', []) for c in d['categories']]
+            else:
+                columns += [f'dimension.{c}' for c in (contract.get('dimension') or {}).get('categories', [])]
             return None, columns
         info = store.evidence_context(run['id'], run.get('attempt', 1))
         path = data_dir / 'evidence' / f"{run['id']}-{run.get('attempt', 1)}.context.jsonl"
@@ -1282,21 +1436,59 @@ def create_app(database_url=None, data_dir=None, mode=None):
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
-        if not (run.get('result') or {}).get('evidence_artifact'):
+        result = run.get('result') or {}
+        if not result.get('evidence_artifact'):
             return {'available': False, 'columns': [], 'reason': 'This run has no stored record evidence.'}
         context, columns = run_context(run)
+        excluded = {}
+        if result.get('aggregate') == 'count_distinct':
+            info = store.evidence_context(run['id'], run.get('attempt', 1)) or {}
+            entity = (result.get('distinct') or {}).get('entity_column', 'entity')
+            excluded = {name: f'Some {entity} values appear under more than one {name}, so a per-{name} '
+                              'distinct count would not add up to the total.'
+                        for name in (info.get('excluded_columns') or {})}
         if not columns:
-            return {'available': False, 'columns': [],
-                    'reason': 'This comparison was run before column breakdowns existed. Replay it to enable them.'}
+            return {'available': False, 'columns': [], 'unavailable_columns': excluded,
+                    'reason': ('No column has a single value per counted item, so no exact breakdown exists.' if excluded else
+                               'This comparison was run before column breakdowns existed. Replay it to enable them.')}
         chosen = column or columns[0]
         if chosen not in columns:
+            if chosen in excluded:
+                raise DomainError('INVALID_COLUMN', excluded[chosen])
             raise DomainError('INVALID_COLUMN', f"'{chosen}' is not a filter column of this dataset.")
         path, key, verify_all = evidence_access(run)
         try:
-            return {'available': True, 'columns': columns,
-                    **evidence_cache.breakdown(path, key, verify_all, chosen, context)}
+            split = evidence_cache.breakdown(path, key, verify_all, chosen, context, ratio=result.get('ratio'))
+            if result.get('evidence_coverage'):
+                # Only changed records are listed: per-group changes are exact, per-group totals are not shown.
+                split = {**split, 'groups': [{**g, 'current': None, 'proposed': None} for g in split['groups']],
+                         'coverage_note': 'Only records whose inclusion changed are listed for this large dataset, so '
+                                          'each value’s change is exact but its current and proposed totals are not shown.'}
+            return {'available': True, 'columns': columns, 'unavailable_columns': excluded, **split}
         except (ValueError, KeyError, TypeError, OSError) as error:
             raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
+
+    @app.get('/api/v1/comparisons/{ident}/entity-records')
+    def entity_records(ident: str, request: Request, entity: str = Query(..., max_length=256),
+                       offset: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=500)):
+        """For a COUNT(DISTINCT) run: the records carrying one counted value, and whether each was included."""
+        auth = get_auth_context(request, store)
+        run = store.get_run(ident)
+        verify_shared_access(request, store, auth, run)
+        verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        result = run.get('result') or {}
+        if result.get('aggregate') != 'count_distinct':
+            raise DomainError('POLICY_MISMATCH', 'Record lists are available only for distinct-count comparisons.')
+        info = store.evidence_context(run['id'], run.get('attempt', 1), kind='evidence_members')
+        path = data_dir / 'evidence' / f"{run['id']}-{run.get('attempt', 1)}.members.jsonl"
+        if not info or not path.is_file():
+            raise DomainError('EVIDENCE_UNAVAILABLE', 'This comparison has no stored record list.')
+        try:
+            page = evidence_cache.entity_records_page(path, info, entity, offset, limit)
+        except (ValueError, KeyError, TypeError, OSError) as error:
+            raise DomainError('EVIDENCE_INTEGRITY', 'Saved record list failed its integrity check.') from error
+        return {'entity': entity, 'entity_column': (result.get('distinct') or {}).get('entity_column'),
+                **page}
 
     @app.get('/api/v1/comparisons/{ident}/join-evidence')
     def join_evidence(ident: str, request: Request, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100)):
@@ -1331,7 +1523,10 @@ def create_app(database_url=None, data_dir=None, mode=None):
                     'blank_amount_rows': sum(1 for r in rows if r.get('baseline_null_term') or r.get('target_null_term'))}
         path, key, verify_all = evidence_access(run)
         try:
-            return evidence_cache.summary(path, key, verify_all)
+            summary = evidence_cache.summary(path, key, verify_all)
+            if result.get('ratio'):
+                summary = {**summary, 'top_changes': evidence_cache.annotate_ratio(summary['top_changes'], result['ratio'])}
+            return summary
         except (ValueError, KeyError, TypeError, OSError) as error:
             raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
 
@@ -1354,8 +1549,14 @@ def create_app(database_url=None, data_dir=None, mode=None):
             except (ValueError, KeyError, TypeError, OSError) as error:
                 raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
             rows_iter = evidence_cache.iter_rows(path, key, verify_all)
-        columns = ['record', 'current_included', 'proposed_included', 'current_contribution', 'proposed_contribution',
-                   'change', 'current_blank_amount', 'proposed_blank_amount']
+        ratio = result.get('ratio')
+        if ratio:
+            columns = ['record', 'current_numerator_input', 'current_denominator_input', 'current_included', 'proposed_included',
+                       'current_numerator', 'proposed_numerator', 'current_denominator', 'proposed_denominator',
+                       'effect_exact', 'effect_rounded']
+        else:
+            columns = ['record', 'current_included', 'proposed_included', 'current_contribution', 'proposed_contribution',
+                       'change', 'current_blank_amount', 'proposed_blank_amount']
 
         def generate():
             import csv as _csv
@@ -1368,9 +1569,16 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 # Neutralise spreadsheet formulas in key values.
                 if key_value[:1] in ('=', '+', '-', '@'):
                     key_value = "'" + key_value
-                writer.writerow([key_value, row.get('baseline_included'), row.get('target_included'),
-                                 row.get('baseline_contribution'), row.get('target_contribution'), row.get('delta'),
-                                 bool(row.get('baseline_null_term')), bool(row.get('target_null_term'))])
+                if ratio:
+                    exact, rounded = evidence_cache.ratio_effect(row.get('delta'), ratio)
+                    writer.writerow([key_value, row.get('baseline_numerator_input'), row.get('baseline_denominator_input'),
+                                     row.get('baseline_included'), row.get('target_included'),
+                                     row.get('baseline_numerator'), row.get('target_numerator'),
+                                     row.get('baseline_denominator'), row.get('target_denominator'), exact, rounded])
+                else:
+                    writer.writerow([key_value, row.get('baseline_included'), row.get('target_included'),
+                                     row.get('baseline_contribution'), row.get('target_contribution'), row.get('delta'),
+                                     bool(row.get('baseline_null_term')), bool(row.get('target_null_term'))])
                 if buffer.tell() > 64 * 1024:
                     yield buffer.getvalue()
                     buffer.seek(0); buffer.truncate()
@@ -1465,9 +1673,15 @@ def create_app(database_url=None, data_dir=None, mode=None):
             contract = store.snapshot(run['snapshot_id'])['manifest']['contract']
             case_context = {'contract': contract, 'baseline': baseline_ir, 'target': target_ir}
             measure_expr = None
-        return verify_artifact(artifact, manifest, result['delta_target_minus_baseline'], offset, limit,
+        ratio_context = distinct_context = None
+        if run.get('execution_policy') == 'flat_snapshot_v1' and baseline_ir.get('aggregate_policy'):
+            contract = store.snapshot(run['snapshot_id'])['manifest']['contract']
+            ratio_context, distinct_context = aggregate_contexts(contract, baseline_ir, target_ir)
+            measure_expr = None
+        return verify_artifact(artifact, manifest, expected_artifact_delta(result, ratio_context), offset, limit,
                                measure_expression=measure_expr, case_context=case_context, expected_result=result, relational_context=relational_context,
-                               include_join_evidence=include_join_evidence)
+                               include_join_evidence=include_join_evidence, ratio_context=ratio_context,
+                               distinct_context=distinct_context)
 
     @app.get('/api/v1/comparisons/{ident}/export')
     def export(ident: str, request: Request, format: str = Query('json', pattern='^(json|html)$')):
@@ -1724,6 +1938,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             relative_threshold=policy.get('relative_threshold'),
             is_intentional_variant=is_intentional_variant,
             suppress_intentional_variants=policy.get('suppress_intentional_variants', True),
+            exact_ratio=result.get('ratio'),
         )
 
         alert = None

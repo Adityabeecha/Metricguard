@@ -767,10 +767,15 @@ def test_failure_while_writing_duckdb(tmp_workspace, pg_schema, retail_contract,
 
     import duckdb
 
-    def failing_executemany(self, *args, **kwargs):
-        raise duckdb.Error("Simulated disk error while writing DuckDB")
+    # Validated rows are loaded with one COPY from a staging CSV; fail that write.
+    original_execute = duckdb.DuckDBPyConnection.execute
 
-    monkeypatch.setattr(duckdb.DuckDBPyConnection, 'executemany', failing_executemany)
+    def failing_copy(self, query, *args, **kwargs):
+        if str(query).lstrip().upper().startswith('COPY'):
+            raise duckdb.Error("Simulated disk error while writing DuckDB")
+        return original_execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(duckdb.DuckDBPyConnection, 'execute', failing_copy)
 
     selection = PostgresSourceSelection(
         source_uri=PG_TEST_URL,

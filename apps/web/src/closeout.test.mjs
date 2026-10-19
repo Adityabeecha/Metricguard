@@ -5,6 +5,7 @@ import { NOT_DECLARED, summarizeDataset } from './datasetSummary.ts';
 import { buildFlatSql, buildRelationalSql, describeCalculation, flatFilterColumns, formProblems } from './comparisonBuilder.ts';
 import { summarizeResult } from './resultSummary.ts';
 import { buildLibraryItems, filterLibraryItems } from './investigationLibrary.ts';
+import './resultUnits.test.mjs';
 
 // ---------- fixtures (the 8-row V8 flat case and the 5-row relational case) ----------
 const flatContract = {
@@ -248,6 +249,6 @@ test('upload: a unique reference column is suggested as the key over the whole f
 test('errors: suggestions match the actual problem', () => {
   assert.match(humanizeError({ code: 'INVALID_CONTRACT', message: 'Column names must be distinct plain identifiers' }).suggestion, /only one role/);
   assert.match(humanizeError({ code: 'INVALID_KEYS', message: 'Row key values must be unique; duplicate A1' }).title, /Not Unique/);
-  assert.match(classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: 'Only one SUM over the whole snapshot is supported' }).guidance, /COUNT\(\*\) is also supported/);
+  assert.match(classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: 'Only one SUM over the whole snapshot is supported' }).guidance, /COUNT\(DISTINCT column\).*AVG\(amount\)/);
   assert.match(classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: 'Exactly one SELECT is required' }).guidance, /single SELECT/);
 });

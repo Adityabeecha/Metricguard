@@ -42,6 +42,77 @@ function RowReason({side, detail}:{side:'baseline'|'target';detail:RelationalSid
   </section>;
 }
 
+/** Verified join evidence for a fact table with several lookup tables (explanation policy v2). */
+type StarLink = {foreign_key:string|null;dimension_key:string|null;matched:boolean;membership:'matched'|'null_foreign_key'|'missing_dimension'};
+type StarSummary = {schema_version:2;policy:'relational-join-evidence-v2';summary_hash:string;fact_rows:number;
+  changed_inclusion_rows:number;nonzero_contribution_rows:number;null_semantics:string;limitations:string[];
+  contract:{fact:{table:string;key:string;grain:string};measure:{column:string};unit_label:string;
+    dimensions:Array<{role:string;table:string;key:string;grain:string;fact_foreign_key:string}>};
+  join_proof:{fact_rows:number;left_join_rows:number;dimensions:Record<string,{dimension_rows:number;matched_fact_rows:number;null_foreign_key_rows:number;missing_nonnull_foreign_key_rows:number}>};
+  definitions:Record<'baseline'|'target',{joins:Record<string,'inner'|'left'>;predicates:Array<{table:string;column:string;op:string;values:string[]}>}>;
+  side_counts:Record<'baseline'|'target',Record<RelationalRowOutcome,number>>;
+  reconciliation:{status:string;row_delta_sum:string;residual:string|null};
+  pins:{execution_policy:string;contract_hash:string;evidence_sha256:string;source_hashes:Record<string,string>}};
+
+function StarRowReasons({detail}:{detail:unknown}) {
+  const row = detail as Record<'baseline'|'target',{outcome:RelationalRowOutcome;where_state:string;unmatched_inner_joins:string[];
+    predicates:Array<{field:string;observed:string|null;state:string}>}>;
+  return <div className="join-row-detail">{sides.map(side=><section key={side} className="join-row-reason">
+    <h4>{title(side)}</h4><p>{outcomeLabels[row[side].outcome]}</p>
+    {row[side].outcome === 'excluded_join'
+      ? <p className="v2-help">No match in {row[side].unmatched_inner_joins.join(', ')}. The required join removes this record before filters are evaluated.</p>
+      : <><p className="v2-help">WHERE: {row[side].where_state.toUpperCase()}. Blank comparisons are UNKNOWN and do not pass WHERE.</p>
+        {row[side].predicates.length > 0 && <table><thead><tr><th>Field</th><th>Observed value</th><th>Filter state</th></tr></thead>
+          <tbody>{row[side].predicates.map((p,i)=><tr key={i}><td>{p.field}</td><td>{value(p.observed)}</td><td>{p.state.toUpperCase()}</td></tr>)}</tbody></table>}</>}
+  </section>)}</div>;
+}
+
+function StarEvidence({summary,items,tab,explanations}:{summary:StarSummary;items:Array<Record<string,unknown>>;tab:'change'|'proof'|'records'|'pins';explanations:Map<string,unknown>}) {
+  const c = summary.contract;
+  const joinText = (joins:Record<string,'inner'|'left'>) => Object.keys(joins).length === 0 ? 'No lookup joined'
+    : Object.entries(joins).map(([role,kind])=>`${kind.toUpperCase()} JOIN ${role}`).join(' · ');
+  return <>
+    <p>{summary.fact_rows} facts checked. {summary.changed_inclusion_rows} changed inclusion; {summary.nonzero_contribution_rows} have a nonzero row difference.</p>
+    {tab === 'change' && <div className="v2-grid two join-definitions">{sides.map(side=><section key={side}>
+      <h4>{title(side)} · {joinText(summary.definitions[side].joins)}</h4>
+      <p className="mono-cell">SUM({c.fact.table}.{c.measure.column})</p>
+      {summary.definitions[side].predicates.length > 0
+        ? <ul>{summary.definitions[side].predicates.map((p,i)=><li key={i} className="mono-cell">{p.table}.{p.column} {p.op === 'is_null' ? 'IS NULL' : p.op === 'is_not_null' ? 'IS NOT NULL' : `${p.op === 'eq' ? '=' : 'IN'} ${p.values.map(v=>value(v)).join(', ')}`}</li>)}</ul>
+        : <p>No categorical filters.</p>}
+    </section>)}</div>}
+    {tab === 'proof' && <><div className="table-scroll"><table><caption>Lookup tables · proven on the frozen snapshot</caption>
+      <thead><tr><th>Lookup</th><th>Join path</th><th className="join-number">Rows</th><th className="join-number">Matched facts</th><th className="join-number">NULL link</th><th className="join-number">Link not found</th></tr></thead>
+      <tbody>{c.dimensions.map(d=>{const p = summary.join_proof.dimensions[d.role]; return <tr key={d.role}>
+        <td>{d.role}</td><td className="mono-cell">{c.fact.table}.{d.fact_foreign_key} → {d.table}.{d.key}</td>
+        <td className="join-number mono-cell">{p.dimension_rows}</td><td className="join-number mono-cell">{p.matched_fact_rows}</td>
+        <td className="join-number mono-cell">{p.null_foreign_key_rows}</td><td className="join-number mono-cell">{p.missing_nonnull_foreign_key_rows}</td></tr>;})}</tbody>
+    </table></div>
+    <div className="table-scroll"><table><caption>All facts by outcome · counts are for the complete artifact</caption>
+      <thead><tr><th>Outcome</th><th className="join-number">Baseline</th><th className="join-number">Target</th></tr></thead>
+      <tbody>{(Object.keys(outcomeLabels) as RelationalRowOutcome[]).map(outcome=><tr key={outcome}><td>{outcomeLabels[outcome]}</td>
+        <td className="join-number mono-cell">{summary.side_counts.baseline[outcome]}</td><td className="join-number mono-cell">{summary.side_counts.target[outcome]}</td></tr>)}</tbody>
+    </table></div></>}
+    {tab === 'change' && <div className={`v2-status ${summary.reconciliation.status === 'reconciled' ? 'good' : 'warn'}`}>
+      {summary.reconciliation.status === 'reconciled'
+        ? <>Row contributions across all {summary.fact_rows} facts sum to {summary.reconciliation.row_delta_sum} {c.unit_label}, matching target minus baseline. Residual: {summary.reconciliation.residual}.</>
+        : <>At least one endpoint SUM is NULL. Gap and residual are not applicable.</>}
+    </div>}
+    {tab === 'records' && <div className="table-scroll"><table className="join-records"><caption>Supporting facts on this page</caption>
+      <thead><tr><th>Fact key</th>{c.dimensions.map(d=><th key={d.role}>{d.role} link</th>)}<th>Measure</th><th>Target − baseline</th></tr></thead>
+      <tbody>{items.map(row=>{const links = row.links as Record<string,StarLink>; return <tr key={String(row.fact_key)}>
+        <td className="mono-cell">{String(row.fact_key)}
+          {explanations.has(String(row.fact_key)) && <details><summary>Explain this fact</summary><StarRowReasons detail={explanations.get(String(row.fact_key))}/></details>}
+        </td>
+        {c.dimensions.map(d=><td key={d.role}>{membershipLabels[links[d.role].membership]}<br/><span className="mono-cell">{value(links[d.role].foreign_key)}</span></td>)}
+        <td className="mono-cell">{row.measure_value == null ? 'NULL' : String(row.measure_value)}</td>
+        <td className="mono-cell">{String(row.delta)}</td></tr>;})}</tbody>
+    </table></div>}
+    <p className="v2-help">{summary.null_semantics}</p>
+    {tab === 'pins' && <><ul className="v2-help">{summary.limitations.map((limitation,i)=><li key={i}>{limitation}</li>)}</ul>
+    <details><summary>All frozen hashes, context and reconciliation</summary><pre className="json-view">{JSON.stringify(summary,null,2)}</pre></details></>}
+  </>;
+}
+
 export function RelationalEvidencePanel({run,versions}:{run:RelationalRun;versions:Version[]}) {
   const [tab,setTab] = useState<'change'|'proof'|'records'|'pins'>('change');
   const [offset,setOffset] = useState(0);
@@ -58,7 +129,9 @@ export function RelationalEvidencePanel({run,versions}:{run:RelationalRun;versio
       if (result.run_id !== run.id || result.snapshot_id !== run.snapshot_id ||
           result.baseline_version_id !== run.baseline_version_id || result.target_version_id !== run.target_version_id ||
           result.offset !== offset || result.join_evidence.summary.pins.contract_hash !== run.context.contract_hash ||
-          result.join_evidence.summary.policy !== 'relational-join-evidence-v1' || result.join_evidence.summary.schema_version !== 1) {
+          !((result.join_evidence.summary.policy === 'relational-join-evidence-v1' && result.join_evidence.summary.schema_version === 1) ||
+            ((result.join_evidence.summary as unknown as StarSummary).policy === 'relational-join-evidence-v2' &&
+             (result.join_evidence.summary as unknown as StarSummary).schema_version === 2))) {
         throw new Error('Join evidence does not match this comparison. Reopen the saved run before continuing.');
       }
       setPage(result);
@@ -85,7 +158,14 @@ export function RelationalEvidencePanel({run,versions}:{run:RelationalRun;versio
       <button type="button" className="button secondary small" onClick={()=>setRetry(v=>v+1)}>Retry evidence check</button>
       {offset > 0 && <button type="button" className="button secondary small" onClick={()=>setOffset(0)}>Return to first page</button>}
     </div></div>}
-    {page && summary && c && proof && reconciliation && definitions && <>
+    {page && summary && (summary as unknown as StarSummary).schema_version === 2 && <>
+      <StarEvidence summary={summary as unknown as StarSummary} items={page.items as unknown as Array<Record<string,unknown>>} tab={tab} explanations={explanations}/>
+      {tab === 'records' && <div className="pagination"><span>{page.items.length ? offset+1 : 0}–{offset+page.items.length} of {page.total} facts</span><div>
+        <button type="button" className="button secondary small" disabled={loading || offset === 0} onClick={()=>setOffset(v=>Math.max(0,v-100))}>Previous</button>
+        <button type="button" className="button secondary small" disabled={loading || offset+100 >= page.total} onClick={()=>setOffset(v=>v+100)}>Next</button>
+      </div></div>}
+    </>}
+    {page && summary && summary.schema_version === 1 && c && proof && reconciliation && definitions && <>
       {tab === 'change' && <>
         <p>{summary.fact_rows} facts checked. {summary.changed_inclusion_rows} changed inclusion; {summary.nonzero_contribution_rows} have a nonzero row difference.</p>
         <div className="v2-grid two join-definitions">{sides.map(side=><section key={side}>

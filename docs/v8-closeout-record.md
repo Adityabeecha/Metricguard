@@ -151,3 +151,32 @@ Built from the senior-analyst evaluation. Stress results are from `scripts/stres
 Full backend suite with a live PostgreSQL: 609 passed, 0 skipped. Web: 67/67.
 
 Remaining speed limit: about 25 s of each 100k comparison is Docker Desktop file sharing and container overhead on Windows, not calculation (in-process the same comparison takes about 5 s).
+
+## Aggregates, scale, lookup tables and speed (2026-10-18, implemented; acceptance pending)
+
+Follow-up to the analyst feedback above. Design: [distinct and ratio design](superpowers/specs/2026-10-18-distinct-and-ratio-design.md). Map: [project graph](project-graph.md#aggregate-scale-and-lookup-continuation-2026-10-18).
+
+| Feedback item | Status | Notes |
+| --- | --- | --- |
+| Ratios, averages, distinct counts, conversion | Implemented | COUNT(DISTINCT) (entity evidence + membership file), AVG, SUM/COUNT ratios with FILTER, rates, shares; FlatContract v8 (2–8 amounts) for margin % `SUM(revenue - cost) / SUM(revenue)`. Exact fractions; numerator/denominator split; per-record shares add up exactly. |
+| Warehouse scale | Implemented within bounds | Single-table snapshots up to 5,000,000 rows / 512 MiB (file or PostgreSQL). Over 100,000 rows: SUM and COUNT(*) only, evidence lists records whose inclusion changed (at most 100,000). Still a frozen snapshot, not live warehouse execution. Two-table data stays at 100,000 rows per table. |
+| Several lookup tables | Implemented | Relational contract v2: one fact + 1–4 lookups, each INNER/LEFT/not joined per calculation; upload, guided form, join evidence, breakdown by lookup column, governance of one selected lookup. Contract v1 unchanged. |
+| Breakdowns | Done earlier | Extended to ratios (exact group effects) and distinct counts (columns with one value per counted item). |
+| Waiting time | Improved | Docker, 100k rows: SUM 24 → 7.8 s, AVG 75 → 14.7 s, import 17 → 2.9 s. 1M rows: import 13 s, compare 9 s. Collector load of 200k rows: minutes → 3.7 s. |
+| Record columns | Done earlier | Also for distinct-count runs (per counted value) and star datasets. |
+
+Verification (2026-10-18, second round, separate instance on port 8010 with real Docker runner and the local test PostgreSQL 16):
+
+| Check | Result |
+| --- | --- |
+| Browser: distinct count, average, rate, share on a 2,000-row upload | Pass. Exact fractions, top/bottom split adds up, breakdowns exact; distinct breakdown correctly lists non-qualifying columns |
+| Browser: several-amount upload (revenue, cost, units) and margin % | Pass. 34.4908% → 34.5669%, per-region effects add up |
+| Browser: star dataset (orders + customers + products), per-lookup joins, join evidence | Pass. −49,646.00 INR, residual 0.00, all 1,500 facts reconciled |
+| Browser: Metrics page with a star metric (propose, check) | Pass. Governs the selected lookup; other lookups reported as not governed |
+| Live PostgreSQL: 300,000-row table frozen through “Use a PostgreSQL table”, SUM compared | Pass after a fix. Totals equal PostgreSQL’s own SUMs exactly (67,693,165.34 → 101,422,615.39); 75,000 changed records listed |
+| `docker compose config`, `verify_live_runner` | Pass |
+| Full backend suite with live PostgreSQL | 693 passed, 0 failed, 0 skipped |
+| Web tests | 67/67 pass |
+
+Fixed during the check: collected PostgreSQL snapshots were stored without their execution policy, so they could be frozen but never compared (present since the warehouse source was added; older records are read with their manifest's policy); the guided star form stored every lookup's default join when one was changed; `mg.ps1` image-label and rebuild steps failed under Windows PowerShell 5.1; the distinct-count breakdown offered the counted column itself; several labels and the governance join default when switching lookups.
+

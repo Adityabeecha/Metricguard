@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { UploadCloud } from 'lucide-react';
 import { api, type DatasetPreviewRecord, type RelationalContract, type RelationalSnapshot, type SnapshotImport } from '../api';
 import { classifyInvestigationError, type ClassifiedInvestigationError } from '../investigationUtils';
@@ -9,6 +9,10 @@ const tableName = (file: File | null, fallback: string) => {
   const base = (file?.name || '').replace(/\.csv$/i, '').toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^[^a-z_]+/, '');
   return (base || fallback).slice(0, 63);
 };
+
+/** A further lookup table (beyond the first): its file, how the main table points to it, and its filter columns. */
+type ExtraLookup = { id: string; file: File | null; preview: DatasetPreviewRecord | null; key: string; link: string; filters: string[] };
+const MAX_EXTRA_LOOKUPS = 3;
 
 type Props = {
   onCreated: (snapshotId: string) => void;
@@ -42,19 +46,29 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
   const [job, setJob] = useState<SnapshotImport | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<ClassifiedInvestigationError | null>(null);
+  const [extras, setExtras] = useState<ExtraLookup[]>([]);
+  const previewRequests = useRef<Record<Role, number>>({ fact: 0, dimension: 0 });
 
   const headers = (role: Role) => previews[role]?.preview?.headers || [];
+  const extraHeaders = (i: number) => extras[i]?.preview?.preview?.headers || [];
+  const links = [link, ...extras.map(x => x.link)].filter(Boolean);
+  const updateExtra = (i: number, patch: Partial<ExtraLookup>) => setExtras(list => list.map((x, j) => j === i ? { ...x, ...patch } : x));
 
   // Poll previews and the import until they finish.
   useEffect(() => {
     const waiting = (['fact', 'dimension'] as Role[]).filter(r => previews[r] && pending(previews[r]!.state));
-    if (!waiting.length && !(job && pending(job.state))) return;
+    const waitingExtras = extras.map((x, i) => (x.preview && pending(x.preview.state) ? i : -1)).filter(i => i >= 0);
+    if (!waiting.length && !waitingExtras.length && !(job && pending(job.state))) return;
     let active = true;
     const timer = setTimeout(async () => {
       try {
         for (const role of waiting) {
           const next = await api.datasetPreview(previews[role]!.id);
           if (active) setPreviews(p => ({ ...p, [role]: next }));
+        }
+        for (const i of waitingExtras) {
+          const next = await api.datasetPreview(extras[i].preview!.id);
+          if (active) updateExtra(i, { preview: next });
         }
         if (job && pending(job.state)) {
           const next = await api.snapshotImport(job.id);
@@ -66,19 +80,36 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
       } catch (e) { if (active) setProblem(classifyInvestigationError(e)); }
     }, 1200);
     return () => { active = false; clearTimeout(timer); };
-  }, [previews, job]);
+  }, [previews, job, extras]);
 
   const choose = (role: Role, file: File | null) => {
+    const request = ++previewRequests.current[role];
     setFiles(f => ({ ...f, [role]: file }));
     setPreviews(p => ({ ...p, [role]: null }));
-    if (role === 'fact') { setFactKey(''); setLink(''); setAmount(''); setFactFilters([]); }
+    if (role === 'fact') { setFactKey(''); setLink(''); setAmount(''); setFactFilters([]); setExtras(list => list.map(x => ({ ...x, link: '' }))); }
     else { setDimKey(''); setDimFilters([]); }
     if (!file) return;
     const form = new FormData();
     form.append('file', file);
-    api.previewDataset(form).then(p => setPreviews(prev => ({ ...prev, [role]: p }))).catch(e => setProblem(classifyInvestigationError(e)));
+    api.previewDataset(form).then(p => {
+      if (previewRequests.current[role] === request) setPreviews(prev => ({ ...prev, [role]: p }));
+    }).catch(e => { if (previewRequests.current[role] === request) setProblem(classifyInvestigationError(e)); });
   };
 
+  const chooseExtra = (i: number, file: File | null) => {
+    const id = extras[i].id;
+    updateExtra(i, { file, preview: null, key: '', link: '', filters: [] });
+    if (!file) return;
+    const form = new FormData();
+    form.append('file', file);
+    api.previewDataset(form).then(p => setExtras(list => list.map(x => x.id === id && x.file === file ? { ...x, preview: p } : x)))
+      .catch(e => setProblem(classifyInvestigationError(e)));
+  };
+
+  const extraMissing = extras.map((x, i) => !x.file ? `Choose the CSV for lookup table ${i + 2}.`
+    : !extraHeaders(i).length ? `Wait for lookup table ${i + 2} to be read.`
+    : !x.link ? `Choose the main-table column that connects to lookup table ${i + 2}.`
+    : !x.key ? `Choose lookup table ${i + 2}’s identifying column.` : '').find(Boolean) || '';
   const missing = !files.fact || !files.dimension ? 'Choose both CSV files.'
     : !headers('fact').length || !headers('dimension').length ? 'Wait for both files to be read.'
     : !factKey ? 'Choose the column that identifies each record in the main table.'
@@ -86,6 +117,11 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
     : !link ? 'Choose the column that connects to the lookup table.'
     : !dimKey ? 'Choose the lookup table’s identifying column.'
     : !unit.trim() ? 'Enter the unit of the amount.'
+    : factKey === amount || links.includes(factKey) || links.includes(amount) ? 'Record identifier, amount and connecting columns must be different.'
+    : !Number.isInteger(precision) || precision < 1 || precision > 38 ? 'Decimal precision must be a whole number from 1 to 38.'
+    : !Number.isInteger(scale) || scale < 0 || scale > 18 || scale > precision ? 'Decimal places must be a whole number from 0 to 18, no greater than precision.'
+    : extraMissing ? extraMissing
+    : new Set(links).size !== links.length ? 'Each lookup table needs its own connecting column in the main table.'
     : !wholeFiles || !sameUnit ? 'Tick both confirmations.'
     : '';
 
@@ -94,12 +130,45 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
     try {
       const factTable = tableName(files.fact, 'fact_records');
       let dimTable = tableName(files.dimension, 'dim_records');
-      if (dimTable === factTable) dimTable = `${dimTable}_lookup`.slice(0, 63);
+      if (dimTable === factTable) dimTable = `${dimTable.slice(0, 56)}_lookup`;
+      if (extras.length) {
+        // Several lookup tables: relational contract v2, one lookup_<role> file per lookup.
+        const used = new Set([factTable, 'fact']);
+        const lookups = [{ file: files.dimension!, key: dimKey, link, filters: dimFilters }, ...extras.map(x => ({ file: x.file!, key: x.key, link: x.link, filters: x.filters }))]
+          .map((x, i) => {
+            const base = tableName(x.file, `lookup_${i + 1}`);
+            let table = base, suffix = 1;
+            while (used.has(table)) {
+              const tail = `_${suffix++}`;
+              table = `${base.slice(0, 63 - tail.length)}${tail}`;
+            }
+            used.add(table);
+            return { ...x, table };
+          });
+        const contract = await api.post<RelationalContract>('/relational/contracts', {
+          version: 2, mode: 'relational_snapshot', policy: 'relational-star-v1',
+          name: name.trim() || `${factTable} with ${lookups.map(x => x.table).join(', ')}`,
+          fact: { table: factTable, key: factKey, grain: `One row per ${factKey}`, categories: factFilters.filter(c => c !== factKey && c !== amount && !links.includes(c)) },
+          dimensions: lookups.map(x => ({ role: x.table, table: x.table, key: x.key, grain: `One row per ${x.key}`,
+                                          categories: x.filters.filter(c => c !== x.key), fact_foreign_key: x.link })),
+          measure: { column: amount, precision, scale }, measure_meaning: meaning.trim() || amount, unit_label: unit.trim(),
+          values_comparable: true, scope: 'entire_supplied_snapshot', null_policy: nullPolicy,
+        });
+        const form = new FormData();
+        form.append('fact_file', files.fact!);
+        for (const x of lookups) form.append(`lookup_${x.table}`, x.file);
+        form.append('contract_id', contract.id);
+        form.append('name', (name.trim() || [files.fact!.name, ...lookups.map(x => x.file.name)].join(' + ')).slice(0, 160));
+        const result = await api.uploadRelational(form);
+        if ('state' in result) setJob(result as SnapshotImport);
+        else { await refresh(); onCreated((result as RelationalSnapshot).id); }
+        return;
+      }
       const contract = await api.post<RelationalContract>('/relational/contracts', {
         version: 1, mode: 'relational_snapshot', policy: 'relational-snapshot-v1',
         name: name.trim() || `${factTable} with ${dimTable}`,
-        fact: { table: factTable, key: factKey, grain: `One row per ${factKey}`, categories: factFilters },
-        dimension: { table: dimTable, key: dimKey, grain: `One row per ${dimKey}`, categories: dimFilters },
+        fact: { table: factTable, key: factKey, grain: `One row per ${factKey}`, categories: factFilters.filter(c => c !== factKey && c !== amount && c !== link) },
+        dimension: { table: dimTable, key: dimKey, grain: `One row per ${dimKey}`, categories: dimFilters.filter(c => c !== dimKey) },
         relationship: { fact_foreign_key: link, dimension_key: dimKey, cardinality: 'many_to_one', missing_dimension_policy: 'preserve_and_report' },
         measure: { column: amount, precision, scale }, measure_meaning: meaning.trim() || amount, unit_label: unit.trim(),
         values_comparable: true, scope: 'entire_supplied_snapshot', null_policy: nullPolicy,
@@ -139,8 +208,8 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
 
   return (
     <div className="guided-card" aria-labelledby="two-table-title">
-      <h2 id="two-table-title">Upload two connected tables</h2>
-      <p className="lead">A main table of records (for example sales or rentals) and a lookup table that describes something each record points to (for example stores or days). Both are UTF-8 CSV files.</p>
+      <h2 id="two-table-title">Upload connected tables</h2>
+      <p className="lead">A main table of records (for example sales or rentals) and one to four lookup tables describing things each record points to (for example stores or days). Use UTF-8 CSV files.</p>
       {!canUpload && <span className="disabled-reason">{blocker}</span>}
       <div className="calc-grid">
         {(['fact', 'dimension'] as Role[]).map(role => (
@@ -170,11 +239,52 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
           </div>
           <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 6 }}>
             <legend style={{ fontSize: 13, fontWeight: 600 }}>Which columns should be available for filtering? (up to 8 per table)</legend>
-            <small>Main table</small>{filterBoxes('fact', factFilters, setFactFilters, [factKey, amount, link])}
+            <small>Main table</small>{filterBoxes('fact', factFilters, setFactFilters, [factKey, amount, ...links])}
             <small>Lookup table</small>{filterBoxes('dimension', dimFilters, setDimFilters, [dimKey])}
           </fieldset>
+          {extras.map((x, i) => (
+            <div className="calc-card" key={x.id}>
+              <h3>Lookup table {i + 2}</h3>
+              <label>CSV file<input type="file" accept=".csv,text/csv" disabled={!canUpload || busy} onChange={e => chooseExtra(i, e.target.files?.[0] || null)} /></label>
+              {x.preview && pending(x.preview.state) && <p role="status">Reading the file…</p>}
+              {x.preview?.error && <span className="disabled-reason">{x.preview.error.message}</span>}
+              {extraHeaders(i).length > 0 && (
+                <>
+                  <label>Which column in the main table connects to this lookup table?
+                    <select value={x.link} onChange={e => updateExtra(i, { link: e.target.value })}>
+                      <option value="">Choose a column…</option>
+                      {headers('fact').filter(h => h !== factKey && h !== amount && !links.filter(l => l !== x.link).includes(h)).map(h => <option key={h} value={h}>{h}</option>)}
+                    </select>
+                  </label>
+                  <label>Which column uniquely identifies each row of this lookup table?
+                    <select value={x.key} onChange={e => updateExtra(i, { key: e.target.value })}>
+                      <option value="">Choose a column…</option>
+                      {extraHeaders(i).map(h => <option key={h} value={h}>{h}</option>)}
+                    </select>
+                  </label>
+                  <small>Filter columns (up to 8)</small>
+                  <div className="categories-chip-wrap">
+                    {extraHeaders(i).filter(h => h !== x.key).map(h => (
+                      <label key={h} className={`category-chip ${x.filters.includes(h) ? 'active' : ''}`}>
+                        <input type="checkbox" checked={x.filters.includes(h)} disabled={!x.filters.includes(h) && x.filters.length >= 8}
+                          onChange={e => updateExtra(i, { filters: e.target.checked ? [...x.filters, h] : x.filters.filter(v => v !== h) })} />
+                        <span>{h}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+              <button type="button" className="button secondary small" style={{ width: 'fit-content' }} onClick={() => setExtras(list => list.filter((_, j) => j !== i))}>Remove this lookup table</button>
+            </div>
+          ))}
+          {extras.length < MAX_EXTRA_LOOKUPS && (
+            <button type="button" className="button secondary small" style={{ width: 'fit-content' }} disabled={!canUpload || busy}
+              onClick={() => setExtras(list => [...list, { id: crypto.randomUUID(), file: null, preview: null, key: '', link: '', filters: [] }])}>
+              Add another lookup table (e.g. products as well as customers)
+            </button>
+          )}
           <label>Dataset name (optional)<input value={name} maxLength={160} onChange={e => setName(e.target.value)} placeholder="e.g. Hourly rentals with day details" /></label>
-          <label className="checkbox-field-standard"><input type="checkbox" checked={wholeFiles} onChange={e => setWholeFiles(e.target.checked)} /> <span>These two complete files are the whole dataset to compare.</span></label>
+          <label className="checkbox-field-standard"><input type="checkbox" checked={wholeFiles} onChange={e => setWholeFiles(e.target.checked)} /> <span>These complete files are the whole dataset to compare.</span></label>
           <label className="checkbox-field-standard"><input type="checkbox" checked={sameUnit} onChange={e => setSameUnit(e.target.checked)} /> <span>Every amount is in the unit above; no conversion is needed.</span></label>
           <details>
             <summary>Advanced details</summary>

@@ -1,5 +1,6 @@
 """Verified-evidence cache: fast pages without weakening integrity."""
 import json
+import hashlib
 import os
 
 import pytest
@@ -20,7 +21,7 @@ def test_full_verification_runs_once_then_pages_are_direct(tmp_path):
     path = tmp_path / 'run-1.jsonl'
     _write(path, ['0.00', '-200.00', '0.00', '-50.00', '-90.00'])
     calls = []
-    key = (str(path), 'run', 1, 'sha')
+    key = (str(path), 'run', 1, hashlib.sha256(path.read_bytes()).hexdigest())
     rows, total = evidence_cache.page(path, key, lambda: calls.append(1), 0, 2)
     assert total == 5 and [r['row_key'] for r in rows] == ['R000', 'R001']
     rows, _ = evidence_cache.page(path, key, lambda: calls.append(1), 3, 2)
@@ -43,7 +44,7 @@ def test_tamper_with_same_size_and_mtime_is_refused(tmp_path):
     evidence_cache.clear()
     path = tmp_path / 'run-2.jsonl'
     _write(path, ['0.00', '-200.00', '0.00'])
-    key = (str(path), 'run', 2, 'sha')
+    key = (str(path), 'run', 2, hashlib.sha256(path.read_bytes()).hexdigest())
     evidence_cache.page(path, key, lambda: None, 0, 1)
     stat = path.stat()
     data = path.read_bytes().replace(b'-200.00', b'-900.00')
@@ -65,7 +66,7 @@ def test_changed_file_forces_full_reverification(tmp_path):
     evidence_cache.clear()
     path = tmp_path / 'run-3.jsonl'
     _write(path, ['0.00', '-1.00'])
-    key = (str(path), 'run', 3, 'sha')
+    key = (str(path), 'run', 3, hashlib.sha256(path.read_bytes()).hexdigest())
     evidence_cache.page(path, key, lambda: None, 0, 1)
     with path.open('ab') as out:
         out.write(b'{"row_key":"X","delta":"5.00"}\n')

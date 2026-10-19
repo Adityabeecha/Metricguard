@@ -41,6 +41,7 @@ def evaluate_materiality(
     relative_threshold: float | None = None,
     is_intentional_variant: bool = False,
     suppress_intentional_variants: bool = True,
+    exact_ratio: dict | None = None,
 ) -> dict[str, Any]:
     """Evaluate whether an observed gap is material according to registered policy."""
     if is_intentional_variant and suppress_intentional_variants:
@@ -49,6 +50,9 @@ def evaluate_materiality(
             'reason': 'suppressed_intentional_variant',
             'details': {'suppressed': True, 'variant': True},
         }
+
+    if exact_ratio is not None:
+        return _ratio_materiality(exact_ratio, absolute_threshold, relative_threshold)
 
     if delta_str is None or baseline_val_str is None or target_val_str is None:
         return {
@@ -123,6 +127,41 @@ def evaluate_materiality(
         'reason': 'within_thresholds',
         'details': details,
     }
+
+
+def _ratio_materiality(ratio, absolute_threshold, relative_threshold):
+    """Gate ratio changes on verified rational values, never rounded display text."""
+    from fractions import Fraction
+    from packages.metricguard_core.flat_ratio import fraction_text, parse_fraction_text
+
+    if ratio.get('status') != 'defined':
+        return {'is_material': True, 'reason': 'undefined_endpoint',
+                'details': {'undefined_outcome': True, 'exact_ratio': True}}
+    try:
+        baseline = parse_fraction_text(ratio['baseline']['exact'])
+        target = parse_fraction_text(ratio['target']['exact'])
+        delta = parse_fraction_text(ratio['gap_exact'])
+        if target - baseline != delta:
+            raise ValueError('inconsistent exact ratio')
+        absolute = None if absolute_threshold is None else Fraction(str(absolute_threshold))
+        relative = None if relative_threshold is None else Fraction(str(relative_threshold))
+        if (absolute is not None and absolute < 0) or (relative is not None and relative < 0):
+            raise ValueError('invalid threshold')
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return {'is_material': True, 'reason': 'unparseable_value', 'details': {'exact_ratio': True}}
+    details = {'exact_ratio': True, 'gap_exact': fraction_text(delta),
+               'baseline_exact': fraction_text(baseline), 'target_exact': fraction_text(target)}
+    reason, material = 'within_thresholds', False
+    if absolute is not None and abs(delta) >= absolute:
+        reason, material = 'exceeds_absolute_threshold', True
+    elif relative is not None and not baseline and delta:
+        reason, material = 'zero_denominator_non_zero_delta', True
+    elif relative is not None and baseline and abs(delta / baseline) >= relative:
+        reason, material = 'exceeds_relative_threshold', True
+    elif absolute is None and relative is None:
+        material = bool(delta)
+        reason = 'non_zero_delta' if material else 'zero_delta'
+    return {'is_material': material, 'reason': reason, 'details': details}
 
 
 def compute_event_hash(

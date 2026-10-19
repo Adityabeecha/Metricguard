@@ -1,5 +1,6 @@
+import { resultUnit, resultDisplayValue } from './resultSummary.ts';
 // One list of investigations regardless of the execution mode that produced them.
-// Pure module (type-only imports) so it can be tested under node.
+// Pure module with no browser dependencies, so it can be tested under node.
 import type { Bootstrap, InvestigationDraft } from './api';
 
 export type LibraryKind = 'single' | 'relational' | 'orders';
@@ -69,8 +70,8 @@ export function buildLibraryItems(data: Pick<Bootstrap, 'investigations' | 'runs
       datasetName: snapshotName(inv.snapshot_id),
       currentLabel: label(inv.baseline_version_id),
       proposedLabel: label(inv.target_version_id),
-      change: run?.result?.delta_target_minus_baseline ?? null,
-      unit: ctx?.unit_label || run?.result?.currency || ctx?.currency || '',
+      change: resultDisplayValue(run?.result, run?.result?.delta_target_minus_baseline),
+      unit: resultUnit(run?.result, ctx?.unit_label || ctx?.currency || ''),
       hasConclusion: Boolean(inv.decision),
       updatedAt: inv.created_at,
     });
@@ -91,8 +92,8 @@ export function buildLibraryItems(data: Pick<Bootstrap, 'investigations' | 'runs
       datasetName: d.snapshot_id ? snapshotName(d.snapshot_id) : 'No dataset chosen',
       currentLabel: label(d.baseline_version_id),
       proposedLabel: label(d.target_version_id),
-      change: run?.result?.delta_target_minus_baseline ?? null,
-      unit: ctx?.unit_label || '',
+      change: resultDisplayValue(run?.result, run?.result?.delta_target_minus_baseline),
+      unit: resultUnit(run?.result, ctx?.unit_label || ''),
       hasConclusion: false,
       updatedAt: (d as { updated_at?: string; created_at?: string }).updated_at || (d as { created_at?: string }).created_at || '',
     });

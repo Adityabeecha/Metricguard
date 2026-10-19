@@ -71,6 +71,9 @@ def prove_grain(con, contract):
 
 
 def ingest_relational(source, destination, payload):
+    if isinstance(payload, dict) and payload.get('version') in (2, 3):
+        from .relational_star import ingest
+        return ingest(source, destination, payload)
     c = validate_contract(payload)
     source, destination = Path(source), Path(destination)
     if destination.exists() or manifest_path(destination).exists():
@@ -166,6 +169,9 @@ def ingest_relational(source, destination, payload):
 
 
 def validate_manifest(manifest, contract, source_hash=None):
+    if isinstance(contract, dict) and contract.get('version') in (2, 3):
+        from .relational_star import validate_manifest as validate_star_manifest
+        return validate_star_manifest(manifest, contract, source_hash)
     c = validate_contract(contract)
     ts = schemas(c)
     expected = {'mode': MODE, 'policy': POLICY, 'execution_policy': EXECUTION_POLICY,
@@ -219,6 +225,9 @@ def open_snapshot(database):
 
 
 def verify_database(con, contract, manifest):
+    if isinstance(contract, dict) and contract.get('version') in (2, 3):
+        from .relational_star import verify_database as verify_star
+        return verify_star(con, contract, manifest)
     for table, columns in schemas(contract).items():
         actual = {r[0]: r[1] for r in con.execute('DESCRIBE ' + quote(table)).fetchall()}
         if actual != columns:

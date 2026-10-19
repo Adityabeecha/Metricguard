@@ -42,7 +42,14 @@ def _label(value, maximum, field):
         fail('invalid_contract', f'{field} must contain 1–{maximum} characters.')
 
 
+def _is_star(contract):
+    return isinstance(contract, dict) and contract.get('version') in (2, 3)
+
+
 def validate_contract(payload):
+    if _is_star(payload):  # one fact and several lookup tables (relational_star.py)
+        from .relational_star import validate_contract as validate_star
+        return validate_star(payload)
     fields = {'version', 'mode', 'policy', 'name', 'fact', 'dimension', 'relationship',
               'measure', 'measure_meaning', 'unit_label', 'values_comparable', 'scope', 'null_policy'}
     if not isinstance(payload, dict):
@@ -93,6 +100,9 @@ def validate_contract(payload):
 
 
 def schemas(contract):
+    if _is_star(contract):
+        from .relational_star import schemas as star_schemas
+        return star_schemas(contract)
     c = validate_contract(contract)
     m = c['measure']
     return {
@@ -111,6 +121,9 @@ def context_for(contract):
 
 
 def validate_ir(ir, contract):
+    if _is_star(contract):
+        from .relational_star import validate_ir as validate_star_ir
+        return validate_star_ir(ir, contract)
     c = validate_contract(contract)
     fields = {'mode', 'policy', 'contract_version', 'contract_hash', 'aggregate', 'measure', 'join', 'predicates', 'ir_hash'}
     if not isinstance(ir, dict) or set(ir) != fields:
@@ -144,6 +157,9 @@ def validate_ir(ir, contract):
 
 
 def parse_relational(raw_sql, contract):
+    if _is_star(contract):
+        from .relational_star import parse as parse_star
+        return parse_star(raw_sql, contract)
     c = validate_contract(contract)
     if not isinstance(raw_sql, str) or not 1 <= len(raw_sql) <= 50_000:
         fail('unsupported_sql', 'Enter one bounded SELECT SUM query.')
@@ -251,6 +267,9 @@ def parse_relational(raw_sql, contract):
 
 
 def compile_predicates(ir, contract):
+    if _is_star(contract):
+        from .relational_star import compile_predicates as compile_star
+        return compile_star(ir, contract)
     validate_ir(ir, contract)
     parts, params = [], []
     for p in ir['predicates']:

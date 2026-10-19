@@ -12,12 +12,16 @@ import uuid
 from decimal import Decimal, InvalidOperation, localcontext
 
 from packages.metricguard_core.numeric import ScaledInteger, MAX_NUMERIC_STR_LEN
-from services.supervisor.evidence_artifact import verify_artifact, _row_delta
+from services.supervisor.evidence_artifact import (
+    aggregate_contexts, expected_artifact_delta, verify_artifact, _row_delta,
+)
 from packages.metricguard_core.flat_case_evidence import CaseEvidenceValidator, validate_case_result
 
 
 MAX_OUTPUT_BYTES = 25 * 1024 * 1024
-RUN_SECONDS = 60
+# Comparisons and imports of large extracts (millions of rows) need longer than small ones.
+RUN_SECONDS = int(os.environ.get('METRICGUARD_RUN_SECONDS', '600'))
+INGEST_SECONDS = int(os.environ.get('METRICGUARD_INGEST_SECONDS', '1200'))
 
 
 class IngestValidationError(ValueError):
@@ -34,7 +38,29 @@ def file_hash(path):
     return digest.hexdigest()
 
 
-def validate_result(result, case_context=None, relational_context=None):
+def _validate_aggregate(result, ratio_context, distinct_context):
+    """Ratio and COUNT(DISTINCT) results need the trusted definitions; inline evidence is fully checked."""
+    artifact = result.get('evidence_artifact') or {}
+    claims_ratio = (result.get('aggregate') == 'ratio' or result.get('method') == 'flat_ratio_shapley' or
+                    'ratio' in result or 'ratio_binding' in artifact)
+    claims_distinct = (result.get('aggregate') == 'count_distinct' or 'distinct' in result or
+                       result.get('method') == 'flat_distinct_membership_change' or 'distinct_binding' in artifact)
+    if claims_ratio != (ratio_context is not None) or claims_distinct != (distinct_context is not None):
+        raise ValueError('POLICY_MISMATCH')
+    if ratio_context is None and distinct_context is None:
+        return
+    from packages.metricguard_core.flat_distinct_evidence import DistinctEvidenceValidator
+    from packages.metricguard_core.flat_ratio_evidence import RatioEvidenceValidator
+    checker = (RatioEvidenceValidator(ratio_context, result) if ratio_context is not None
+               else DistinctEvidenceValidator(distinct_context, result))
+    if 'evidence_artifact' in result:
+        return  # the artifact's rows and totals are proven by verify_artifact
+    for row in result['evidence']:
+        checker.add(row)
+    checker.finish(result)
+
+
+def validate_result(result, case_context=None, relational_context=None, ratio_context=None, distinct_context=None):
     if not isinstance(result, dict):
         raise ValueError('result must be an object')
     required = ('baseline_value', 'target_value', 'delta_target_minus_baseline',
@@ -47,6 +73,30 @@ def validate_result(result, case_context=None, relational_context=None):
         raise ValueError('invalid provenance')
     if 'evidence_artifact' in result and (not isinstance(result['evidence_artifact'], dict) or result['evidence']):
         raise ValueError('invalid evidence artifact summary')
+    coverage = result.get('evidence_coverage')
+    if coverage is not None:
+        from packages.metricguard_core.flat import MAX_FLAT_ROWS, MAX_LISTED_RECORDS
+        from packages.metricguard_core.disk_evidence import STORAGE_POLICY
+        storage = result['provenance'].get('evidence_storage_policy')
+        listed_limit = MAX_FLAT_ROWS if storage == STORAGE_POLICY else MAX_LISTED_RECORDS
+        if storage is not None and (storage != STORAGE_POLICY or
+                result.get('evidence_artifact', {}).get('storage_policy') != storage):
+            raise ValueError('invalid evidence storage policy')
+        count_fields = {'total_records', 'listed_records', 'unchanged_records',
+                        'unchanged_included_in_both', 'unchanged_included_in_neither'}
+        if (not isinstance(coverage, dict) or set(coverage) != count_fields | {'mode'} or
+                coverage['mode'] != 'changed_records' or
+                result['provenance'].get('evidence_coverage') != 'changed_records' or
+                result['provenance'].get('execution_policy') != 'flat-snapshot-v1' or
+                any(type(coverage[field]) is not int or coverage[field] < 0 for field in count_fields) or
+                coverage['total_records'] > MAX_FLAT_ROWS or coverage['listed_records'] > listed_limit or
+                coverage['unchanged_records'] != coverage['unchanged_included_in_both'] + coverage['unchanged_included_in_neither'] or
+                coverage['total_records'] != coverage['listed_records'] + coverage['unchanged_records'] or
+                coverage['listed_records'] != (result['evidence_artifact'].get('row_count')
+                                               if 'evidence_artifact' in result else len(result['evidence']))):
+            raise ValueError('invalid evidence coverage')
+    elif result['provenance'].get('evidence_coverage') == 'changed_records':
+        raise ValueError('missing evidence coverage')
     if relational_context is not None:
         from packages.metricguard_core.relational_evidence import RelationalEvidenceValidator, validate_result as validate_relational_result
         if case_context is not None:
@@ -76,6 +126,7 @@ def validate_result(result, case_context=None, relational_context=None):
           result.get('method') == 'flat_case_change' or
           'case_binding' in result.get('evidence_artifact', {})):
         raise ValueError('CASE result requires trusted definition context')
+    _validate_aggregate(result, ratio_context, distinct_context)
     if result['baseline_value'] is None or result['target_value'] is None:
         if (result['delta_target_minus_baseline'] is not None or
                 result['absolute_gap'] is not None or result['residual'] is not None or
@@ -119,7 +170,7 @@ def validate_result(result, case_context=None, relational_context=None):
             raise ValueError('bridge residual does not reconcile')
     if result.get('explanation_status') == 'complete_ordered_bridge' and residual != 0:
         raise ValueError('complete bridge has residual')
-    if result['evidence']:
+    if result['evidence'] and ratio_context is None:  # ratio rows hold exact shares, checked above
         try:
             evidence_delta = ScaledInteger.zero()
             for row in result['evidence']:
@@ -140,8 +191,19 @@ class DockerLauncher:
         self.image = image or os.environ.get('METRICGUARD_RUNNER_IMAGE', 'metricguard-runner:1.0')
 
     def start(self, input_dir, output_dir, command=None):
+        args, name = self.arguments(input_dir, output_dir, [self.image, *([] if command is None else [command])])
+        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process.container_name = name
+        return process
+
+    def arguments(self, input_dir, output_dir, image_and_command):
+        """The isolated `docker run` command line; shared with scripts.verify_live_runner."""
         input_dir = Path(input_dir).resolve()
         output_dir = Path(output_dir).resolve()
+        # Large comparisons spool evidence to temporary files (disk_evidence, sqlite). The
+        # 64 MiB in-memory /tmp counts against the 1 GiB memory limit, so temporary files go
+        # to a fresh anonymous volume: disk-backed inside the Docker VM (a host bind mount is
+        # several times slower on Docker Desktop) and removed with the container.
         name = f'metricguard-{uuid.uuid4().hex}'
         args = [
             'docker', 'run', '--rm', '--network', 'none', '--read-only',
@@ -151,18 +213,18 @@ class DockerLauncher:
             '--cpus', '1', '--pids-limit', '64', '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m',
             '--mount', f'type=bind,src={input_dir},dst=/job/input,readonly',
             '--mount', f'type=bind,src={output_dir},dst=/job/output',
-            self.image, *([] if command is None else [command]),
+            '--mount', 'type=volume,dst=/job/scratch',
+            '--env', 'TMPDIR=/job/scratch', '--env', 'SQLITE_TMPDIR=/job/scratch',
+            *image_and_command,
         ]
-        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        process.container_name = name
-        return process
+        return args, name
 
     def stop(self, process):
         name = getattr(process, 'container_name', None)
         if name:
             subprocess.run(['docker', 'kill', name], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, timeout=5, check=False)
-            subprocess.run(['docker', 'rm', '-f', name], stdout=subprocess.DEVNULL,
+            subprocess.run(['docker', 'rm', '-f', '-v', name], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, timeout=5, check=False)
         process.kill()
         process.wait(timeout=5)
@@ -256,16 +318,20 @@ class Supervisor:
                 output_dir.chmod(0o777)
                 shutil.copyfile(source, input_dir / f'source{source.suffix.lower()}')
                 process = self.launcher.start(input_dir, output_dir, 'preview')
-                started = time.monotonic()
+                started = last_beat = time.monotonic()
+                first = True
                 while process.poll() is None:
-                    self.store.worker_seen(self.worker_id)
-                    if not self.store.heartbeat_import(ident, self.worker_id, attempt):
-                        self.launcher.stop(process)
-                        raise ValueError('PREVIEW_LEASE_LOST')
-                    if time.monotonic() - started >= RUN_SECONDS:
+                    now = time.monotonic()
+                    if first or now - last_beat >= 1:
+                        first, last_beat = False, now
+                        self.store.worker_seen(self.worker_id)
+                        if not self.store.heartbeat_import(ident, self.worker_id, attempt):
+                            self.launcher.stop(process)
+                            raise ValueError('PREVIEW_LEASE_LOST')
+                    if now - started >= RUN_SECONDS:
                         self.launcher.stop(process)
                         raise ValueError('PREVIEW_TIMEOUT')
-                    time.sleep(1)
+                    time.sleep(0.1)
                 if process.wait(timeout=5) != 0:
                     error_path = output_dir / 'error.json'
                     if error_path.is_file() and error_path.stat().st_size <= 8192:
@@ -297,6 +363,27 @@ class Supervisor:
         if finished:
             source.unlink(missing_ok=True)
 
+    @staticmethod
+    def _entity_context(output_dir, contract):
+        """For a distinct-count run: (offered columns, excluded columns); None for record context.
+
+        The per-entity context offers only columns with one value per counted item (never
+        the counted column itself); the others are listed with the reason (display only).
+        """
+        path = output_dir / 'context.json'
+        if not path.is_file() or path.stat().st_size > 64 * 1024:
+            return None
+        meta = json.loads(path.read_text(encoding='utf-8'))
+        if 'excluded_columns' not in meta:
+            return None
+        excluded, columns = meta.get('excluded_columns') or {}, meta.get('columns') or []
+        categories = contract.get('categories', [])
+        if (not isinstance(excluded, dict) or any(k not in categories for k in excluded) or
+                any(v != 'multi_valued_per_entity' for v in excluded.values()) or
+                not isinstance(columns, list) or any(c not in categories or c in excluded for c in columns)):
+            raise ValueError('CONTEXT_INVALID')
+        return [c for c in categories if c in columns], excluded
+
     def _publish_context(self, output_dir, published_evidence, contract, evidence_dir, run_id, attempt):
         """Validate and publish the optional record-context file; never fails the run."""
         source = output_dir / 'context.jsonl'
@@ -306,6 +393,10 @@ class Supervisor:
         try:
             from services.supervisor.row_context import validate_context
             info = validate_context(source, published_evidence, list(contract.get('categories', [])))
+            entity = self._entity_context(output_dir, contract)
+            if entity is not None:
+                columns, excluded = entity
+                info = {**info, 'columns': columns, 'excluded_columns': excluded}
             staged = evidence_dir / f'.{run_id}-{attempt}-{uuid.uuid4().hex}.context.tmp'
             shutil.copyfile(source, staged)
             if file_hash(staged) != info['sha256']:
@@ -341,6 +432,27 @@ class Supervisor:
                 shutil.copyfile(sidecar, destination_sidecar)
             else:
                 destination_sidecar.write_text(json.dumps(snapshot['manifest'], allow_nan=False), encoding='utf-8')
+            snapshot_change = (run.get('context') or {}).get('comparison') == 'snapshot_change'
+            target_snapshot = None
+            if snapshot_change:
+                # Two data loads of one dataset: the target load travels as a second, hash-checked file.
+                target_snapshot = self.store.snapshot(run['target_snapshot_id'])
+                target_source = Path(target_snapshot['artifact_path']).resolve(strict=True)
+                target_expected = target_snapshot['manifest']['database_hash']
+                if (run.get('execution_policy') != 'flat_snapshot_v1' or
+                        target_snapshot['manifest']['manifest_hash'] != run['context'].get('target_manifest_hash') or
+                        snapshot['manifest']['manifest_hash'] != run['context'].get('manifest_hash')):
+                    raise ValueError('SNAPSHOT_HASH_MISMATCH')
+                target_copy = input_dir / 'target_snapshot.duckdb'
+                shutil.copyfile(target_source, target_copy)
+                if file_hash(target_copy) != target_expected:
+                    raise ValueError('SNAPSHOT_HASH_MISMATCH')
+                target_sidecar = target_source.with_name(target_source.name + '.manifest.json')
+                target_copy_sidecar = target_copy.with_name(target_copy.name + '.manifest.json')
+                if target_sidecar.is_file():
+                    shutil.copyfile(target_sidecar, target_copy_sidecar)
+                else:
+                    target_copy_sidecar.write_text(json.dumps(target_snapshot['manifest'], allow_nan=False), encoding='utf-8')
             baseline = self.store.version(run['baseline_version_id'])
             target = self.store.version(run['target_version_id'])
             case_context = None
@@ -355,27 +467,37 @@ class Supervisor:
                                       'baseline': baseline['ir'], 'target': target['ir']}
             elif contract.get('version') == 7:
                 case_context = {'contract': contract, 'baseline': baseline['ir'], 'target': target['ir']}
+            ratio_context = distinct_context = None
+            if run.get('execution_policy') == 'flat_snapshot_v1':
+                ratio_context, distinct_context = aggregate_contexts(contract, baseline['ir'], target['ir'])
             job = {'snapshot_hash': expected, 'baseline_ir': baseline['ir'],
                    'target_ir': target['ir'], 'context': run['context'],
                    'execution_policy': run.get('execution_policy', 'retail_v1')}
+            if snapshot_change:
+                job['target_snapshot_hash'] = target_snapshot['manifest']['database_hash']
             (input_dir / 'job.json').write_text(json.dumps(job, allow_nan=False), encoding='utf-8')
             process = self.launcher.start(input_dir, output_dir)
-            started = time.monotonic()
+            started = last_beat = time.monotonic()
+            first = True
+            # Notice the container's exit within 0.1 s; heartbeat and cancel checks stay at about 1 s.
             while process.poll() is None:
-                if hasattr(self.store, 'worker_seen'):
-                    self.store.worker_seen(self.worker_id)
-                if not self.store.heartbeat(run_id, self.worker_id, attempt):
-                    self.launcher.stop(process)
-                    return
-                if self.store.get_run(run_id).get('cancel_requested'):
-                    self.launcher.stop(process)
-                    self.store.finish(run_id, self.worker_id, attempt,
-                                      error={'code': 'CANCELED', 'message': 'Canceled by user'})
-                    return
-                if time.monotonic() - started >= RUN_SECONDS:
+                now = time.monotonic()
+                if first or now - last_beat >= 1:
+                    first, last_beat = False, now
+                    if hasattr(self.store, 'worker_seen'):
+                        self.store.worker_seen(self.worker_id)
+                    if not self.store.heartbeat(run_id, self.worker_id, attempt):
+                        self.launcher.stop(process)
+                        return
+                    if self.store.get_run(run_id).get('cancel_requested'):
+                        self.launcher.stop(process)
+                        self.store.finish(run_id, self.worker_id, attempt,
+                                          error={'code': 'CANCELED', 'message': 'Canceled by user'})
+                        return
+                if now - started >= RUN_SECONDS:
                     self.launcher.stop(process)
                     raise ValueError('RUN_TIMEOUT')
-                time.sleep(1)
+                time.sleep(0.1)
             if process.wait(timeout=5) != 0:
                 error_path = output_dir / 'error.json'
                 if error_path.is_file() and error_path.stat().st_size <= 8192:
@@ -392,18 +514,45 @@ class Supervisor:
             with output.open(encoding='utf-8') as stream:
                 result = json.load(stream, parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite JSON')))
             try:
-                result = validate_result(result, case_context=case_context, relational_context=relational_context)
+                result = validate_result(result, case_context=case_context, relational_context=relational_context,
+                                         ratio_context=ratio_context, distinct_context=distinct_context)
                 if 'evidence_artifact' not in result:
                     raise ValueError('missing evidence artifact')
+                if (result.get('evidence_coverage') is not None and
+                        result['evidence_coverage']['total_records'] != snapshot['manifest'].get('row_count')):
+                    raise ValueError('evidence coverage differs from frozen snapshot')
+                if snapshot_change or result.get('method') == 'flat_snapshot_change':
+                    expected_provenance = {
+                        'comparison': 'snapshot_change' if snapshot_change else None,
+                        'database_hash': expected, 'snapshot_manifest_hash': snapshot['manifest']['manifest_hash'],
+                        'target_database_hash': target_snapshot['manifest']['database_hash'] if snapshot_change else None,
+                        'target_snapshot_manifest_hash': target_snapshot['manifest']['manifest_hash'] if snapshot_change else None}
+                    if (result.get('method') != 'flat_snapshot_change' or
+                            any(result['provenance'].get(k) != v for k, v in expected_provenance.items())):
+                        raise ValueError('Snapshot-change result binding differs')
                 artifact = output_dir / 'evidence.jsonl'
                 measure_expr = None if case_context is not None else baseline.get('ir', {}).get('measure_expression')
+                if ratio_context is not None or distinct_context is not None:
+                    expected_provenance = {'database_hash': expected,
+                                           'source_hash': snapshot['manifest']['source_hash'],
+                                           'snapshot_manifest_hash': snapshot['manifest']['manifest_hash']}
+                    if any(result['provenance'].get(k) != v for k, v in expected_provenance.items()):
+                        raise ValueError('Result snapshot binding differs')
                 if case_context is not None:
                     expected_provenance = {'database_hash': expected,
                                            'source_hash': snapshot['manifest']['source_hash'],
                                            'snapshot_manifest_hash': snapshot['manifest']['manifest_hash']}
                     if any(result['provenance'].get(k) != v for k, v in expected_provenance.items()):
                         raise ValueError('CASE result snapshot binding differs')
-                verify_artifact(artifact, result['evidence_artifact'], result['delta_target_minus_baseline'], measure_expression=measure_expr, case_context=case_context, expected_result=result, relational_context=relational_context)
+                verify_artifact(artifact, result['evidence_artifact'], expected_artifact_delta(result, ratio_context),
+                                measure_expression=measure_expr, case_context=case_context, expected_result=result,
+                                relational_context=relational_context, ratio_context=ratio_context,
+                                distinct_context=distinct_context)
+                members_info = None
+                if distinct_context is not None:
+                    from packages.metricguard_core.flat_distinct_evidence import validate_members
+                    members_info = validate_members(output_dir / 'members.jsonl', artifact, result,
+                                                    row_count=snapshot['manifest'].get('row_count'))
             except (OSError, ValueError, KeyError, TypeError) as error:
                 raise ValueError('RUNNER_OUTPUT_INVALID') from error
             evidence_dir = self.data_dir / 'evidence'
@@ -422,19 +571,33 @@ class Supervisor:
                     raise ValueError('RUNNER_OUTPUT_INVALID')
                 os.replace(staged, published)
                 did_publish = True
+                members_path = None
+                if members_info is not None:
+                    members_path = evidence_dir / f'{run_id}-{attempt}.members.jsonl'
+                    shutil.copyfile(output_dir / 'members.jsonl', staged)
+                    if file_hash(staged) != members_info['sha256']:
+                        raise ValueError('RUNNER_OUTPUT_INVALID')
+                    os.replace(staged, members_path)
                 context_info = self._publish_context(output_dir, published, contract, evidence_dir, run_id, attempt)
                 if not self.store.finish(run_id, self.worker_id, attempt, result=result):
                     published.unlink(missing_ok=True)
+                    if members_path is not None:
+                        members_path.unlink(missing_ok=True)
                     did_publish = False
-                elif context_info is not None and hasattr(self.store, 'record'):
+                elif hasattr(self.store, 'record'):
                     try:
-                        self.store.record('evidence_context', {'run_id': run_id, 'attempt': attempt, **context_info},
-                                          project_id=run.get('project_id'))
+                        if members_info is not None:
+                            self.store.record('evidence_members', {'run_id': run_id, 'attempt': attempt, **members_info},
+                                              project_id=run.get('project_id'))
+                        if context_info is not None:
+                            self.store.record('evidence_context', {'run_id': run_id, 'attempt': attempt, **context_info},
+                                              project_id=run.get('project_id'))
                     except Exception:
                         pass
             except Exception:
                 if did_publish:
                     published.unlink(missing_ok=True)
+                    (evidence_dir / f'{run_id}-{attempt}.members.jsonl').unlink(missing_ok=True)
                 raise
             finally:
                 staged.unlink(missing_ok=True)
@@ -450,7 +613,9 @@ def isolated_ingest(source, destination, metadata, launcher=None, job_root=Path(
     sidecar_destination = destination.with_name(destination.name + '.manifest.json')
     if destination.exists() or sidecar_destination.exists():
         raise ValueError('IMMUTABLE_SNAPSHOT_EXISTS')
-    if source.stat().st_size > 25 * 1024 * 1024 + (4096 if relational else 0):
+    from packages.metricguard_core.flat import MAX_FLAT_BYTES, MAX_FLAT_ROWS
+    byte_limit = MAX_FLAT_BYTES if 'flat_contract' in metadata else 25 * 1024 * 1024 + (4096 * 5 if relational else 0)
+    if source.stat().st_size > byte_limit:
         raise ValueError('UPLOAD_TOO_LARGE')
     launcher = launcher or DockerLauncher()
     job_root.mkdir(parents=True, exist_ok=True)
@@ -464,17 +629,21 @@ def isolated_ingest(source, destination, metadata, launcher=None, job_root=Path(
         process = launcher.start(input_dir, output_dir, 'ingest')
         try:
             if progress is None:
-                code = process.wait(timeout=RUN_SECONDS)
+                code = process.wait(timeout=INGEST_SECONDS)
             else:
-                started = time.monotonic()
+                started = last_beat = time.monotonic()
+                first = True
                 while process.poll() is None:
-                    if not progress():
-                        launcher.stop(process)
-                        raise ValueError('INGEST_LEASE_LOST')
-                    if time.monotonic() - started >= RUN_SECONDS:
+                    now = time.monotonic()
+                    if first or now - last_beat >= 1:  # lease heartbeat about once a second
+                        first, last_beat = False, now
+                        if not progress():
+                            launcher.stop(process)
+                            raise ValueError('INGEST_LEASE_LOST')
+                    if now - started >= INGEST_SECONDS:
                         launcher.stop(process)
                         raise ValueError('INGEST_TIMEOUT')
-                    time.sleep(1)
+                    time.sleep(0.1)
                 code = process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             launcher.stop(process)
@@ -522,7 +691,7 @@ def isolated_ingest(source, destination, metadata, launcher=None, job_root=Path(
                     manifest.get('primary_key') != contract['row_key'] or
                     manifest.get('scope') != 'entire_supplied_snapshot' or
                     type(manifest.get('row_count')) is not int or
-                    not 0 <= manifest['row_count'] <= 100_000):
+                    not 0 <= manifest['row_count'] <= MAX_FLAT_ROWS):
                 raise ValueError('INGEST_MANIFEST_MISMATCH')
         elif manifest.get('schema') != SCHEMA:
             raise ValueError('INGEST_MANIFEST_MISMATCH')
@@ -557,7 +726,7 @@ def main():
     while True:
         store.worker_seen(supervisor.worker_id)
         if not supervisor.run_once():
-            time.sleep(0.5)
+            time.sleep(0.25)
 
 
 if __name__ == '__main__':

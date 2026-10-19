@@ -130,7 +130,7 @@ test('humanizeError converts HTTP 413 upload limit cleanly', () => {
   const humanized = humanizeError(backendErr);
 
   assert.equal(humanized.title, 'File Size Limit Exceeded');
-  assert.ok(humanized.suggestion?.includes('25 MiB'));
+  assert.ok(humanized.message?.includes('512 MiB') && humanized.message.includes('25 MiB'));
 });
 
 test('inferMeaning handles parquet filename with native_null default', () => {

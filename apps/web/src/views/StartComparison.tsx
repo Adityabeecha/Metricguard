@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Database, Plus, Save, Trash2, UploadCloud } from 'lucide-react';
 import { api, ApiError, type Bootstrap, type FlatContract, type InvestigationDraft, type RelationalContract, type Run, type Snapshot } from '../api';
 import {
-  buildFlatSql, buildRelationalSql, describeCalculation, flatFilterColumns, formProblems, guidedFormSupported,
-  OP_LABEL, operatorsFor, relationalFilterColumns, supportsAnyMatch, supportsCount, type CalculationForm, type Filter, type FilterColumn,
+  aggregateRowLimitReason, buildFlatSql, buildRelationalSql, describeCalculation, flatFilterColumns, formProblems, guidedFormSupported,
+  OP_LABEL, operatorsFor, relationalFilterColumns, supportsAnyMatch, supportsCount, supportsDistinct, supportsRatios,
+  RATIO_AGGREGATES, amountColumns, lookupJoins, starLookups, type Aggregate, type LookupJoin, type CalculationForm, type Filter, type FilterColumn,
 } from '../comparisonBuilder';
 import { summarizeDataset } from '../datasetSummary';
 import { classifyInvestigationError, type ClassifiedInvestigationError } from '../investigationUtils';
@@ -11,6 +12,8 @@ import type { Page } from '../router';
 import { ResultReport } from './ResultReport';
 import { TwoTableUpload } from './TwoTableUpload';
 import { WarehouseSource } from './WarehouseSource';
+import { SnapshotChange } from './SnapshotChange';
+import { comparisonRequestKey } from '../guidedWorkflow';
 
 type Side = 'baseline' | 'target';
 type SideState = { name: string; mode: 'form' | 'sql'; form: CalculationForm; sql: string; refusal: ClassifiedInvestigationError | null;
@@ -40,23 +43,26 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   const [stage, setStage] = useState(0);
   const [snapshotId, setSnapshotId] = useState('');
   const [sides, setSides] = useState<Record<Side, SideState>>({
-    baseline: { name: 'Current calculation', mode: 'form', form: { filters: [], join: 'left' }, sql: '', refusal: null },
-    target: { name: 'Proposed calculation', mode: 'form', form: { filters: [], join: 'left' }, sql: '', refusal: null },
+    baseline: { name: '', mode: 'form', form: { filters: [], join: 'left' }, sql: '', refusal: null },
+    target: { name: '', mode: 'form', form: { filters: [], join: 'left' }, sql: '', refusal: null },
   });
   const [run, setRun] = useState<Run | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<ClassifiedInvestigationError | null>(null);
   const [title, setTitle] = useState('');
   const [decision, setDecision] = useState('');
-  const [actor, setActor] = useState('');
+  const [actor, setActor] = useState(() => { try { return localStorage.getItem('mg.actor') || ''; } catch { return ''; } });
   const [draft, setDraft] = useState<InvestigationDraft | null>(null);
   const [origin, setOrigin] = useState<string>('');
   const [showTwoTable, setShowTwoTable] = useState(false);
   const [showWarehouse, setShowWarehouse] = useState(false);
+  const [showLoads, setShowLoads] = useState(false);
   const [loadingPrefill, setLoadingPrefill] = useState(Boolean(prefill?.from || prefill?.left));
+  const [elapsed, setElapsed] = useState(0);
   const skipReset = useRef(false);
   // SQL already registered in this visit, so re-running never registers it twice.
   const registered = useRef(new Map<string, string>());
+  const actionInFlight = useRef(false);
 
   const isolated = data.mode === 'isolated';
   const engineReady = isolated && data.runner_available;
@@ -94,7 +100,10 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
           const found = await api.investigation(prefill.from) as unknown as Record<string, unknown>;
           if (found.record_type === 'draft' || found.is_draft) {
             const d = found as unknown as InvestigationDraft & { run?: Run | null };
+            if (!active) return;
             setDraft(d); snapshot = d.snapshot_id || ''; baseId = d.baseline_version_id || ''; targetId = d.target_version_id || '';
+            setDecision(String(d.decision_draft?.decision || d.rationale || ''));
+            if (d.decision_draft?.actor_label) setActor(String(d.decision_draft.actor_label));
             existingRun = d.run || null; editor = (d as unknown as { editor_state?: typeof editor }).editor_state || null;
             setTitle(d.title && d.title !== 'Untitled investigation' ? d.title : '');
             label = `Continuing draft “${d.title || 'Untitled'}”.`;
@@ -125,8 +134,8 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
         reuse: x && (!sql || sql === x.version.raw_sql) ? { versionId: x.version.id, sql: x.version.raw_sql } : undefined,
       });
       setSides({
-        baseline: sideFrom(base, editor?.baseline_sql, editor?.baseline_name, 'Current calculation'),
-        target: sideFrom(target, editor?.target_sql, editor?.target_name, 'Proposed calculation'),
+        baseline: sideFrom(base, editor?.baseline_sql, editor?.baseline_name, ''),
+        target: sideFrom(target, editor?.target_sql, editor?.target_name, ''),
       });
       if (existingRun) { setRun(existingRun); setStage(2); } else setStage(snapshot ? 1 : 0);
       setOrigin(label);
@@ -165,6 +174,15 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     return () => { active = false; clearTimeout(timer); };
   }, [run]);
 
+  const running = Boolean(run && pending(run.state));
+  useEffect(() => {
+    if (!running) return;
+    setElapsed(0);
+    const started = Date.now();
+    const timer = setInterval(() => setElapsed(Math.round((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [running, run?.id]);
+
   const sqlFor = (side: Side): string => {
     const s = sides[side];
     if (s.mode === 'sql') return s.sql;
@@ -173,12 +191,40 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   };
   const safeSql = (side: Side) => { try { return sqlFor(side); } catch { return ''; } };
   const describe = (side: Side) => sides[side].mode === 'form' && summary
-    ? describeCalculation(sides[side].form, columns, summary.measureLabel, relational) : undefined;
-  const update = (side: Side, patch: Partial<SideState>) => setSides(s => ({ ...s, [side]: { ...s[side], ...patch, refusal: null } }));
+    ? describeCalculation(contract && starLookups(contract).length
+        ? { ...sides[side].form, joins: lookupJoins(contract as RelationalContract, sides[side].form) } : sides[side].form,
+      columns, amountName(side), relational) : undefined;
+  const update = (side: Side, patch: Partial<SideState>) => {
+    setRun(null); setProblem(null);
+    setSides(s => ({ ...s, [side]: { ...s[side], ...patch, refusal: null } }));
+  };
   const updateForm = (side: Side, form: CalculationForm) => update(side, { form });
+  /** Settings both calculations must share (what is calculated and over which amount columns). */
+  const setShared = (patch: Partial<CalculationForm>) => {
+    setRun(null); setProblem(null);
+    setSides(s => ({
+    baseline: { ...s.baseline, form: { ...s.baseline.form, ...patch }, refusal: null },
+    target: { ...s.target, form: { ...s.target.form, ...patch }, refusal: null } }));
+  };
+  const amounts = contract ? amountColumns(contract) : [];
+  /** The amount a calculation uses: the chosen column on several-amount datasets, else the dataset's measure. */
+  const unitOf = (name: string) => (contract as FlatContract | undefined)?.decimal_columns?.find(c => c.name === name)?.unit_label || '';
+  function amountName(side: Side = 'target'): string {
+    return amounts.length > 1 ? (sides[side].form.amountColumn || amounts[0]) : (summary?.measureLabel || 'amount');
+  }
 
-  const sideProblems = (side: Side) => sides[side].mode === 'form' ? formProblems(sides[side].form, columns)
-    : sides[side].sql.trim() ? [] : ['Enter the SQL for this calculation.'];
+  const largeSnapshotReason = aggregateRowLimitReason(choice?.snapshot.row_count || 0, choice?.flat?.version);
+  const sideProblems = (side: Side) => {
+    if (largeSnapshotReason) return [largeSnapshotReason];
+    if (sides[side].mode !== 'form') return sides[side].sql.trim() ? [] : ['Enter the SQL for this calculation.'];
+    const problems = formProblems(sides[side].form, columns);
+    // SQL generation also validates cross-field choices (amounts and lookup joins).
+    // Keep those failures beside the form instead of quietly submitting empty SQL.
+    if (!problems.length) {
+      try { sqlFor(side); } catch (e) { problems.push(e instanceof Error ? e.message : String(e)); }
+    }
+    return problems;
+  };
   const calcBlocker = !engineReady ? (isolated ? 'The comparison engine is not running. Start it with scripts\\mg.ps1 start.' : 'New comparisons need the isolated engine. Start MetricGuard with scripts\\mg.ps1 start.')
     : [...sideProblems('baseline'), ...sideProblems('target')][0] || (safeSql('baseline').trim() && safeSql('baseline').trim() === safeSql('target').trim()
       && !(sides.baseline.reuse && sides.baseline.reuse.versionId === sides.target.reuse?.versionId)
@@ -195,7 +241,9 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   }
 
   async function registerAndCompare() {
-    if (!choice || !contract) return;
+    if (!choice || !contract || actionInFlight.current) return;
+    actionInFlight.current = true;
+    const retryOf = run?.state === 'failed' ? run.id : null;
     setBusy(true); setProblem(null); setRun(null);
     try {
       const endpoint = relational ? '/relational/definitions' : '/flat/definitions';
@@ -231,16 +279,19 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
       const context = relational
         ? { mode: 'relational_snapshot', scope: choice.relational!.scope, contract_hash: choice.relational!.contract_hash, unit_label: choice.relational!.unit_label, values_comparable: true }
         : { mode: 'flat_snapshot', scope: choice.flat!.scope, contract_hash: choice.flat!.contract_hash, unit_label: choice.flat!.unit_label, values_comparable: true };
-      const started = await api.post<Run>(relational ? '/relational/comparisons' : '/flat/comparisons', {
+      const request = {
         baseline_version_id: ids.baseline, target_version_id: ids.target, snapshot_id: choice.snapshot.id, relationship: 'candidate', context,
-      }, { 'Idempotency-Key': crypto.randomUUID() });
+      };
+      const key = await comparisonRequestKey(data.project.id, { ...request, retry_of: retryOf });
+      const started = await api.post<Run>(relational ? '/relational/comparisons' : '/flat/comparisons', request, { 'Idempotency-Key': key });
       setRun(started);
       setStage(2);
-      void rememberDraft(started, ids.baseline!, ids.target!);
-      void refresh();
+      await rememberDraft(started, ids.baseline!, ids.target!);
+      await refresh();
     } catch (e) {
       setProblem(classifyInvestigationError(e));
     } finally {
+      actionInFlight.current = false;
       setBusy(false);
     }
   }
@@ -251,16 +302,24 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
       baseline_sql: safeSql('baseline'), target_sql: safeSql('target') };
     const fields = { title: title.trim() || `${choice?.snapshot.name || 'Comparison'}: ${definitionName('target', safeSql('target'))}`.slice(0, 160), snapshot_id: started.snapshot_id,
       baseline_version_id: baselineId, target_version_id: targetId, comparison_run_id: started.id, editor_state };
-    try {
-      if (draft) setDraft(await api.updateInvestigationDraft(undefined, draft.id, { ...fields, status: 'needs_decision', version_token: draft.version_token }));
-      else setDraft(await api.createInvestigationDraft(undefined, { ...fields, status: 'needs_decision' }));
-    } catch { /* a draft is a convenience; the run itself is already recorded */ }
+    const progress = { ...fields, status: 'needs_decision' as const,
+      decision_draft: { ...draft?.decision_draft, decision, actor_label: actor } };
+    if (draft) setDraft(await api.updateInvestigationDraft(data.project.id, draft.id, { ...progress, version_token: draft.version_token }));
+    else {
+      // Keyed by what is compared, so repeating the comparison (even after a failed run) resumes one draft.
+      const idempotency_key = await comparisonRequestKey(data.project.id, { draft: true, snapshot_id: started.snapshot_id, baseline_version_id: baselineId, target_version_id: targetId });
+      const existing = await api.createInvestigationDraft(data.project.id, { ...progress, idempotency_key });
+      setDraft(existing.comparison_run_id === started.id ? existing
+        : await api.updateInvestigationDraft(data.project.id, existing.id, { ...progress, version_token: existing.version_token }));
+    }
   }
 
   async function save() {
-    if (!run?.result) return;
+    if (!run?.result || actionInFlight.current) return;
+    actionInFlight.current = true;
     setBusy(true); setProblem(null);
     try {
+      try { localStorage.setItem('mg.actor', actor.trim()); } catch { /* per-browser convenience only */ }
       const saved = await api.post<{ id: string }>('/investigations', { title: title.trim(), decision: decision.trim(), actor_label: actor.trim(), run_id: run.id, snapshot_id: run.snapshot_id });
       if (draft) await api.deleteInvestigationDraft(undefined, draft.id).catch(() => undefined);
       await refresh();
@@ -268,11 +327,12 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     } catch (e) {
       setProblem(classifyInvestigationError(e));
     } finally {
+      actionInFlight.current = false;
       setBusy(false);
     }
   }
 
-  const canEnter = (i: number) => i === 0 || (i === 1 && !!choice) || (i >= 2 && !!run) || (i === 3 && !!run?.result);
+  const canEnter = (i: number) => i === 0 || (i === 1 && !!choice) || (i === 2 && !!run) || (i === 3 && !!run?.result);
   const saveBlocker = !run?.result ? 'Run the comparison first.' : !title.trim() ? 'Give the investigation a name.' : !decision.trim() ? 'Write your conclusion.' : !actor.trim() ? 'Enter who is recording this.' : '';
 
   return (
@@ -338,7 +398,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
           )}
           {summary && (
             <div className="guided-explain">
-              <b>You will compare totals of {summary.measureLabel}</b> ({summary.measureMeaning || 'amount'}, unit {summary.unitLabel}) over {choice!.snapshot.row_count.toLocaleString()} records.
+              <b>You will compare calculations over {summary.measureLabel}</b> ({summary.measureMeaning || 'amount'}, unit {summary.unitLabel}) over {choice!.snapshot.row_count.toLocaleString()} records.
               {summary.joinLabel && <> Records link to the dimension through {summary.joinLabel}.</>}
               <details style={{ marginTop: 8 }}>
                 <summary>Advanced details</summary>
@@ -346,6 +406,20 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
               </details>
             </div>
           )}
+          <div className="guided-nav">
+            <span className="example">{choice ? <>Selected: <b>{choice.snapshot.name}</b></> : choices.length ? 'Select a dataset above.' : ''}</span>
+            <button className="button primary" disabled={!choice} onClick={() => setStage(1)} aria-describedby={!choice ? 'need-data' : undefined}>
+              Next: define calculations <ArrowRight size={15} />
+            </button>
+          </div>
+          {!choice && <span id="need-data" className="sr-only">Choose a dataset to continue.</span>}
+          <div className="guided-explain">
+            <b>Did the metric change between two data loads?</b> Run one calculation on an earlier and a later load of the same dataset (for example September and October) to see which records were added, removed or changed.
+            <div className="report-actions" style={{ marginTop: 8 }}>
+              <button className="button secondary small" aria-expanded={showLoads} onClick={() => setShowLoads(v => !v)}>Compare two data loads</button>
+            </div>
+          </div>
+          {showLoads && <SnapshotChange data={data} refresh={refresh} />}
           <div className="guided-explain">
             <b>Need new data?</b> Upload a CSV or Parquet file and answer a few questions: which column identifies each row, which amount to total, its unit, and which columns you want to filter on.
             <div className="report-actions" style={{ marginTop: 8 }}>
@@ -363,33 +437,84 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
               blocker={isolated ? 'The comparison engine is not running. Start it with scripts\\mg.ps1 start.' : 'Uploads need the isolated engine. Start MetricGuard with scripts\\mg.ps1 start.'}
               onCreated={id => { setShowTwoTable(false); setSnapshotId(id); }} />
           )}
-          <div className="guided-nav">
-            <span />
-            <button className="button primary" disabled={!choice} onClick={() => setStage(1)} aria-describedby={!choice ? 'need-data' : undefined}>
-              Next: define calculations <ArrowRight size={15} />
-            </button>
-          </div>
-          {!choice && <span id="need-data" className="disabled-reason">Choose a dataset to continue.</span>}
         </section>
       )}
 
       {stage === 1 && choice && contract && (
         <section className="guided-card" aria-labelledby="stage-calc">
           <h2 id="stage-calc">2. Define calculations</h2>
-          <p className="lead">Describe the calculation in use today and the one being proposed. Both {sides.target.form.aggregate === 'count' ? 'count records' : <>add up <code>{summary?.measureLabel}</code></>}; they differ only in which records they include.</p>
+          <p className="lead">Describe the calculation in use today and the one being proposed. Both use the same kind of calculation; they differ only in which records they include{RATIO_AGGREGATES.includes(sides.target.form.aggregate || 'sum') ? ' or in the condition at the top of the ratio' : ''}.</p>
           {!formAllowed && <div className="guided-explain">This dataset uses a conditional (CASE) total, which is written in the SQL editor.</div>}
           {formAllowed && supportsCount(contract) && (
-            <label style={{ maxWidth: 420 }}>What do you want to compare?
-              <select value={sides.target.form.aggregate || 'sum'} onChange={e => {
-                const aggregate = e.target.value as 'sum' | 'count';
-                setSides(s => ({ baseline: { ...s.baseline, form: { ...s.baseline.form, aggregate }, refusal: null },
-                                 target: { ...s.target, form: { ...s.target.form, aggregate }, refusal: null } }));
-              }}>
-                <option value="sum">Totals of {summary?.measureLabel}</option>
-                <option value="count">Numbers of records (COUNT)</option>
-              </select>
-              <span className="example">Both calculations use the same choice. A count includes records with a blank amount.</span>
-            </label>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <label style={{ maxWidth: 420 }}>What do you want to compare?
+                {largeSnapshotReason && <span className="example" role="status">{largeSnapshotReason}</span>}
+                <select value={sides.target.form.aggregate || 'sum'} onChange={e => {
+                  setRun(null); setProblem(null);
+                  const aggregate = e.target.value as Aggregate;
+                  const distinctColumn = sides.target.form.distinctColumn || columns[0]?.id;
+                  const seed = (form: CalculationForm): CalculationForm => ({ ...form, aggregate, distinctColumn,
+                    partFilter: form.partFilter || (columns[0] ? { column: columns[0].id, op: 'eq', value: '' } : undefined) });
+                  setSides(s => ({ baseline: { ...s.baseline, form: seed(s.baseline.form), refusal: null },
+                                   target: { ...s.target, form: seed(s.target.form), refusal: null } }));
+                }}>
+                  <optgroup label="Totals and counts">
+                    <option value="sum">Total {amountName()} (SUM)</option>
+                    <option value="count">Number of records (COUNT)</option>
+                    {supportsDistinct(contract) && columns.length > 0 && <option value="count_distinct">Number of distinct values, e.g. active customers (COUNT DISTINCT)</option>}
+                  </optgroup>
+                  {supportsRatios(contract) && (
+                    <optgroup label="Averages, rates and ratios">
+                      <option value="average">Average {amountName()}, skipping blank amounts (AVG)</option>
+                      <option value="per_record">Total {amountName()} per record, e.g. average order value</option>
+                      {columns.length > 0 && <option value="rate">Rate: share of records meeting a condition, e.g. conversion</option>}
+                      {columns.length > 0 && <option value="share">Share of {amountName()} from records meeting a condition</option>}
+                      {amounts.length > 1 && <option value="amount_ratio">One amount divided by another, e.g. cost ÷ revenue</option>}
+                      {amounts.length > 1 && <option value="margin">Margin %: (amount − another) ÷ amount, e.g. (revenue − cost) ÷ revenue</option>}
+                    </optgroup>
+                  )}
+                </select>
+                <span className="example">
+                  {{ sum: 'Blank amounts are ignored.', count: 'A count includes records with a blank amount.',
+                     count_distinct: 'Each value is counted once however many of its records match; blank values are not counted.',
+                     average: 'Records with a blank amount are left out of both the total and the count.',
+                     per_record: 'Every included record counts in the denominator, even with a blank amount.',
+                     rate: 'Records meeting the condition ÷ all included records.',
+                     share: 'Amount from records meeting the condition ÷ amount from all included records.',
+                     amount_ratio: 'Each total is added up separately; a record with one blank amount still counts in the other total.',
+                     margin: 'The margin skips records where either amount is blank; the bottom total still includes them.' }[sides.target.form.aggregate || 'sum']}
+                  {!supportsRatios(contract) && supportsDistinct(contract) && ' Averages and ratios need the dataset re-registered with compound filters.'}
+                </span>
+              </label>
+              {amounts.length > 1 && !['count', 'count_distinct', 'rate'].includes(sides.target.form.aggregate || 'sum') && (
+                <label style={{ maxWidth: 220 }}>{sides.target.form.aggregate === 'amount_ratio' || sides.target.form.aggregate === 'margin' ? 'Top amount' : 'Amount column'}
+                  <select value={sides.target.form.amountColumn || amounts[0]} onChange={e => setShared({ amountColumn: e.target.value })}>
+                    {amounts.map(a => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                </label>
+              )}
+              {amounts.length > 1 && (sides.target.form.aggregate === 'amount_ratio' || sides.target.form.aggregate === 'margin') && (
+                <label style={{ maxWidth: 220 }}>{sides.target.form.aggregate === 'margin' ? 'Subtract (e.g. cost)' : 'Divide by'}
+                  <select value={sides.target.form.secondAmountColumn || ''} onChange={e => setShared({ secondAmountColumn: e.target.value })}>
+                    <option value="">— choose —</option>
+                    {amounts.filter(a => a !== amountName() && (sides.target.form.aggregate !== 'margin' || unitOf(a) === unitOf(amountName())))
+                      .map(a => <option key={a} value={a}>{a}{unitOf(a) ? ` (${unitOf(a)})` : ''}</option>)}
+                  </select>
+                </label>
+              )}
+              {sides.target.form.aggregate === 'count_distinct' && (
+                <label style={{ maxWidth: 260 }}>Count distinct values of
+                  <select value={sides.target.form.distinctColumn || ''} onChange={e => {
+                    setRun(null); setProblem(null);
+                    const distinctColumn = e.target.value;
+                    setSides(s => ({ baseline: { ...s.baseline, form: { ...s.baseline.form, distinctColumn }, refusal: null },
+                                     target: { ...s.target, form: { ...s.target.form, distinctColumn }, refusal: null } }));
+                  }}>
+                    {columns.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                  </select>
+                </label>
+              )}
+            </div>
           )}
           <div className="calc-grid">
             {(['baseline', 'target'] as Side[]).map(side => {
@@ -397,8 +522,8 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
               const sideSql = safeSql(side);
               return (
                 <div className="calc-card" key={side}>
-                  <h3>{side === 'baseline' ? 'Current calculation' : 'Proposed calculation'}</h3>
-                  <label>Name<input value={s.name} maxLength={160} onChange={e => update(side, { name: e.target.value })} /></label>
+                  <h3>{side === 'baseline' ? 'Current calculation' : 'Proposed calculation'}
+                    <span className="example"> {side === 'baseline' ? '— the one in use today' : '— the change you want to check'}</span></h3>
                   {savedCalcs.length > 0 && (
                     <label>Start from a saved calculation (optional)
                       <select value={s.reuse?.versionId || ''} onChange={e => {
@@ -413,12 +538,12 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                   )}
                   <div className="mode-switch" role="group" aria-label="Calculation editor">
                     <button type="button" aria-pressed={s.mode === 'form'} disabled={!formAllowed} onClick={() => update(side, { mode: 'form' })}>Guided form</button>
-                    <button type="button" aria-pressed={s.mode === 'sql'} onClick={() => update(side, { mode: 'sql', sql: s.sql || sideSql })}>SQL editor</button>
+                    <button type="button" aria-pressed={s.mode === 'sql'} onClick={() => update(side, { mode: 'sql', sql: sideSql })}>SQL editor</button>
                   </div>
 
                   {s.mode === 'form' ? (
                     <>
-                      {relational && (
+                      {relational && starLookups(contract).length === 0 && (
                         <label>Records without a matching dimension row
                           <select value={s.form.join || 'left'} onChange={e => updateForm(side, { ...s.form, join: e.target.value as 'left' | 'inner' })}>
                             <option value="left">Keep them (LEFT JOIN)</option>
@@ -426,6 +551,23 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                           </select>
                         </label>
                       )}
+                      {relational && starLookups(contract).length > 0 && (() => {
+                        const joins = lookupJoins(contract as RelationalContract, s.form);
+                        return (
+                          <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 6 }}>
+                            <legend style={{ fontSize: 13, fontWeight: 600 }}>Lookup tables</legend>
+                            {starLookups(contract).map(d => (
+                              <label key={d.role}>{d.role} ({d.table})
+                                <select value={joins[d.role]} onChange={e => updateForm(side, { ...s.form, joins: { ...s.form.joins, [d.role]: e.target.value as LookupJoin } })}>
+                                  <option value="none">Not joined</option>
+                                  <option value="left">Joined; keep records without a match (LEFT JOIN)</option>
+                                  <option value="inner">Joined; leave out records without a match (INNER JOIN)</option>
+                                </select>
+                              </label>
+                            ))}
+                          </fieldset>
+                        );
+                      })()}
                       <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 6 }}>
                         <legend style={{ fontSize: 13, fontWeight: 600 }}>Include only records where… <span className="example">(no conditions = every record)</span></legend>
                         {s.form.filters.length > 1 && supportsAnyMatch(contract) && (
@@ -467,6 +609,33 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                         </button>
                         {columns.length === 0 && <span className="disabled-reason">This dataset declares no filter columns, so the form can only total every record.</span>}
                       </fieldset>
+                      {(s.form.aggregate === 'rate' || s.form.aggregate === 'share') && s.form.partFilter && (() => {
+                        const f = s.form.partFilter;
+                        const col = columns.find(c => c.id === f.column);
+                        const needsValue = f.op !== 'is_null' && f.op !== 'is_not_null';
+                        const setPart = (patch: Partial<Filter>) => updateForm(side, { ...s.form, partFilter: { ...f, ...patch } });
+                        return (
+                          <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 6 }}>
+                            <legend style={{ fontSize: 13, fontWeight: 600 }}>Top of the ratio: {s.form.aggregate === 'rate' ? 'records' : 'amount from records'} where…</legend>
+                            <div className="filter-row">
+                              <label>Column
+                                <select value={f.column} onChange={e => setPart({ column: e.target.value, op: 'eq', value: '' })}>
+                                  {columns.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                                </select>
+                              </label>
+                              <label>Condition
+                                <select value={f.op} onChange={e => setPart({ op: e.target.value as Filter['op'] })}>
+                                  {operatorsFor(col?.type || 'string', relational).map(op => <option key={op} value={op}>{OP_LABEL[op]}</option>)}
+                                </select>
+                              </label>
+                              <label>Value
+                                <input disabled={!needsValue} value={needsValue ? f.value : ''} onChange={e => setPart({ value: e.target.value })}
+                                  placeholder={col?.type === 'boolean' ? 'true or false' : 'converted'} />
+                              </label>
+                            </div>
+                          </fieldset>
+                        );
+                      })()}
                       <p style={{ margin: 0, fontSize: 13 }}>{describe(side)}</p>
                       <details><summary>SQL this form produces</summary><pre className="sql-preview">{sideSql || 'Complete the conditions to see the SQL.'}</pre></details>
                     </>
@@ -474,11 +643,17 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                     <label>SQL
                       <textarea rows={6} spellCheck={false} value={s.sql} onChange={e => update(side, { sql: e.target.value })}
                         placeholder={relational ? 'SELECT SUM(f.amount) FROM fact f LEFT JOIN dim d ON f.key = d.key WHERE …' : 'SELECT SUM(amount) FROM snapshot WHERE status = \'completed\''} />
-                      <span className="example">One SUM over {relational ? 'the fact table with one declared join' : <code>snapshot</code>}, with optional WHERE conditions on the filter columns.</span>
+                      <span className="example">{relational
+                        ? `One SUM over the main table${starLookups(contract).length ? ', with optional declared lookup joins' : ' with one declared lookup join'}, and optional WHERE conditions on the filter columns.`
+                        : <>One calculation over <code>snapshot</code> (SUM, COUNT(*), COUNT(DISTINCT column), AVG, or a ratio such as SUM(amount) / COUNT(*)), with optional WHERE conditions on the filter columns.</>}</span>
                     </label>
                   )}
 
-                  {sideProblems(side).map(p => <span key={p} className="disabled-reason">{p}</span>)}
+                  <label>Name <span className="example">(optional)</span>
+                    <input value={s.name} maxLength={160} onChange={e => update(side, { name: e.target.value })}
+                      placeholder={side === 'baseline' ? 'e.g. Revenue as reported today' : 'e.g. Revenue excluding cancelled orders'} />
+                  </label>
+                  {sideProblems(side).map(p => <span key={p} className="form-hint">To finish — {p}</span>)}
                   {s.refusal && (
                     <div className="alert error" role="alert">
                       <span><strong>{s.refusal.title}:</strong> {s.refusal.message}{s.refusal.guidance && <><br />{s.refusal.guidance}</>}<br />Your calculation is kept so you can edit it.</span>
@@ -501,14 +676,23 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
       {stage === 2 && run && (
         <section className="guided-card" aria-labelledby="stage-review">
           <h2 id="stage-review">3. Review difference</h2>
-          {pending(run.state) && <p role="status">Comparing on the frozen dataset… ({run.state})</p>}
+          {pending(run.state) && (
+            <div className="guided-explain run-progress" role="status">
+              <span className="run-spinner" aria-hidden="true" />
+              <span><b>{run.state === 'queued' || run.state === 'pending' ? 'Waiting for the comparison engine…' : 'Comparing both calculations record by record…'}</b>{' '}
+                {elapsed > 0 && <>{elapsed} s. </>}
+                {(choice?.snapshot.row_count || 0) > 100_000 ? 'Large datasets can take a minute; you can leave this page — the run is saved as a draft in Investigations.' : 'This usually takes a few seconds.'}</span>
+            </div>
+          )}
           {run.state === 'failed' && <p className="disabled-reason">The comparison did not complete. Go back to adjust the calculations, or try again.</p>}
           {run.result && (
             <ResultReport run={run} unit={summary?.unitLabel === 'Not declared' ? '' : summary?.unitLabel || ''} relational={relational}
-              baselineLabel={sides.baseline.name} targetLabel={sides.target.name}
+              baselineLabel={sides.baseline.name.trim()} targetLabel={sides.target.name.trim()}
               baselineSql={safeSql('baseline')} targetSql={safeSql('target')}
               baselineDescription={describe('baseline')} targetDescription={describe('target')}
-              snapshot={choice?.snapshot} versions={data.definitions.flatMap(d => d.versions)} />
+              snapshot={choice?.snapshot} versions={data.definitions.flatMap(d => d.versions)}
+              breakdownColumns={[...sides.target.form.filters, ...sides.baseline.form.filters, sides.target.form.partFilter]
+                .filter((f): f is Filter => Boolean(f?.column) && sides.target.mode === 'form').map(f => f.column)} />
           )}
           <div className="guided-nav">
             <button className="button secondary" onClick={() => setStage(1)}><ArrowLeft size={15} /> Edit calculations</button>

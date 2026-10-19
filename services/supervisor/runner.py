@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from services.supervisor.evidence_artifact import write_artifact
+from services.supervisor.evidence_artifact import aggregate_contexts, write_artifact
 from services.supervisor.worker import MAX_OUTPUT_BYTES, file_hash, validate_result
 
 
@@ -21,6 +21,8 @@ def run_job(input_dir=Path('/job/input'), output_dir=Path('/job/output')):
         raise ValueError('SNAPSHOT_HASH_MISMATCH')
     case_context = None
     relational_context = None
+    ratio_context = distinct_context = None
+    members = None
     if job.get('execution_policy') == 'relational_snapshot_v1':
         from packages.metricguard_core.relational_compare import compare_relational
         from packages.metricguard_core.relational_snapshot import open_snapshot
@@ -33,12 +35,34 @@ def run_job(input_dir=Path('/job/input'), output_dir=Path('/job/output')):
         if (job['baseline_ir'].get('mode') != 'flat_snapshot' or
                 job['target_ir'].get('mode') != 'flat_snapshot'):
             raise ValueError('POLICY_MISMATCH')
-        comparison = compare_flat(snapshot, job['baseline_ir'], job['target_ir'], job['context'])
+        if job['context'].get('comparison') == 'snapshot_change':
+            from packages.metricguard_core.flat_change import compare_snapshots
+            target_snapshot = input_dir / 'target_snapshot.duckdb'
+            if job['baseline_ir'] != job['target_ir'] or file_hash(target_snapshot) != job.get('target_snapshot_hash'):
+                raise ValueError('SNAPSHOT_HASH_MISMATCH')
+            comparison = compare_snapshots(snapshot, target_snapshot, job['baseline_ir'], job['context'])
+        else:
+            comparison = compare_flat(snapshot, job['baseline_ir'], job['target_ir'], job['context'])
         manifest = json.loads(snapshot.with_name(snapshot.name + '.manifest.json').read_text(encoding='utf-8'))
         if manifest['contract']['version'] == 7:
             case_context = {'contract': manifest['contract'], 'baseline': job['baseline_ir'],
                             'target': job['target_ir']}
-        result = validate_result(comparison, case_context=case_context)
+        ratio_context, distinct_context = aggregate_contexts(manifest['contract'], job['baseline_ir'], job['target_ir'])
+        members = comparison.pop('members', None)
+        if ratio_context is not None or distinct_context is not None or hasattr(comparison['evidence'], 'artifact_policy'):
+            # Every row is validated (with the totals) once, by write_artifact below; checking the
+            # same rows inline here as well would double the time on large comparisons.
+            evidence = comparison['evidence']
+            placeholder = {'row_count': len(evidence)}
+            if hasattr(evidence, 'artifact_policy'):
+                placeholder['storage_policy'] = evidence.artifact_policy
+            result = validate_result({**comparison, 'evidence': [], 'evidence_artifact': placeholder}, case_context=case_context,
+                                     ratio_context=ratio_context, distinct_context=distinct_context)
+            result = {key: value for key, value in result.items() if key != 'evidence_artifact'}
+            result['evidence'] = evidence
+        else:
+            result = validate_result(comparison, case_context=case_context,
+                                     ratio_context=ratio_context, distinct_context=distinct_context)
     elif job.get('execution_policy') in (None, 'retail_v1'):
         if (job['baseline_ir'].get('mode') in ('flat_snapshot', 'relational_snapshot') or
                 job['target_ir'].get('mode') in ('flat_snapshot', 'relational_snapshot')):
@@ -53,13 +77,26 @@ def run_job(input_dir=Path('/job/input'), output_dir=Path('/job/output')):
     measure_expr = None
     if job.get('execution_policy') == 'flat_snapshot_v1' and case_context is None:
         measure_expr = job.get('baseline_ir', {}).get('measure_expression')
-    result['evidence_artifact'] = write_artifact(output_dir / 'evidence.jsonl', evidence, measure_expression=measure_expr, case_context=case_context, relational_context=relational_context)
-    if job.get('execution_policy') == 'flat_snapshot_v1':
+    if ratio_context is not None or distinct_context is not None:
+        measure_expr = None
+    result['evidence_artifact'] = write_artifact(output_dir / 'evidence.jsonl', evidence, measure_expression=measure_expr, case_context=case_context, relational_context=relational_context,
+                                                 ratio_context=ratio_context, distinct_context=distinct_context, expected_result=result,
+                                                 check_rows=False)
+    if distinct_context is not None:
+        # Required for COUNT(DISTINCT): which records carry each entity at each endpoint.
+        from packages.metricguard_core.flat_distinct_evidence import write_members
+        write_members(output_dir / 'members.jsonl', members or [])
+    if job.get('execution_policy') == 'flat_snapshot_v1' and job['context'].get('comparison') != 'snapshot_change':
         # Optional, separately hashed record context (filter-column values per row).
+        # Not written for two-snapshot runs: one snapshot cannot describe records of both loads.
         # Best effort: the comparison and its evidence never depend on it.
         try:
-            from services.supervisor.row_context import write_flat_context
-            info = write_flat_context(snapshot, manifest['contract'], evidence, output_dir / 'context.jsonl')
+            from services.supervisor.row_context import write_entity_context, write_flat_context
+            if distinct_context is not None:
+                info = write_entity_context(snapshot, manifest['contract'], job['baseline_ir']['measure'],
+                                            evidence, output_dir / 'context.jsonl')
+            else:
+                info = write_flat_context(snapshot, manifest['contract'], evidence, output_dir / 'context.jsonl')
             (output_dir / 'context.json').write_text(json.dumps(info), encoding='utf-8')
         except Exception:
             (output_dir / 'context.jsonl').unlink(missing_ok=True)
