@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
@@ -18,7 +18,7 @@ import {
   UploadCloud,
   X,
 } from 'lucide-react';
-import { api, type Bootstrap, type Snapshot, type SnapshotImport } from '../api';
+import { api, type Bootstrap, type FlatContract, type Snapshot, type SnapshotImport } from '../api';
 import { inferMeaning, parseCsvText, type ParsedCsvPreview } from '../csvInference';
 import { DIRECT_TWO_TABLE_LIMIT, PrepareTwoTable } from './PrepareTwoTable';
 import { WarehouseSource } from './WarehouseSource';
@@ -31,12 +31,14 @@ interface DataSourcesViewProps {
   refresh: () => Promise<Bootstrap | null>;
   /** Open the upload dialog on arrival (used by the guided comparison). */
   openAdd?: boolean;
+  /** After a new dataset is created from the guided comparison, return there with it selected. */
+  onCreatedReturn?: (snapshotId: string) => void;
 }
 
 type OnboardingStep = 'upload' | 'confirm' | 'validating' | 'success' | 'error';
 type SourceType = 'file' | 'postgres';
 
-export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps) {
+export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: DataSourcesViewProps) {
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string>(
     data.snapshots[0]?.id || ''
   );
@@ -85,6 +87,20 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
   const [createdSnapshot, setCreatedSnapshot] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [pageNotice, setPageNotice] = useState('');
+  // Adding a newer load of an existing dataset: its definition is reused as is.
+  const [loadContract, setLoadContract] = useState<FlatContract | null>(null);
+  // A new upload whose settings match an existing dataset definition joins it as a new load.
+  const [joinExisting, setJoinExisting] = useState(true);
+  const [importStarted, setImportStarted] = useState<number | null>(null);
+  const [importElapsed, setImportElapsed] = useState(0);
+  // The dialog can close while an import keeps running; its result then arrives as a page notice.
+  const modalOpen = useRef(false);
+  useEffect(() => { modalOpen.current = showAddModal; }, [showAddModal]);
+  useEffect(() => {
+    if (importStarted === null) { setImportElapsed(0); return; }
+    const timer = setInterval(() => setImportElapsed(Math.round((Date.now() - importStarted) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [importStarted]);
 
   const snapshots = data.snapshots || [];
   const definitions = data.definitions || [];
@@ -144,6 +160,33 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
     : !Number.isInteger(scale) || scale < 0 || scale > 18 || scale > precision ? 'Decimal places must be a whole number from 0 to 18, no greater than precision.'
     : enableCase && (!scopeConfirmed || !comparabilityConfirmed) ? 'Tick both confirmations for the conditional total.'
     : '';
+  /** An existing dataset definition this upload fits exactly, apart from its name and description. */
+  const matchingContract = useMemo<FlatContract | null>(() => {
+    if (!filePreview || enableSubtraction || enableCase || !confirmedKey || !confirmedMeasure) return null;
+    const amounts = [confirmedMeasure, ...multiExtras];
+    const nullable = filterColumns.filter(cat => !filePreview.null_counts || filePreview.null_counts[cat] > 0);
+    const types = (cat: string) => {
+      const obs = filePreview.observed_types[cat];
+      return categoryTypeOverrides[cat] || (obs === 'date' || obs === 'boolean' || obs === 'timestamp' ? obs : 'string');
+    };
+    const same = (a: string[], b: string[]) => a.length === b.length && [...a].sort().join('\u0000') === [...b].sort().join('\u0000');
+    return flatContracts.find(c => {
+      const version = enableMulti ? 8 : compoundFilters ? 5 : 4;
+      if (c.version !== version || c.row_key !== confirmedKey || c.null_policy !== nullPolicy) return false;
+      if ((c.unit_label || '').trim() !== confirmedUnit.trim() || c.scale !== scale) return false;
+      if (enableMulti) {
+        const cols = c.decimal_columns || [];
+        if (!same(cols.map(d => d.name), amounts) || cols[0]?.name !== confirmedMeasure) return false;
+        if (cols.some(d => d.precision !== precision || (d.unit_label || '').trim() !== (d.name === confirmedMeasure ? confirmedUnit : extraUnits[d.name] ?? confirmedUnit).trim())) return false;
+      } else if (c.measure !== confirmedMeasure || c.precision !== precision) return false;
+      if (!same(c.categories || [], filterColumns)) return false;
+      if (filterColumns.some(cat => (c.dimension_types?.[cat] || 'string') !== types(cat))) return false;
+      // The new file may not have blanks where the existing definition forbids them.
+      return nullable.every(cat => (c.nullable_categories || []).includes(cat));
+    }) || null;
+  }, [filePreview, enableSubtraction, enableCase, enableMulti, compoundFilters, confirmedKey, confirmedMeasure, multiExtras.join(','),
+      filterColumns.join(','), nullPolicy, confirmedUnit, scale, precision, extraUnits, categoryTypeOverrides, flatContracts]);
+
   const activeSummary = useMemo(
     () => (activeSnapshot ? summarizeDataset(activeSnapshot, data) : null),
     [activeSnapshot, data]
@@ -202,7 +245,13 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
     setEnableCase(false);
     setScopeConfirmed(false);
     setComparabilityConfirmed(false);
+    setLoadContract(null);
+    setJoinExisting(true);
     setShowAddModal(true);
+  };
+  const openAddLoad = (contract: FlatContract) => {
+    openAddModal();
+    setLoadContract(contract);
   };
   useEffect(() => {
     if (openAdd) openAddModal();
@@ -313,6 +362,67 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
     } else {
       if (confirmedCategories.length >= 8) return;
       setConfirmedCategories([...confirmedCategories, cat]);
+    }
+  };
+
+  /** Upload the file under a dataset definition and wait for the import, however long it takes. */
+  async function uploadAndWait(contractId: string, name: string): Promise<Snapshot> {
+    const form = new FormData();
+    form.append('file', selectedFile!);
+    form.append('name', name);
+    form.append('contract_id', contractId);
+    form.append('project_id', projectId);
+    if (preparationFile) form.append('preparation_manifest', preparationFile);
+    const size = selectedFile!.size;
+    setValidationProgress(size > 5 * 1024 * 1024 ? `Uploading ${formatBytes(size)}…` : 'Checking rows, column types, and data consistency…');
+    setImportStarted(Date.now());
+    const result = await api.uploadFlat(form, projectId);
+    if ('id' in result && !('state' in result)) return result as Snapshot;  // an identical load already exists
+    const queued = result as SnapshotImport;
+    let current: SnapshotImport = queued;
+    // No fixed time limit: a large file can take minutes, and the import keeps running on the server.
+    for (let polls = 0; current.state === 'queued' || current.state === 'running'; polls++) {
+      await new Promise(resolve => setTimeout(resolve, polls < 20 ? 1000 : 3000));
+      try {
+        current = await api.snapshotImport(queued.id);
+      } catch {
+        const bs = await refresh();
+        const found = bs?.imports?.find(i => i.id === queued.id);
+        if (found) current = found;
+      }
+      setValidationProgress(current.state === 'queued' ? 'Waiting for the import engine…' : 'Checking every row, column type and amount…');
+    }
+    if (current.state === 'failed') throw current.error || new Error('Snapshot validation failed.');
+    const updated = await refresh();
+    const found = updated?.snapshots?.find(s => s.id === current.snapshot_id);
+    return found || ({ id: current.snapshot_id || queued.id, name, row_count: filePreview?.totalRowsSampled || 0,
+      source_hash: current.source_hash, created_at: new Date().toISOString() } as unknown as Snapshot);
+  }
+
+  function finishImport(snapshot: Snapshot) {
+    setCreatedSnapshot(snapshot);
+    setSelectedSnapshotId(snapshot.id);
+    setStep('success');
+    if (!modalOpen.current) setPageNotice(`Dataset “${snapshot.name}” is ready: ${snapshot.row_count.toLocaleString('en-US')} rows validated.`);
+  }
+
+  function failImport(err: unknown) {
+    const human = humanizeError(err, { key: confirmedKey, measure: confirmedMeasure, filename: selectedFile?.name });
+    setValidationError(human);
+    setStep('error');
+    if (!modalOpen.current) setPageNotice(`The import of “${snapshotName || selectedFile?.name}” failed: ${human.message}`);
+  }
+
+  // A newer load of an existing dataset: same definition, so the two loads can be compared.
+  const handleAddLoad = async () => {
+    if (!selectedFile || !loadContract) return;
+    setStep('validating'); setBusy(true); setValidationError(null);
+    try {
+      finishImport(await uploadAndWait(loadContract.id, snapshotName.trim() || selectedFile.name));
+    } catch (err: unknown) {
+      failImport(err);
+    } finally {
+      setBusy(false); setImportStarted(null);
     }
   };
 
@@ -468,99 +578,24 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
         null_policy: nullPolicy,
       };
 
-      const contract = await api.createFlatContract(contractPayload, projectId);
-
-      // 2. Upload file to create frozen snapshot
-      const form = new FormData();
-      form.append('file', selectedFile);
-      form.append('name', snapshotName || selectedFile.name);
-      form.append('contract_id', contract.id);
-      form.append('project_id', projectId);
-      if (preparationFile) {
-        form.append('preparation_manifest', preparationFile);
-      }
-
-      setValidationProgress('Checking rows, column types, and data consistency…');
-      const result = await api.uploadFlat(form, projectId);
-
-      let targetSnap: Snapshot | undefined;
-
-      if ('id' in result && !('state' in result)) {
-        // Reused existing identical snapshot without re-execution
-        targetSnap = result as Snapshot;
-      } else {
-        // Asynchronous import queued for validation
-        const importEntry = result as SnapshotImport;
-        let finalImport: SnapshotImport = importEntry;
-        const startTime = Date.now();
-        const timeoutMs = 30000;
-
-        while (finalImport.state === 'queued' || finalImport.state === 'running') {
-          if (Date.now() - startTime > timeoutMs) {
-            throw new Error('Snapshot validation timed out after 30 seconds. Please try again.');
-          }
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          try {
-            finalImport = await api.snapshotImport(importEntry.id);
-          } catch {
-            const bs = await refresh();
-            const found = bs?.imports?.find((i) => i.id === importEntry.id);
-            if (found) finalImport = found;
-          }
-
-          if (finalImport.state === 'queued') {
-            setValidationProgress('Preparing your data…');
-          } else if (finalImport.state === 'running') {
-            setValidationProgress('Checking rows, column types, and data consistency…');
-          }
-        }
-
-        if (finalImport.state === 'failed') {
-          throw finalImport.error || new Error('Snapshot validation failed.');
-        }
-
-        const updatedBootstrap = await refresh();
-        if (finalImport.snapshot_id) {
-          targetSnap = updatedBootstrap?.snapshots?.find((s) => s.id === finalImport.snapshot_id);
-        }
-        if (!targetSnap && updatedBootstrap?.snapshots?.length) {
-          targetSnap =
-            updatedBootstrap.snapshots.find((s) => s.name === (snapshotName || selectedFile.name)) ||
-            updatedBootstrap.snapshots.at(-1);
-        }
-      }
-
-      if (targetSnap) {
-        setCreatedSnapshot(targetSnap);
-        setSelectedSnapshotId(targetSnap.id);
-      } else {
-        const fallbackSnap: Snapshot = {
-          id:
-            'id' in result && !('state' in result)
-              ? (result as Snapshot).id
-              : (result as SnapshotImport).snapshot_id || 'validated-snapshot',
-          name: snapshotName || selectedFile.name,
-          row_count: filePreview?.totalRowsSampled || 0,
-          source_hash: 'source_hash' in result ? (result as any).source_hash : '',
-          created_at: new Date().toISOString(),
-        } as unknown as Snapshot;
-        setCreatedSnapshot(fallbackSnap);
-        if (fallbackSnap.id) setSelectedSnapshotId(fallbackSnap.id);
-      }
-      setStep('success');
+      const contract = matchingContract && joinExisting ? matchingContract : await api.createFlatContract(contractPayload, projectId);
+      finishImport(await uploadAndWait(contract.id, snapshotName || selectedFile.name));
     } catch (err: unknown) {
-      setValidationError(
-        humanizeError(err, { key: confirmedKey, measure: confirmedMeasure, filename: selectedFile.name })
-      );
-      setStep('error');
+      failImport(err);
     } finally {
       setBusy(false);
+      setImportStarted(null);
     }
   };
 
   const handleDone = async () => {
     setShowAddModal(false);
     const updated = await refresh();
+    if (createdSnapshot && onCreatedReturn) {
+      // Opened from New comparison: go back there with the new dataset selected.
+      onCreatedReturn(createdSnapshot.id);
+      return;
+    }
     if (createdSnapshot) {
       setSelectedSnapshotId(createdSnapshot.id);
       setPageNotice(`Data source "${createdSnapshot.name}" successfully created and ready.`);
@@ -750,9 +785,17 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                     Immutable snapshot · {activeSnapshot.row_count?.toLocaleString('en-US')} verified rows
                   </p>
                 </div>
-                <div className="detail-status-pill">
-                  <ShieldCheck size={16} />
-                  <span>Snapshot verified</span>
+                <div className="detail-header-actions">
+                  <div className="detail-status-pill">
+                    <ShieldCheck size={16} />
+                    <span>Snapshot verified</span>
+                  </div>
+                  {activeContract && (
+                    <button type="button" className="button secondary small" onClick={() => openAddLoad(activeContract)}
+                      title="Upload a newer file of this dataset with the same columns, to compare the two loads">
+                      <Plus size={14} /> Add a newer load
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1014,8 +1057,17 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
               {/* STEP 1: UPLOAD */}
               {step === 'upload' && (
                 <div className="step-upload-body">
+                  {loadContract && (
+                    <div className="panel-note">
+                      <strong>Newer load of “{loadContract.name}”</strong>
+                      <p>The file must have the same columns: row key <code>{loadContract.row_key}</code>, amount{(loadContract.decimal_columns?.length || 0) > 1 ? 's' : ''} <code>{loadContract.decimal_columns?.map(d => d.name).join(', ') || loadContract.measure}</code>{loadContract.categories.length > 0 && <> and filter columns <code>{loadContract.categories.join(', ')}</code></>}. Every row is checked against this definition, and the two loads can then be compared record by record.</p>
+                      <label>Label for this load
+                        <input value={snapshotName} maxLength={160} onChange={e => setSnapshotName(e.target.value)} placeholder="e.g. Final delivery, 1 Feb" />
+                      </label>
+                    </div>
+                  )}
                   {/* Source Type Selector */}
-                  <div className="source-type-tabs">
+                  <div className="source-type-tabs" hidden={Boolean(loadContract)}>
                     <button
                       type="button"
                       className={`source-type-btn ${sourceType === 'file' ? 'active' : ''}`}
@@ -1038,12 +1090,12 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                       <label className="file-dropzone-large">
                         <UploadCloud size={32} />
                         <strong>
-                          {selectedFile ? selectedFile.name : 'Choose a CSV or Parquet extract'}
+                          {selectedFile ? selectedFile.name : 'Choose a CSV, Parquet or Excel file'}
                         </strong>
                         <span>
                           {selectedFile
-                            ? `${Math.round(selectedFile.size / 1024)} KB selected`
-                            : 'Drop a flat CSV (up to 512 MiB) or Parquet extract'}
+                            ? `${formatBytes(selectedFile.size)} selected`
+                            : 'Drop a CSV (up to 512 MiB), Parquet or Excel (.xlsx) file'}
                         </span>
                         <input
                           type="file"
@@ -1107,7 +1159,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
               {step === 'confirm' && (
                 <form className="step-confirm-body" onSubmit={handleValidateAndCreate}>
                   <p className="confirm-intro-text">
-                    MetricGuard suggests logical types from all CSV rows or the declared Parquet schema. Every imported value will be validated.
+                    MetricGuard suggests column types from the rows it read (the first 2 MiB of a large CSV) or from the Parquet schema. Every imported row is validated.
                     Please confirm the primary row identifier, numerical measure, and categorical dimensions.
                   </p>
 
@@ -1334,8 +1386,15 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                   )}
 
                   <div className="form-stack">
+                    {matchingContract && (
+                      <label className="checkbox-field-standard panel-note">
+                        <input type="checkbox" checked={joinExisting} onChange={e => setJoinExisting(e.target.checked)} />
+                        <span>Add this file as a new load of “{matchingContract.name}”
+                          <small className="field-hint">It has the same columns and settings, so the two loads can be compared record by record. Untick to register it as a separate dataset.</small></span>
+                      </label>
+                    )}
                     <label>
-                      Snapshot name
+                      {matchingContract && joinExisting ? 'Label for this load' : 'Snapshot name'}
                       <input
                         required
                         value={snapshotName}
@@ -1486,7 +1545,8 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                       <strong>More amount columns</strong>
                       <p>Besides <code>{confirmedMeasure || 'the main amount'}</code>, tick the other amounts to register. Calculations can then total any one of them or divide one by another, e.g. <code>SUM(revenue - cost) / SUM(revenue)</code>. Each needs its own unit; amounts in different units are never added together.</p>
                       <div style={{ display: 'grid', gap: 6 }}>
-                        {filePreview?.headers.filter(h => h !== confirmedKey && h !== confirmedMeasure).map(col => {
+                        {filePreview?.headers.filter(h => h !== confirmedKey && h !== confirmedMeasure
+                          && (filePreview.observed_types[h] === 'numeric' || extraAmounts.includes(h))).map(col => {
                           const checked = extraAmounts.includes(col);
                           return (
                             <div key={col} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1688,7 +1748,10 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                 <div className="step-status-card">
                   <RefreshCw className="spinning" size={32} />
                   <h3>Validating snapshot…</h3>
-                  <p>{validationProgress || 'Checking rows, column types, and data consistency…'}</p>
+                  <p>{validationProgress || 'Checking rows, column types, and data consistency…'}{importElapsed >= 3 && ` (${importElapsed} s)`}</p>
+                  {importElapsed >= 10 && (
+                    <p className="field-hint">Large files can take a minute or two. You can close this window: the import keeps running, and the dataset appears in the list when it is ready.</p>
+                  )}
                 </div>
               )}
 
@@ -1747,7 +1810,12 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                   >
                     Cancel
                   </button>
-                  {sourceType === 'file' && (
+                  {sourceType === 'file' && loadContract && (
+                    <button type="button" className="button primary" disabled={!selectedFile || busy} onClick={() => void handleAddLoad()}>
+                      Validate and add load <ShieldCheck size={16} />
+                    </button>
+                  )}
+                  {sourceType === 'file' && !loadContract && (
                     <button
                       type="button"
                       className="button primary"
@@ -1782,6 +1850,12 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                 </>
               )}
 
+              {step === 'validating' && importElapsed >= 10 && (
+                <button type="button" className="button secondary" onClick={() => setShowAddModal(false)}>
+                  Close and keep importing
+                </button>
+              )}
+
               {step === 'success' && (
                 <button
                   type="button"
@@ -1799,7 +1873,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                     className="button secondary"
                     onClick={() => {
                       setValidationError(null);
-                      setStep('confirm');
+                      setStep(loadContract ? 'upload' : 'confirm');
                     }}
                   >
                     <ArrowLeft size={15} /> Back to configuration
@@ -1807,7 +1881,7 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
                   <button
                     type="button"
                     className="button primary"
-                    onClick={handleValidateAndCreate}
+                    onClick={e => loadContract ? void handleAddLoad() : void handleValidateAndCreate(e)}
                   >
                     <RefreshCw size={15} /> Try again
                   </button>
@@ -1819,4 +1893,9 @@ export function DataSourcesView({ data, refresh, openAdd }: DataSourcesViewProps
       )}
     </div>
   );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024)).toLocaleString('en-US')} KB`;
 }

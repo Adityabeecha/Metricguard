@@ -24,3 +24,22 @@ export function isComparisonCalculation(d: { source_label: string }): boolean {
 export function splitCalculations<T extends { source_label: string }>(entries: T[]) {
   return { imported: entries.filter(d => !isComparisonCalculation(d)), fromComparisons: entries.filter(isComparisonCalculation) };
 }
+
+/**
+ * Saved calculations for the "start from" picker: those used in saved cases first, then the
+ * rest newest first, narrowed by a search over name and SQL. The chosen one always stays listed.
+ */
+export function groupSavedCalculations<T extends { definition: { name: string }; version: { id: string; raw_sql: string; observed_at: string } }>(
+  entries: T[], usedInCases: ReadonlySet<string>, query: string, keep?: string,
+) {
+  const needle = query.trim().toLowerCase();
+  const newest = [...entries].sort((a, b) => (b.version.observed_at || '').localeCompare(a.version.observed_at || ''));
+  const matches = newest.filter(x => x.version.id === keep || !needle
+    || `${x.definition.name} ${x.version.raw_sql}`.toLowerCase().includes(needle));
+  return {
+    used: matches.filter(x => usedInCases.has(x.version.id)),
+    other: matches.filter(x => !usedInCases.has(x.version.id)),
+    total: entries.length,
+    shown: matches.length,
+  };
+}

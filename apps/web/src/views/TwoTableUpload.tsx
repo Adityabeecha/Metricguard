@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { inferMeaning } from '../csvInference';
 import { UploadCloud } from 'lucide-react';
 import { api, type DatasetPreviewRecord, type RelationalContract, type RelationalSnapshot, type SnapshotImport } from '../api';
 import { classifyInvestigationError, type ClassifiedInvestigationError } from '../investigationUtils';
@@ -81,6 +82,27 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
     }, 1200);
     return () => { active = false; clearTimeout(timer); };
   }, [previews, job, extras]);
+
+  // Suggest the obvious choices once the files are read; every choice stays editable.
+  const factPreview = previews.fact?.preview, dimPreview = previews.dimension?.preview;
+  useEffect(() => {
+    if (!factPreview || factKey) return;
+    const inf = inferMeaning(factPreview.headers, factPreview.observed_types || {}, factPreview.sample_rows, files.fact?.name || '');
+    setFactKey(inf.rowKey); setAmount(inf.measure);
+    if (inf.unit) setUnit(u => u || inf.unit || '');
+    if (inf.meaning) setMeaning(m => m || inf.meaning);
+  }, [factPreview]);
+  useEffect(() => {
+    if (!factPreview || !dimPreview || link) return;
+    const dimHeaders = dimPreview.headers, factHeaders = factPreview.headers;
+    // A column with the same name in both tables is almost always the link (e.g. company, store_id).
+    const shared = dimHeaders.find(h => factHeaders.includes(h) && h !== factKey && h !== amount);
+    const key = shared || inferMeaning(dimHeaders, dimPreview.observed_types || {}, dimPreview.sample_rows, files.dimension?.name || '').rowKey;
+    if (key && !dimKey) setDimKey(key);
+    const fk = shared || factHeaders.find(h => h.toLowerCase() === key?.toLowerCase() && h !== factKey);
+    if (fk) setLink(fk);
+    if (!dimFilters.length) setDimFilters(dimHeaders.filter(h => h !== key).slice(0, 8));
+  }, [factPreview, dimPreview, factKey]);
 
   const choose = (role: Role, file: File | null) => {
     const request = ++previewRequests.current[role];

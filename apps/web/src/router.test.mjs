@@ -51,3 +51,14 @@ test('buildRouteUrl constructs standard URL with workspace and parameters', () =
   assert.equal(buildRouteUrl('acme', 'changes'), '/w/acme/changes');
   assert.equal(buildRouteUrl('acme', 'changes', undefined, { changeId: 'diff-123' }), '/w/acme/changes/diff-123');
 });
+
+test('unknown pages are flagged instead of silently showing Cases', () => {
+  const unknown = parseRoute('/w/local-retail/no-such-page');
+  assert.equal(unknown.page, 'dashboard');
+  assert.equal(unknown.notFound, true);
+  assert.equal(parseRoute('/w/local-retail/data-sources').page, 'data');
+  assert.equal(parseRoute('/w/local-retail/data-sources').notFound, undefined);
+  assert.equal(parseRoute('/w/local-retail').notFound, undefined);
+  assert.equal(parseRoute('/').notFound, undefined);
+  assert.equal(parseRoute('/nonsense').notFound, true);
+});

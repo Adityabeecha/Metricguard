@@ -20,7 +20,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .models import (BaselineInput, ColumnMappingInput, ComparisonInput,
                      DatasetContractInput, DefinitionInput, DependencyInput,
                      InvestigationInput, PairReview, FlatContractInput,
-                     FlatDefinitionInput, FlatComparisonInput, FlatSnapshotChangeInput,
+                     FlatDefinitionInput, FlatComparisonInput, FlatSnapshotChangeInput, FlatMatchCountInput,
                      UserCreateInput, ProjectCreateInput, ProjectMemberInput,
                      ReviewRequestInput, DecisionInput, MonitoringPolicyInput,
                      AlertAcknowledgeInput, ProjectQuotaInput, PostgresExtractionInput, WarehouseExtractionInput,
@@ -137,6 +137,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
     else:
         store = Store(database_url or os.environ.get('METRICGUARD_DATABASE_URL', f"sqlite:///{data_dir / 'metricguard.db'}"))
     execution_mode = mode or os.environ.get('METRICGUARD_MODE', 'demo')
+    profile_cache = {}
     if execution_mode not in ('demo', 'isolated'):
         raise ValueError('METRICGUARD_MODE must be demo or isolated')
     app = FastAPI(title='MetricGuard', version='1.0.0')
@@ -690,6 +691,37 @@ def create_app(database_url=None, data_dir=None, mode=None):
         item = store.snapshot(ident)
         verify_object_access(store, item, auth, allowed_roles=('owner', 'analyst', 'reader'))
         return public_snapshot(item)
+
+    def _flat_snapshot_for_lookup(ident, request):
+        auth = get_auth_context(request, store)
+        item = store.snapshot(ident)
+        verify_object_access(store, item, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        if item.get('execution_policy') != 'flat_snapshot_v1':
+            raise DomainError('POLICY_MISMATCH', 'Value look-ups are available for single-table datasets.')
+        if not Path(item['artifact_path']).is_file():
+            raise DomainError('SNAPSHOT_MISSING', 'This snapshot is missing.')
+        return item
+
+    @app.get('/api/v1/snapshots/{ident}/column-values')
+    def snapshot_column_values(ident: str, request: Request, column: str = Query(..., min_length=1, max_length=200),
+                               limit: int = Query(200, ge=1, le=200)):
+        """The values a filter column actually holds, so an analyst picks real values instead of guessing."""
+        item = _flat_snapshot_for_lookup(ident, request)
+        from packages.metricguard_core.flat_profile import column_values
+        # Snapshots are immutable, so a column's values never change once computed.
+        key = (item['artifact_path'], column, limit)
+        if key not in profile_cache:
+            if len(profile_cache) >= 512:
+                profile_cache.clear()
+            profile_cache[key] = column_values(item['artifact_path'], item['manifest']['contract'], column, limit)
+        return profile_cache[key]
+
+    @app.post('/api/v1/snapshots/{ident}/match-count')
+    def snapshot_match_count(ident: str, body: FlatMatchCountInput, request: Request):
+        """How many records a calculation's conditions include, checked before a long run starts."""
+        item = _flat_snapshot_for_lookup(ident, request)
+        from packages.metricguard_core.flat_profile import match_count
+        return {'snapshot_id': ident, 'counts': match_count(item['artifact_path'], item['manifest']['contract'], body.raw_sql)}
 
     @app.post('/api/v1/dataset-contracts', status_code=201)
     def approve_contract(body: DatasetContractInput, request: Request):
@@ -1442,8 +1474,11 @@ def create_app(database_url=None, data_dir=None, mode=None):
             columns = [f'fact.{c}' for c in (contract.get('fact') or {}).get('categories', [])]
             if contract.get('version') == 2:  # several lookup tables: <role>.<column>
                 columns += [f"{d['role']}.{c}" for d in contract.get('dimensions', []) for c in d['categories']]
+                columns += [f"link.{d['role']}" for d in contract.get('dimensions', [])]
             else:
                 columns += [f'dimension.{c}' for c in (contract.get('dimension') or {}).get('categories', [])]
+                if contract.get('version') == 1:
+                    columns.append('link.dimension')
             return None, columns
         info = store.evidence_context(run['id'], run.get('attempt', 1))
         path = data_dir / 'evidence' / f"{run['id']}-{run.get('attempt', 1)}.context.jsonl"
@@ -1453,6 +1488,16 @@ def create_app(database_url=None, data_dir=None, mode=None):
             return evidence_cache.load_context(path, info), list(info.get('columns') or [])
         except (ValueError, OSError, KeyError):
             return None, []
+
+    def column_type(run, column):
+        """Declared type of a single-table filter column ('string' when unknown or two tables)."""
+        if run.get('execution_policy') == 'relational_snapshot_v1':
+            return 'string'
+        try:
+            contract = (store.snapshot(run['snapshot_id']).get('manifest') or {}).get('contract') or {}
+        except DomainError:
+            return 'string'
+        return (contract.get('dimension_types') or {}).get(column, 'string')
 
     @app.get('/api/v1/comparisons/{ident}/evidence-breakdown')
     def evidence_breakdown(ident: str, request: Request, column: str = Query('', max_length=200)):
@@ -1482,8 +1527,11 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 raise DomainError('INVALID_COLUMN', excluded[chosen])
             raise DomainError('INVALID_COLUMN', f"'{chosen}' is not a filter column of this dataset.")
         path, key, verify_all = evidence_access(run)
+        bucket = 'day' if column_type(run, chosen) == 'timestamp' else None
         try:
-            split = evidence_cache.breakdown(path, key, verify_all, chosen, context, ratio=result.get('ratio'))
+            split = evidence_cache.breakdown(path, key, verify_all, chosen, context, ratio=result.get('ratio'), bucket=bucket)
+            if bucket:
+                split = {**split, 'grouping': bucket}
             if result.get('evidence_coverage'):
                 # Only changed records are listed: per-group changes are exact, per-group totals are not shown.
                 split = {**split, 'groups': [{**g, 'current': None, 'proposed': None} for g in split['groups']],

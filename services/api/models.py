@@ -159,6 +159,10 @@ class FlatDefinitionInput(Input):
     contract_id: str
 
 
+class FlatMatchCountInput(Input):
+    raw_sql: str = Field(min_length=1, max_length=50000)
+
+
 class FlatContext(Input):
     mode: Literal['flat_snapshot']
     scope: Literal['entire_supplied_snapshot']

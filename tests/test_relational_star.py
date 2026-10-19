@@ -318,6 +318,11 @@ def test_star_http_run_evidence_breakdown_and_replay(tmp_path):
         split = client.get(f"/api/v1/comparisons/{run['id']}/evidence-breakdown?column=product.category").json()
         # O2 toys -50; O4 books -20; O5 (no product match) -40 and O6 (no product) -10 -> blank -50.
         assert split['available'] and {g['value']: g['change'] for g in split['groups']} == {'books': '-20.00', 'toys': '-50.00', None: '-50.00'}
+        # Orders with no matching product row are a "no match" group, not a blank category.
+        assert [g.get('no_match', False) for g in split['groups'] if g['value'] is None] == [True]
+        assert 'link.product' in split['columns'] and 'link.customer' in split['columns']
+        by_link = client.get(f"/api/v1/comparisons/{run['id']}/evidence-breakdown?column=link.product").json()
+        assert by_link['available'] and by_link['column'] == 'link.product'
         for fmt in ('json', 'html'):
             assert client.get(f"/api/v1/comparisons/{run['id']}/export?format={fmt}").status_code == 200
         saved = client.post('/api/v1/investigations', json={'title': 'Star', 'run_id': run['id'],

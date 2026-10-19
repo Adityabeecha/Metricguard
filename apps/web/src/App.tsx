@@ -225,9 +225,9 @@ export function App() {
   const showEditor = route.page === 'investigations' && !!invId && !showReport;
   const openRun = (run: Run) => navigate({ page: 'investigations', query: { investigationId: run.id } });
   const startWith = (query: Record<string, string>) => navigate({ page: 'start', query });
-  const guided = (prefill: { from?: string; left?: string; right?: string }) => (
+  const guided = (prefill: { from?: string; left?: string; right?: string; dataset?: string }) => (
     <StartComparison
-      key={`${route.workspaceId}:${prefill.from || ''}:${prefill.left || ''}:${prefill.right || ''}`}
+      key={`${route.workspaceId}:${prefill.from || ''}:${prefill.left || ''}:${prefill.right || ''}:${prefill.dataset || ''}`}
       data={data!}
       refresh={refresh}
       prefill={prefill}
@@ -398,10 +398,11 @@ export function App() {
                 />
               )}
 
-              {route.page === 'start' && guided({ from: route.query.from, left: route.query.left, right: route.query.right })}
+              {route.page === 'start' && guided({ from: route.query.from, left: route.query.left, right: route.query.right, dataset: route.query.dataset })}
 
               {route.page === 'data' && (
-                <DataSourcesView key={route.workspaceId} data={data} refresh={refresh} openAdd={route.query.add === '1'} />
+                <DataSourcesView key={route.workspaceId} data={data} refresh={refresh} openAdd={route.query.add === '1'}
+                  onCreatedReturn={route.query.return === 'start' ? (id => navigate({ page: 'start', query: { dataset: id } })) : undefined} />
               )}
 
               {route.page === 'changes' && (
@@ -424,12 +425,19 @@ export function App() {
                 />
               )}
 
+              {route.notFound && (
+                <div className="alert error" role="alert">
+                  <span>There is no page at <code>{route.rawPath}</code>. Showing Cases instead; use the navigation to find the page you wanted.</span>
+                  <button type="button" onClick={() => navigate({ page: 'investigations' })} aria-label="Dismiss message">×</button>
+                </div>
+              )}
               {showLibrary && (
                 <InvestigationLibrary
                   key={route.workspaceId}
                   data={data}
                   workspaceId={route.workspaceId}
                   onStart={() => navigate({ page: 'start' })}
+                  onAddData={() => navigate({ page: 'data', query: { add: '1', return: 'start' } })}
                   onOpenRun={openRun}
                   onOpen={(item) => item.source === 'saved'
                     ? navigate({ page: 'investigations', query: { investigationId: item.id } })

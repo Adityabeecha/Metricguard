@@ -264,19 +264,47 @@ def load_context(path: Path, info: dict) -> dict[str, dict]:
     return values
 
 
+# Group value for lookup columns of a record whose link found no lookup row: kept apart from a
+# lookup row whose own value is blank, so "no matching row" is never shown as "blank".
+NO_MATCH = '\u0000no-match'
+
+
 def row_values(row: dict, context: dict[str, dict] | None) -> dict:
-    """Column values for one evidence row: from the context file (single table) or the row itself (two tables)."""
+    """Column values for one evidence row: from the context file (single table) or the row itself (two tables).
+
+    Two tables also expose each link's key as ``link.<role>`` (the main table's value that points to
+    the lookup), so changes can be split by it, e.g. to see which keys are missing from a lookup.
+    """
     if context is not None:
         return context.get(record_key(row), {})
     out = {f'fact.{name}': value for name, value in (row.get('fact_values') or {}).items()}
     if 'links' in row:  # several lookup tables: dimension_values is {role: {column: value}}
+        for role, link in (row.get('links') or {}).items():
+            out[f'link.{role}'] = (link or {}).get('foreign_key')
         for role, values in (row.get('dimension_values') or {}).items():
+            matched = ((row.get('links') or {}).get(role) or {}).get('matched', True)
             for name, value in (values or {}).items():
-                out[f'{role}.{name}'] = value
+                out[f'{role}.{name}'] = value if matched else NO_MATCH
     else:
+        if 'foreign_key' in row:
+            out['link.dimension'] = row.get('foreign_key')
+        matched = row.get('dimension_matched', True)
         for name, value in (row.get('dimension_values') or {}).items():
-            out[f'dimension.{name}'] = value
+            out[f'dimension.{name}'] = value if matched else NO_MATCH
     return out
+
+
+def _group_value(row: dict, context: dict[str, dict] | None, column: str, bucket: str | None):
+    value = row_values(row, context).get(column)
+    if bucket == 'day' and isinstance(value, str) and len(value) >= 10:
+        return value[:10]
+    return value
+
+
+def _public_group(group: dict) -> dict:
+    if group['value'] == NO_MATCH:
+        return {**group, 'value': None, 'no_match': True}
+    return group
 
 
 def _dec(value) -> Decimal:
@@ -354,14 +382,14 @@ def entity_records_page(path: Path, info: dict, entity: str, offset: int = 0, li
             'next_offset': next_offset if next_offset < total else None}
 
 
-def _ratio_breakdown(path, key, verify_all, column, context, ratio, limit):
+def _ratio_breakdown(path, key, verify_all, column, context, ratio, limit, bucket=None):
     from fractions import Fraction
     from packages.metricguard_core import flat_ratio
     groups: dict[Any, dict[str, Any]] = {}
     total = Fraction(0)
     places = ratio['display_places']
     for row in iter_rows(path, key, verify_all):
-        value = row_values(row, context).get(column)
+        value = _group_value(row, context, column, bucket)
         group = groups.setdefault(value, {'value': value, 'records': 0, 'changed_records': 0,
                                           'n0': Fraction(0), 'n1': Fraction(0), 'd0': Fraction(0), 'd1': Fraction(0),
                                           'share': Fraction(0)})
@@ -393,19 +421,24 @@ def _ratio_breakdown(path, key, verify_all, column, context, ratio, limit):
     return {'column': column, 'ratio': True,
             'total_change': flat_ratio.display(total / divisor, places) if divisor else None,
             'total_change_exact': flat_ratio.fraction_text(total / divisor) if divisor else None,
-            'groups': [shown(g) for g in ordered[:limit]], 'other_groups': len(rest),
+            'groups': [_public_group(shown(g)) for g in ordered[:limit]], 'other_groups': len(rest),
             'other_change': flat_ratio.display(rest_share / divisor, places) if divisor else None}
 
 
 def breakdown(path: Path, key: tuple, verify_all: Callable[[], Any], column: str,
-              context: dict[str, dict] | None, limit: int = 50, ratio: dict | None = None) -> dict[str, Any]:
-    """Exact split of the change by the values of one column, largest change first."""
+              context: dict[str, dict] | None, limit: int = 50, ratio: dict | None = None,
+              bucket: str | None = None) -> dict[str, Any]:
+    """Exact split of the change by the values of one column, largest change first.
+
+    ``bucket='day'`` groups timestamps by their date, so a split by time reads per day instead
+    of per distinct timestamp.
+    """
     entry = _fresh(Path(path), key, verify_all)
-    cache_key = ('breakdown', column, id(context))
+    cache_key = ('breakdown', column, id(context), bucket)
     if cache_key in entry.views:
         return entry.views[cache_key]  # type: ignore[return-value]
     if ratio:
-        result = _ratio_breakdown(path, key, verify_all, column, context, ratio, limit)
+        result = _ratio_breakdown(path, key, verify_all, column, context, ratio, limit, bucket)
         entry.views[cache_key] = result  # type: ignore[assignment]
         return result
     groups: dict[Any, dict[str, Any]] = {}
@@ -413,7 +446,7 @@ def breakdown(path: Path, key: tuple, verify_all: Callable[[], Any], column: str
         exact.prec = 100  # exact sums for 38-digit decimals
         total_change = Decimal(0)
         for row in iter_rows(path, key, verify_all):
-            value = row_values(row, context).get(column)
+            value = _group_value(row, context, column, bucket)
             group = groups.setdefault(value, {'value': value, 'records': 0, 'changed_records': 0,
                                               'current': Decimal(0), 'proposed': Decimal(0), 'change': Decimal(0)})
             change = _dec(row.get('delta'))
@@ -428,7 +461,7 @@ def breakdown(path: Path, key: tuple, verify_all: Callable[[], Any], column: str
         result = {
             'column': column,
             'total_change': str(total_change),
-            'groups': [{**g, 'current': str(g['current']), 'proposed': str(g['proposed']), 'change': str(g['change'])}
+            'groups': [_public_group({**g, 'current': str(g['current']), 'proposed': str(g['proposed']), 'change': str(g['change'])})
                        for g in ordered[:limit]],
             'other_groups': len(rest),
             'other_change': str(sum((g['change'] for g in rest), Decimal(0))),

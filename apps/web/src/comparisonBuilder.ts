@@ -356,3 +356,64 @@ export function describeCalculation(form: CalculationForm, columns: FilterColumn
   }[form.aggregate || 'sum'];
   return `${what} over ${scope}${parts.length ? ` where ${parts.join(form.match === 'any' ? ' or ' : ' and ')}` : ''}.`;
 }
+
+/** The values a filter column holds in the chosen dataset (from /snapshots/{id}/column-values). */
+export type KnownValues = { complete: boolean; distinct_count: number; values: Array<{ value: string; count: number }> };
+
+/** Columns with this many distinct values or fewer are offered as clickable values and as the default condition. */
+export const FEW_VALUES = 20;
+
+/** The column a new condition starts on: the first one with a short, complete list of values, else none. */
+export function defaultConditionColumn(columns: FilterColumn[], known: Record<string, KnownValues | null | undefined>): string {
+  return columns.find(c => {
+    const k = known[c.id];
+    return k && k.complete && k.distinct_count > 0 && k.distinct_count <= FEW_VALUES;
+  })?.id || '';
+}
+
+/**
+ * Typed values that do not occur in the column. Only text equality and list conditions are
+ * checked, and only when every value of the column is known, so an empty result is never a guess.
+ */
+export function unknownFilterValues(f: Filter, type: ValueType, known: KnownValues | null | undefined): string[] {
+  if (!known?.complete || type !== 'string' || !['eq', 'neq', 'in', 'not_in'].includes(f.op)) return [];
+  const typed = f.op === 'in' || f.op === 'not_in' ? splitList(f.value) : [f.value].filter(v => v.trim() !== '');
+  const present = new Set(known.values.map(v => v.value));
+  return typed.filter(v => !present.has(v));
+}
+
+function editDistance(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0]; row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const next = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = next;
+    }
+  }
+  return row[b.length];
+}
+
+/** The known value an unknown one was most likely meant to be (case, a typo, or a shared start), if any. */
+export function closestValue(typed: string, known: KnownValues | null | undefined): string | null {
+  if (!known) return null;
+  const t = typed.trim().toLowerCase();
+  if (!t) return null;
+  let best: string | null = null, bestScore = Infinity;
+  for (const { value } of known.values) {
+    const v = value.toLowerCase();
+    const score = v === t ? 0 : v.startsWith(t) || t.startsWith(v) ? 1 : editDistance(t, v);
+    if (score < bestScore) { best = value; bestScore = score; }
+  }
+  return best !== null && bestScore <= Math.max(2, Math.floor(t.length / 3)) ? best : null;
+}
+
+/** Plain warning for each typed value that matches nothing in the column. */
+export function unknownValueWarnings(f: Filter, column: FilterColumn | undefined, known: KnownValues | null | undefined): string[] {
+  if (!column) return [];
+  return unknownFilterValues(f, column.type, known).map(v => {
+    const near = closestValue(v, known);
+    return `“${v}” does not occur in ${column.label}${near ? `; did you mean “${near}”?` : '.'}`;
+  });
+}

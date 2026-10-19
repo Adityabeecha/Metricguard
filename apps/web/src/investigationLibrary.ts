@@ -8,6 +8,8 @@ export type LibraryStatus = 'saved' | 'draft' | 'running' | 'refused';
 
 export type LibraryItem = {
   id: string;
+  /** Case number shown and searched: the number of the run the case pins (the same one its seal shows). */
+  number: string;
   source: 'saved' | 'draft';
   kind: LibraryKind;
   status: LibraryStatus;
@@ -64,14 +66,15 @@ export function buildLibraryItems(data: Pick<Bootstrap, 'investigations' | 'runs
     const snapshot = data.snapshots.find(s => s.id === inv.snapshot_id);
     items.push({
       id: inv.id,
+      number: caseNumber(inv.run_id || inv.id),
       source: 'saved',
       kind: kindOf(ctx?.mode, snapshot?.execution_policy),
       status: 'saved',
-      title: inv.title || 'Saved investigation',
+      title: inv.title || 'Saved case',
       metricNames: metricsFor([inv.baseline_version_id, inv.target_version_id]),
       datasetName: snapshotName(inv.snapshot_id),
-      currentLabel: label(inv.baseline_version_id),
-      proposedLabel: label(inv.target_version_id),
+      currentLabel: run?.target_snapshot_id ? `${label(inv.baseline_version_id)} on ${snapshotName(inv.snapshot_id)}` : label(inv.baseline_version_id),
+      proposedLabel: run?.target_snapshot_id ? `a later load (${snapshotName(run.target_snapshot_id)})` : label(inv.target_version_id),
       change: resultDisplayValue(run?.result, run?.result?.delta_target_minus_baseline),
       unit: resultUnit(run?.result, ctx?.unit_label || ctx?.currency || ''),
       hasConclusion: Boolean(inv.decision),
@@ -86,6 +89,7 @@ export function buildLibraryItems(data: Pick<Bootstrap, 'investigations' | 'runs
     const ctx = run?.context as unknown as { mode?: string; unit_label?: string } | undefined;
     items.push({
       id: d.id,
+      number: caseNumber(d.comparison_run_id || d.id),
       source: 'draft',
       kind: kindOf(ctx?.mode, snapshot?.execution_policy),
       status: run?.state === 'failed' || d.status === 'refused' ? 'refused' : d.status === 'running' ? 'running' : 'draft',
@@ -93,8 +97,8 @@ export function buildLibraryItems(data: Pick<Bootstrap, 'investigations' | 'runs
       title: d.title || 'Untitled draft',
       metricNames: metricsFor([d.baseline_version_id, d.target_version_id], d.metric_id),
       datasetName: d.snapshot_id ? snapshotName(d.snapshot_id) : 'No dataset chosen',
-      currentLabel: label(d.baseline_version_id),
-      proposedLabel: label(d.target_version_id),
+      currentLabel: run?.target_snapshot_id ? `${label(d.baseline_version_id)} on ${snapshotName(d.snapshot_id)}` : label(d.baseline_version_id),
+      proposedLabel: run?.target_snapshot_id ? `a later load (${snapshotName(run.target_snapshot_id)})` : label(d.target_version_id),
       change: resultDisplayValue(run?.result, run?.result?.delta_target_minus_baseline),
       unit: resultUnit(run?.result, ctx?.unit_label || ''),
       hasConclusion: false,
@@ -110,12 +114,12 @@ export function filterLibraryItems(items: LibraryItem[], f: { query: string; kin
     if (f.kind !== 'all' && item.kind !== f.kind) return false;
     if (f.status !== 'all' && item.status !== f.status) return false;
     if (!q) return true;
-    return [caseNumber(item.id), item.title, item.datasetName, item.currentLabel, item.proposedLabel, ...item.metricNames]
+    return [item.number, item.title, item.datasetName, item.currentLabel, item.proposedLabel, ...item.metricNames]
       .some(text => text.toLowerCase().includes(q));
   });
 }
 
-/** A short, stable case number for an investigation, draft or run: MG-3F2A. */
+/** A short, stable case number, made from the id of the run a case pins: MG-3F2A. */
 export function caseNumber(id: string): string {
   return `MG-${id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 4).toUpperCase()}`;
 }
@@ -128,14 +132,26 @@ export const STAMP: Record<LibraryStatus, { label: string; tone: 'sealed' | 'dra
   refused: { label: 'Failed', tone: 'failed' },
 };
 
-type RunLike = { id: string; created_at: string; purpose?: string; snapshot_id: string; baseline_version_id: string; target_version_id: string;
+type RunLike = { id: string; created_at: string; purpose?: string; snapshot_id: string; target_snapshot_id?: string; baseline_version_id: string; target_version_id: string;
   result?: { baseline_value?: string | null; target_value?: string | null; delta_target_minus_baseline?: string | null } | null };
+
+/** Whether a finished run produced a value on both sides (an empty filter on a ratio leaves it Undefined). */
+export function hasDefinedResult(run: Pick<RunLike, 'result'>): boolean {
+  const res = run.result;
+  return Boolean(res && res.baseline_value != null && res.target_value != null && res.delta_target_minus_baseline != null);
+}
 
 /**
  * Comparisons with a difference nobody has explained yet: newest first, one per
  * (current, proposed, dataset) pair, excluding runs already saved in a case and replays.
+ * Failed runs never appear (they have no result). Runs whose result is Undefined and runs
+ * the analyst dismissed are left out unless asked for.
  */
-export function unexplainedRuns<R extends RunLike>(runs: R[], investigations: Array<{ run_id: string; baseline_version_id?: string; target_version_id?: string; snapshot_id?: string }>): R[] {
+export function unexplainedRuns<R extends RunLike>(
+  runs: R[],
+  investigations: Array<{ run_id: string; baseline_version_id?: string; target_version_id?: string; snapshot_id?: string }>,
+  options: { dismissed?: ReadonlySet<string>; includeUndefined?: boolean; includeDismissed?: boolean } = {},
+): R[] {
   const savedRunIds = new Set(investigations.map(i => i.run_id));
   const savedPairs = new Set(investigations.map(i => `${i.baseline_version_id}|${i.target_version_id}|${i.snapshot_id}`));
   const seen = new Set<string>();
@@ -147,7 +163,23 @@ export function unexplainedRuns<R extends RunLike>(runs: R[], investigations: Ar
       const pair = `${r.baseline_version_id}|${r.target_version_id}|${r.snapshot_id}`;
       if (savedPairs.has(pair) || seen.has(pair)) return false;
       seen.add(pair);
-      const defined = res.baseline_value != null && res.target_value != null && res.delta_target_minus_baseline != null;
-      return !defined || /[1-9]/.test(res.delta_target_minus_baseline || '');
+      if (!options.includeDismissed && options.dismissed?.has(r.id)) return false;
+      if (!hasDefinedResult(r)) return Boolean(options.includeUndefined);
+      return /[1-9]/.test(res.delta_target_minus_baseline || '');
     });
+}
+
+/** Runs dismissed from "Needs a conclusion", remembered per workspace in this browser only. */
+const dismissedKey = (workspaceId: string) => `mg.dismissed-runs.${workspaceId}`;
+
+export function readDismissedRuns(workspaceId: string): Set<string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(dismissedKey(workspaceId)) || '[]');
+    return new Set(Array.isArray(raw) ? raw.filter((x: unknown): x is string => typeof x === 'string') : []);
+  } catch { return new Set(); }
+}
+
+export function writeDismissedRuns(workspaceId: string, ids: ReadonlySet<string>): void {
+  // Keep the newest few hundred; older dismissed runs have long scrolled out of the list.
+  try { localStorage.setItem(dismissedKey(workspaceId), JSON.stringify([...ids].slice(-500))); } catch { /* per-browser convenience only */ }
 }

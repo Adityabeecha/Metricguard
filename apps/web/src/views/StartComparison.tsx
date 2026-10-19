@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Database, Plus, Save, Trash2, UploadCloud } from 'lucide-react';
-import { api, ApiError, type Bootstrap, type FlatContract, type InvestigationDraft, type RelationalContract, type Run, type Snapshot } from '../api';
+import { api, ApiError, type Bootstrap, type ColumnValues, type FlatContract, type InvestigationDraft, type RelationalContract, type Run, type Snapshot } from '../api';
 import {
   aggregateRowLimitReason, buildFlatSql, buildRelationalSql, describeCalculation, flatFilterColumns, formProblems, guidedFormSupported,
   OP_LABEL, operatorsFor, relationalFilterColumns, supportsAnyMatch, supportsCount, supportsDistinct, supportsRatios,
-  RATIO_AGGREGATES, amountColumns, lookupJoins, starLookups, type Aggregate, type LookupJoin, type CalculationForm, type Filter, type FilterColumn,
+  RATIO_AGGREGATES, amountColumns, lookupJoins, starLookups, defaultConditionColumn, type Aggregate, type LookupJoin, type CalculationForm, type Filter, type FilterColumn,
 } from '../comparisonBuilder';
 import { summarizeDataset } from '../datasetSummary';
 import { groupDigits } from '../resultSummary';
@@ -13,9 +13,10 @@ import type { Page } from '../router';
 import { ResultReport } from './ResultReport';
 import { DIRECT_TWO_TABLE_LIMIT, PrepareTwoTable } from './PrepareTwoTable';
 import { TwoTableUpload } from './TwoTableUpload';
+import { ConditionHelp, ConditionValue } from './ConditionFields';
 import { WarehouseSource } from './WarehouseSource';
 import { SnapshotChange } from './SnapshotChange';
-import { comparisonRequestKey } from '../guidedWorkflow';
+import { comparisonRequestKey, groupSavedCalculations } from '../guidedWorkflow';
 
 type Side = 'baseline' | 'target';
 type SideState = { name: string; mode: 'form' | 'sql'; form: CalculationForm; sql: string; refusal: ClassifiedInvestigationError | null;
@@ -27,10 +28,13 @@ const STAGES = [
   { title: 'Choose data', hint: 'What data will be used' },
   { title: 'Define calculations', hint: 'What is being compared' },
   { title: 'Review difference', hint: 'What changed and why' },
-  { title: 'Save explanation', hint: 'What stays available for replay' },
+  { title: 'Save case', hint: 'Your conclusion, pinned with the data for replay' },
 ];
 const pending = (state?: string) => state === 'queued' || state === 'running' || state === 'pending';
-const emptyFilter = (columns: FilterColumn[]): Filter => ({ column: columns[0]?.id || '', op: 'eq', value: '' });
+/** A new condition starts on the first column with a short list of values (e.g. status), else the first column. */
+const emptyFilter = (columns: FilterColumn[], known: Record<string, ColumnValues | null> = {}): Filter =>
+  ({ column: defaultConditionColumn(columns, known) || columns[0]?.id || '', op: 'eq', value: '' });
+type MatchCount = { matched: number; total: number } | null;
 
 type Props = {
   data: Bootstrap;
@@ -38,12 +42,12 @@ type Props = {
   onNavigate: (page: Page, tab?: string, query?: Record<string, string>) => void;
   onOpenInvestigation: (id: string, relational: boolean) => void;
   /** Open an existing saved case, draft or run (`from`), or a pair of calculation versions. */
-  prefill?: { from?: string; left?: string; right?: string };
+  prefill?: { from?: string; left?: string; right?: string; dataset?: string };
 };
 
 export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation, prefill }: Props) {
   const [stage, setStage] = useState(0);
-  const [snapshotId, setSnapshotId] = useState('');
+  const [snapshotId, setSnapshotId] = useState(prefill?.dataset || '');
   const [sides, setSides] = useState<Record<Side, SideState>>({
     baseline: { name: '', mode: 'form', form: { filters: [], join: 'left' }, sql: '', refusal: null },
     target: { name: '', mode: 'form', form: { filters: [], join: 'left' }, sql: '', refusal: null },
@@ -65,6 +69,11 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   // SQL already registered in this visit, so re-running never registers it twice.
   const registered = useRef(new Map<string, string>());
   const actionInFlight = useRef(false);
+  // Values each filter column holds (single-table datasets), keyed by column id; null when the look-up failed.
+  const [known, setKnown] = useState<Record<string, ColumnValues | null>>({});
+  // Records each calculation's conditions include, keyed by `${snapshot}|${sql}`.
+  const [counts, setCounts] = useState<Record<string, MatchCount | 'error'>>({});
+  const [emptyWarning, setEmptyWarning] = useState<string[] | null>(null);
 
   const isolated = data.mode === 'isolated';
   const engineReady = isolated && data.runner_available;
@@ -95,6 +104,8 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   const allVersions = useMemo(() => data.definitions.flatMap(d => d.versions.map(v => ({ definition: d, version: v }))), [data.definitions]);
   const savedCalcs = useMemo(() => contract ? allVersions.filter(x => x.version.contract_hash === contract.contract_hash && x.version.support_state === 'executable') : [],
     [allVersions, contract]);
+  const usedInCases = useMemo(() => new Set((data.investigations || []).flatMap(i => [i.baseline_version_id, i.target_version_id])), [data.investigations]);
+  const [calcQuery, setCalcQuery] = useState<Record<Side, string>>({ baseline: '', target: '' });
 
   // Open an existing case, draft, run or version pair inside the guided flow.
   useEffect(() => {
@@ -120,13 +131,13 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
             const c = found as unknown as { title: string; decision: string; actor_label: string; snapshot_id: string; baseline_version_id: string; target_version_id: string; run: Run };
             snapshot = c.snapshot_id; baseId = c.baseline_version_id; targetId = c.target_version_id; existingRun = c.run;
             setTitle(`${c.title} (edited)`); setDecision(c.decision); setActor(c.actor_label);
-            label = `Editing a copy of “${c.title}”. Saving creates a new investigation; the original stays unchanged and replayable.`;
+            label = `Editing a copy of “${c.title}”. Saving creates a new case; the original stays unchanged and replayable.`;
           }
         } catch (e) {
           if (!(e instanceof ApiError) || !['NOT_FOUND', 'HTTP_404'].includes(e.code)) throw e;
           existingRun = await api.run(prefill.from);
           snapshot = existingRun.snapshot_id; baseId = existingRun.baseline_version_id; targetId = existingRun.target_version_id;
-          label = 'Opened a comparison run. Review it, adjust the calculations, or save it as an investigation.';
+          label = 'Opened a comparison run. Review it, adjust the calculations, or save it as a case.';
         }
       }
       if (!active) return;
@@ -160,10 +171,26 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     const forceSql = !guidedFormSupported(choice.flat || choice.relational!);
     setSides(s => ({
       baseline: { ...s.baseline, mode: forceSql ? 'sql' : 'form', form: { filters: [], join: 'left' }, sql: '', refusal: null },
-      target: { ...s.target, mode: forceSql ? 'sql' : 'form', form: { filters: [emptyFilter(columns)], join: 'left' }, sql: '', refusal: null },
+      target: { ...s.target, mode: forceSql ? 'sql' : 'form', form: { filters: [], join: 'left' }, sql: '', refusal: null },
     }));
     setRun(null);
   }, [snapshotId]);
+
+  // Look up the values of each filter column so conditions offer real values instead of guesses.
+  useEffect(() => {
+    setKnown({}); setCounts({});
+    if (!choice?.flat) return;
+    let active = true;
+    const snapshot = choice.snapshot.id;
+    (async () => {
+      for (const c of columns.slice(0, 40)) {
+        const values = await api.columnValues(snapshot, c.column).catch(() => null);
+        if (!active) return;
+        setKnown(k => ({ ...k, [c.id]: values }));
+      }
+    })();
+    return () => { active = false; };
+  }, [choice?.snapshot.id]);
 
   // Poll the comparison until the isolated engine finishes.
   useEffect(() => {
@@ -199,18 +226,26 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     return choice?.flat ? buildFlatSql(choice.flat, s.form) : buildRelationalSql(choice!.relational!, s.form);
   };
   const safeSql = (side: Side) => { try { return sqlFor(side); } catch { return ''; } };
+  const countKey = (sql: string) => `${choice?.snapshot.id}|${sql.trim()}`;
+  async function lookupCount(sql: string): Promise<MatchCount | 'error'> {
+    const key = countKey(sql);
+    if (key in counts) return counts[key];
+    const result = await api.matchCount(choice!.snapshot.id, sql).then(r => r.counts, () => 'error' as const);
+    setCounts(c => ({ ...c, [key]: result }));
+    return result;
+  }
   const describe = (side: Side) => sides[side].mode === 'form' && summary
     ? describeCalculation(contract && starLookups(contract).length
         ? { ...sides[side].form, joins: lookupJoins(contract as RelationalContract, sides[side].form) } : sides[side].form,
       columns, amountName(side), relational) : undefined;
   const update = (side: Side, patch: Partial<SideState>) => {
-    setRun(null); setProblem(null);
+    setRun(null); setProblem(null); setEmptyWarning(null);
     setSides(s => ({ ...s, [side]: { ...s[side], ...patch, refusal: null } }));
   };
   const updateForm = (side: Side, form: CalculationForm) => update(side, { form });
   /** Settings both calculations must share (what is calculated and over which amount columns). */
   const setShared = (patch: Partial<CalculationForm>) => {
-    setRun(null); setProblem(null);
+    setRun(null); setProblem(null); setEmptyWarning(null);
     setSides(s => ({
     baseline: { ...s.baseline, form: { ...s.baseline.form, ...patch }, refusal: null },
     target: { ...s.target, form: { ...s.target.form, ...patch }, refusal: null } }));
@@ -240,6 +275,16 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
       && !(sides.baseline.reuse && sides.baseline.reuse.versionId === sides.target.reuse?.versionId)
       ? 'The two calculations are identical; change one of them.' : '');
 
+  // Count the records each finished calculation includes (single-table datasets), shortly after typing stops.
+  const liveSql = (side: Side) => choice?.flat && !sideProblems(side).length ? safeSql(side).trim() : '';
+  const baselineLive = liveSql('baseline'), targetLive = liveSql('target');
+  useEffect(() => {
+    if (!choice?.flat || stage !== 1) return;
+    const timer = setTimeout(() => { for (const sql of [baselineLive, targetLive]) if (sql) void lookupCount(sql); }, 400);
+    return () => clearTimeout(timer);
+  }, [baselineLive, targetLive, stage]);
+  const liveCount = (side: Side) => { const sql = side === 'baseline' ? baselineLive : targetLive; return sql ? counts[countKey(sql)] : undefined; };
+
   /** A name that says what the calculation does, unless the analyst typed their own. */
   function definitionName(side: Side, sql: string): string {
     const typed = sides[side].name.trim();
@@ -250,12 +295,24 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     return (where ? `Where ${where}` : 'All records').replace(/\s+/g, ' ').slice(0, 160);
   }
 
-  async function registerAndCompare() {
+  async function registerAndCompare(acceptEmpty = false) {
     if (!choice || !contract || actionInFlight.current) return;
     actionInFlight.current = true;
     const retryOf = run?.state === 'failed' ? run.id : null;
-    setBusy(true); setProblem(null); setRun(null);
+    setBusy(true); setProblem(null); setRun(null); setEmptyWarning(null);
     try {
+      // A calculation that includes no records still takes a full run on a large dataset and
+      // ends at 0 (or Undefined for averages and ratios); say so before spending that time.
+      if (choice.flat && !acceptEmpty) {
+        const empty: string[] = [];
+        for (const side of ['baseline', 'target'] as Side[]) {
+          let sql: string;
+          try { sql = sqlFor(side); } catch { continue; }
+          const found = await lookupCount(sql);
+          if (found && found !== 'error' && found.matched === 0) empty.push(side === 'baseline' ? 'current' : 'proposed');
+        }
+        if (empty.length) { setEmptyWarning(empty); return; }
+      }
       const endpoint = relational ? '/relational/definitions' : '/flat/definitions';
       const ids: Partial<Record<Side, string>> = {};
       for (const side of ['baseline', 'target'] as Side[]) {
@@ -306,7 +363,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     }
   }
 
-  // Keep unsaved work findable in the investigation list until it is saved.
+  // Keep unsaved work findable under Needs a conclusion until it is saved as a case.
   async function rememberDraft(started: Run, baselineId: string, targetId: string) {
     const editor_state = { mode: 'adhoc' as const, baseline_name: sides.baseline.name, target_name: sides.target.name,
       baseline_sql: safeSql('baseline'), target_sql: safeSql('target') };
@@ -343,7 +400,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   }
 
   const canEnter = (i: number) => i === 0 || (i === 1 && !!choice) || (i === 2 && !!run) || (i === 3 && !!run?.result);
-  const saveBlocker = !run?.result ? 'Run the comparison first.' : !title.trim() ? 'Give the investigation a name.' : !decision.trim() ? 'Write your conclusion.' : !actor.trim() ? 'Enter who is recording this.' : '';
+  const saveBlocker = !run?.result ? 'Run the comparison first.' : !title.trim() ? 'Give the case a name.' : !decision.trim() ? 'Write your conclusion.' : !actor.trim() ? 'Enter who is recording this.' : '';
 
   return (
     <div className="guided-page">
@@ -434,11 +491,11 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
             <span>Did the metric change between two data loads?</span>
             <button className="button secondary small" aria-expanded={showLoads} onClick={() => setShowLoads(v => !v)}>Compare two data loads</button>
           </div>
-          {showLoads && <SnapshotChange data={data} refresh={refresh} />}
+          {showLoads && <SnapshotChange data={data} refresh={refresh} onSaved={id => onOpenInvestigation(id, false)} />}
           <div className="side-question">
             <span>Need new data?</span>
             <div className="report-actions">
-              <button className="button secondary small" onClick={() => onNavigate('data', undefined, { add: '1' })}><UploadCloud size={14} /> Upload one table</button>
+              <button className="button secondary small" onClick={() => onNavigate('data', undefined, { add: '1', return: 'start' })}><UploadCloud size={14} /> Upload one table</button>
               <button className="button secondary small" aria-expanded={showTwoTable} onClick={() => setShowTwoTable(v => !v)}><Database size={14} /> Upload two connected tables</button>
               <button className="button secondary small" aria-expanded={showWarehouse} onClick={() => setShowWarehouse(v => !v)}><Database size={14} /> Warehouse table</button>
             </div>
@@ -469,7 +526,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                   const aggregate = e.target.value as Aggregate;
                   const distinctColumn = sides.target.form.distinctColumn || columns[0]?.id;
                   const seed = (form: CalculationForm): CalculationForm => ({ ...form, aggregate, distinctColumn,
-                    partFilter: form.partFilter || (columns[0] ? { column: columns[0].id, op: 'eq', value: '' } : undefined) });
+                    partFilter: form.partFilter || (columns[0] ? emptyFilter(columns, known) : undefined) });
                   setSides(s => ({ baseline: { ...s.baseline, form: seed(s.baseline.form), refusal: null },
                                    target: { ...s.target, form: seed(s.target.form), refusal: null } }));
                 }}>
@@ -539,18 +596,29 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                 <div className="calc-card" key={side}>
                   <h3>{side === 'baseline' ? 'Current calculation' : 'Proposed calculation'}
                     <span className="example"> {side === 'baseline' ? '— the one in use today' : '— the change you want to check'}</span></h3>
-                  {savedCalcs.length > 0 && (
-                    <label>Start from a saved calculation (optional)
-                      <select value={s.reuse?.versionId || ''} onChange={e => {
-                        const pick = savedCalcs.find(x => x.version.id === e.target.value);
-                        if (!pick) { update(side, { reuse: undefined }); return; }
-                        update(side, { mode: 'sql', sql: pick.version.raw_sql, name: pick.definition.name, reuse: { versionId: pick.version.id, sql: pick.version.raw_sql } });
-                      }}>
-                        <option value="">— Write a new calculation —</option>
-                        {savedCalcs.map(x => <option key={x.version.id} value={x.version.id}>{x.definition.name} · v{x.version.version_number}</option>)}
-                      </select>
-                    </label>
-                  )}
+                  {savedCalcs.length > 0 && (() => {
+                    const groups = groupSavedCalculations(savedCalcs, usedInCases, calcQuery[side], s.reuse?.versionId);
+                    const option = (x: typeof savedCalcs[number]) => <option key={x.version.id} value={x.version.id}>{x.definition.name} · v{x.version.version_number}</option>;
+                    return (
+                      <div className="saved-calc-picker">
+                        <label htmlFor={`saved-${side}`}>Start from a saved calculation (optional)</label>
+                        {savedCalcs.length > 8 && (
+                          <input type="search" aria-label="Search saved calculations" value={calcQuery[side]}
+                            onChange={e => setCalcQuery(q => ({ ...q, [side]: e.target.value }))}
+                            placeholder={`Search ${savedCalcs.length} saved calculations by name or SQL`} />
+                        )}
+                        <select id={`saved-${side}`} value={s.reuse?.versionId || ''} onChange={e => {
+                          const pick = savedCalcs.find(x => x.version.id === e.target.value);
+                          if (!pick) { update(side, { reuse: undefined }); return; }
+                          update(side, { mode: 'sql', sql: pick.version.raw_sql, name: pick.definition.name, reuse: { versionId: pick.version.id, sql: pick.version.raw_sql } });
+                        }}>
+                          <option value="">{groups.shown < groups.total ? `— Write a new calculation (${groups.shown} of ${groups.total} match) —` : '— Write a new calculation —'}</option>
+                          {groups.used.length > 0 && <optgroup label="Used in saved cases">{groups.used.map(option)}</optgroup>}
+                          {groups.other.length > 0 && <optgroup label={groups.used.length ? 'Other saved calculations, newest first' : 'Saved calculations, newest first'}>{groups.other.map(option)}</optgroup>}
+                        </select>
+                      </div>
+                    );
+                  })()}
                   <div className="mode-switch" role="group" aria-label="Calculation editor">
                     <button type="button" aria-pressed={s.mode === 'form'} disabled={!formAllowed} onClick={() => update(side, { mode: 'form' })}>Guided form</button>
                     <button type="button" aria-pressed={s.mode === 'sql'} onClick={() => update(side, { mode: 'sql', sql: sideSql })}>SQL editor</button>
@@ -597,10 +665,10 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                         {s.form.filters.map((f, i) => {
                           const col = columns.find(c => c.id === f.column);
                           const ops = operatorsFor(col?.type || 'string', relational, choice?.relational?.version);
-                          const needsValue = f.op !== 'is_null' && f.op !== 'is_not_null';
                           const setFilter = (patch: Partial<Filter>) => updateForm(side, { ...s.form, filters: s.form.filters.map((x, j) => j === i ? { ...x, ...patch } : x) });
                           return (
-                            <div className="filter-row" key={i}>
+                            <div className="condition" key={i}>
+                            <div className="filter-row">
                               <label>Column
                                 <select value={f.column} onChange={e => setFilter({ column: e.target.value, op: 'eq', value: '' })}>
                                   {columns.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
@@ -611,15 +679,14 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                                   {ops.map(op => <option key={op} value={op}>{OP_LABEL[op]}</option>)}
                                 </select>
                               </label>
-                              <label>Value
-                                <input disabled={!needsValue} value={needsValue ? f.value : ''} onChange={e => setFilter({ value: e.target.value })}
-                                  placeholder={col?.type === 'boolean' ? 'true or false' : col?.type === 'date' ? '2026-09-01' : f.op === 'in' || f.op === 'not_in' ? 'completed, shipped' : 'completed'} />
-                              </label>
+                              <ConditionValue id={`values-${side}-${i}`} filter={f} column={col} known={known[f.column]} onChange={value => setFilter({ value })} />
                               <button type="button" className="icon-button button secondary small" aria-label={`Remove condition ${i + 1}`} onClick={() => updateForm(side, { ...s.form, filters: s.form.filters.filter((_, j) => j !== i) })}><Trash2 size={14} /></button>
+                            </div>
+                            <ConditionHelp filter={f} column={col} known={known[f.column]} onChange={value => setFilter({ value })} />
                             </div>
                           );
                         })}
-                        <button type="button" className="button secondary small" style={{ width: 'fit-content' }} disabled={columns.length === 0} onClick={() => updateForm(side, { ...s.form, filters: [...s.form.filters, emptyFilter(columns)] })}>
+                        <button type="button" className="button secondary small" style={{ width: 'fit-content' }} disabled={columns.length === 0} onClick={() => updateForm(side, { ...s.form, filters: [...s.form.filters, emptyFilter(columns, known)] })}>
                           <Plus size={14} /> Add condition
                         </button>
                         {columns.length === 0 && <span className="disabled-reason">This dataset declares no filter columns, so the form can only total every record.</span>}
@@ -627,7 +694,6 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                       {(s.form.aggregate === 'rate' || s.form.aggregate === 'share') && s.form.partFilter && (() => {
                         const f = s.form.partFilter;
                         const col = columns.find(c => c.id === f.column);
-                        const needsValue = f.op !== 'is_null' && f.op !== 'is_not_null';
                         const setPart = (patch: Partial<Filter>) => updateForm(side, { ...s.form, partFilter: { ...f, ...patch } });
                         return (
                           <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 6 }}>
@@ -643,11 +709,9 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                                   {operatorsFor(col?.type || 'string', relational, choice?.relational?.version).map(op => <option key={op} value={op}>{OP_LABEL[op]}</option>)}
                                 </select>
                               </label>
-                              <label>Value
-                                <input disabled={!needsValue} value={needsValue ? f.value : ''} onChange={e => setPart({ value: e.target.value })}
-                                  placeholder={col?.type === 'boolean' ? 'true or false' : 'converted'} />
-                              </label>
+                              <ConditionValue id={`values-${side}-part`} filter={f} column={col} known={known[f.column]} onChange={value => setPart({ value })} />
                             </div>
+                            <ConditionHelp filter={f} column={col} known={known[f.column]} onChange={value => setPart({ value })} />
                           </fieldset>
                         );
                       })()}
@@ -668,6 +732,13 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                     <input value={s.name} maxLength={160} onChange={e => update(side, { name: e.target.value })}
                       placeholder={side === 'baseline' ? 'e.g. Revenue as reported today' : 'e.g. Revenue excluding cancelled orders'} />
                   </label>
+                  {(() => {
+                    const c = liveCount(side);
+                    if (!c || c === 'error') return null;
+                    return c.matched === 0
+                      ? <span className="form-hint warn" role="status">These conditions include none of the {groupDigits(String(c.total))} records. Check the values before running.</span>
+                      : <span className="example" role="status">Includes {groupDigits(String(c.matched))} of {groupDigits(String(c.total))} records.</span>;
+                  })()}
                   {sideProblems(side).map(p => <span key={p} className="form-hint">To finish — {p}</span>)}
                   {s.refusal && (
                     <div className="alert error" role="alert">
@@ -678,6 +749,17 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
               );
             })}
           </div>
+          {emptyWarning && (
+            <div className="alert warn" role="alert">
+              <span><strong>No records match.</strong> The {emptyWarning.join(' and ')} calculation{emptyWarning.length > 1 ? 's include' : ' includes'} none
+                of the {groupDigits(String(choice.snapshot.row_count))} records, so {emptyWarning.length > 1 ? 'their results' : 'its result'} would
+                be 0, or Undefined for an average or ratio. Check the condition values; a run on this dataset can take minutes.</span>
+              <span className="report-actions">
+                <button className="button secondary small" onClick={() => void registerAndCompare(true)}>Run anyway</button>
+                <button onClick={() => setEmptyWarning(null)} aria-label="Dismiss message">×</button>
+              </span>
+            </div>
+          )}
           <div className="guided-nav">
             <button className="button secondary" onClick={() => setStage(0)}><ArrowLeft size={15} /> Back</button>
             <button className="button primary" disabled={busy || Boolean(calcBlocker)} onClick={() => void registerAndCompare()} aria-describedby={calcBlocker ? 'calc-blocker' : undefined}>
@@ -696,7 +778,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
               <span className="run-spinner" aria-hidden="true" />
               <span><b>{run.state === 'queued' || run.state === 'pending' ? 'Waiting for the comparison engine…' : 'Comparing both calculations record by record…'}</b>{' '}
                 {elapsed > 0 && <>{elapsed} s. </>}
-                {(choice?.snapshot.row_count || 0) > 100_000 ? 'Large datasets can take a minute; you can leave this page — the run is saved as a draft in Investigations.' : 'This usually takes a few seconds.'}</span>
+                {(choice?.snapshot.row_count || 0) > 100_000 ? 'Large datasets can take a minute or more; you can leave this page and pick it up later under Needs a conclusion on the Cases page.' : 'This usually takes a few seconds.'}</span>
             </div>
           )}
           {run.state === 'failed' && <p className="disabled-reason">The comparison did not complete. Go back to adjust the calculations, or try again.</p>}
@@ -712,7 +794,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
           <div className="guided-nav">
             <button className="button secondary" onClick={() => setStage(1)}><ArrowLeft size={15} /> Edit calculations</button>
             <button className="button primary" disabled={!run.result} onClick={() => { setTitle(t => t || `${choice?.snapshot.name || 'Comparison'}: ${definitionName('target', safeSql('target'))}`.slice(0, 160)); setStage(3); }}>
-              Next: save explanation <ArrowRight size={15} />
+              Next: write the conclusion <ArrowRight size={15} />
             </button>
           </div>
         </section>
@@ -720,9 +802,9 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
 
       {stage === 3 && run?.result && (
         <section className="guided-card" aria-labelledby="stage-save">
-          <h2 id="stage-save">4. Save explanation</h2>
+          <h2 id="stage-save">4. Save case</h2>
           <p className="lead">Saving pins the dataset, both calculations and this result. Anyone with access can reopen it and replay it later to confirm it reproduces exactly.</p>
-          <label>Investigation name<input required maxLength={160} value={title} onChange={e => setTitle(e.target.value)} /></label>
+          <label>Case name<input required maxLength={160} value={title} onChange={e => setTitle(e.target.value)} /></label>
           <label>Your conclusion
             <textarea required rows={4} maxLength={2000} value={decision} onChange={e => setDecision(e.target.value)}
               placeholder="e.g. The proposed calculation excludes pending, returned and cancelled orders (340.00 INR). Adopt it for the September report." />
@@ -732,7 +814,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
           <div className="guided-nav">
             <button className="button secondary" onClick={() => setStage(2)}><ArrowLeft size={15} /> Back to result</button>
             <button className="button primary" disabled={busy || Boolean(saveBlocker)} onClick={() => void save()} aria-describedby={saveBlocker ? 'save-blocker' : undefined}>
-              <Save size={15} /> {busy ? 'Saving…' : 'Save investigation'}
+              <Save size={15} /> {busy ? 'Saving…' : 'Save case'}
             </button>
           </div>
           {saveBlocker && <span id="save-blocker" className="disabled-reason">{saveBlocker}</span>}
@@ -742,3 +824,4 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     </div>
   );
 }
+

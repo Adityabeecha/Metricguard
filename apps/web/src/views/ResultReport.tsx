@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type DistinctSummary, type EntityRecords, type EvidenceBreakdown, type Evidence, type EvidenceSummary, type FlatEvidence, type RatioBlock, type RelationalEvidence, type RelationalRun, type Result, type Run, type Snapshot, type Version } from '../api';
 import { resultUnit, fractionDisplay, groupDigits, percentOf, summarizeResult, type RecordDelta } from '../resultSummary';
 import { RelationalEvidencePanel } from './RelationalEvidencePanel';
+import { caseNumber } from '../investigationLibrary';
 
 const PAGE = 100;
 
@@ -46,8 +47,23 @@ function useRecordPage(runId: string, view: { offset: number; changedOnly: boole
   return { rows, total, busy, problem };
 }
 
-const columnLabel = (c: string) => c.startsWith('dimension.') ? `${c.slice(10)} (lookup)` : c.startsWith('fact.') ? c.slice(5) : c;
-const showValue = (v: unknown) => v === null || v === undefined ? 'blank' : String(v);
+/** Seconds since `active` became true; 0 while inactive. */
+function useElapsed(active: boolean) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    setElapsed(0);
+    if (!active) return;
+    const started = Date.now();
+    const timer = setInterval(() => setElapsed(Math.round((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return elapsed;
+}
+
+const NO_MATCH = '\u0000no-match';
+const columnLabel = (c: string) => c.startsWith('link.') ? `link key to ${c.slice(5) === 'dimension' ? 'the lookup table' : c.slice(5)}`
+  : c.startsWith('dimension.') ? `${c.slice(10)} (lookup)` : c.startsWith('fact.') ? c.slice(5) : c;
+const showValue = (v: unknown) => v === NO_MATCH ? 'no matching lookup row' : v === null || v === undefined ? 'blank' : String(v);
 
 const PART_LABEL = (part: RatioBlock['numerator'], amountUnit: string) => {
   const unit = part.unit_label || amountUnit;
@@ -150,7 +166,7 @@ function EntityRecordsButton({ runId, entity }: { runId: string; entity: string 
 }
 
 /** Exact split of the change by one filter column, largest first. */
-function Breakdown({ runId, unit, percent, onColumns, preferred = [] }: { runId: string; unit: string; percent?: boolean; onColumns: (c: string[]) => void; preferred?: string[] }) {
+function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads }: { runId: string; unit: string; percent?: boolean; onColumns: (c: string[]) => void; preferred?: string[] ; loads?: boolean }) {
   const [column, setColumn] = useState('');
   const [data, setData] = useState<EvidenceBreakdown | null>(null);
   const [busy, setBusy] = useState(false);
@@ -181,6 +197,11 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] }: { runId:
   );
   if (!data.available) return <div><p className="example">{data.reason}</p>{unavailableNote}</div>;
   const total = Number(data.total_change || 0);
+  // Changed-only listings carry no per-group totals; leave those columns out instead of a column of dashes.
+  const sideTotals = (data.groups || []).some(g => g.current != null || g.proposed != null);
+  const [cur, pro] = loads ? ['Earlier load', 'Later load'] : ['Current', 'Proposed'];
+  const groupLabel = (g: { value: unknown; no_match?: boolean }) =>
+    g.no_match ? `No matching ${data.column?.split('.')[0] === 'dimension' ? 'lookup' : data.column?.split('.')[0]} row` : showValue(g.value);
   const shown = (v: string | null | undefined) => v == null ? '—' : percent ? groupDigits(percentOf(v)) : groupDigits(v);
   const changeShown = (v: string | null | undefined) => v == null ? '—' : percent ? `${groupDigits(percentOf(v))} pts` : `${groupDigits(v)}${unit ? ` ${unit}` : ''}`;
   return (
@@ -193,18 +214,20 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] }: { runId:
       </label>
       <div className="table-scroll" aria-busy={busy}>
         <table>
-          <thead><tr><th>{columnLabel(data.column || '')}</th><th>Records changed</th>
-            <th>{data.ratio ? `Current ratio in group${percent ? ' (%)' : ''}` : 'Current'}</th><th>{data.ratio ? `Proposed ratio in group${percent ? ' (%)' : ''}` : 'Proposed'}</th>
+          <thead><tr><th>{columnLabel(data.column || '')}{data.grouping === 'day' ? ' (by day)' : ''}</th><th>Records changed</th>
+            {sideTotals && <><th>{data.ratio ? `${cur} ratio in group${percent ? ' (%)' : ''}` : cur}</th><th>{data.ratio ? `${pro} ratio in group${percent ? ' (%)' : ''}` : pro}</th></>}
             <th>{data.ratio ? 'Effect on the overall ratio' : 'Change'}</th><th>Share of change</th></tr></thead>
           <tbody>
             {(data.groups || []).map(g => {
               const share = total ? Number(g.change) / total : 0;
               return (
-                <tr key={showValue(g.value)}>
-                  <td>{showValue(g.value)}</td>
+                <tr key={`${g.no_match ? 'no-match' : ''}${showValue(g.value)}`}>
+                  <td>{groupLabel(g)}</td>
                   <td>{groupDigits(String(g.changed_records))} of {groupDigits(String(g.records))}</td>
-                  <td>{data.ratio ? shown(g.current) : groupDigits(g.current ?? '—')}</td>
-                  <td>{data.ratio ? shown(g.proposed) : groupDigits(g.proposed ?? '—')}</td>
+                  {sideTotals && <>
+                    <td>{data.ratio ? shown(g.current) : groupDigits(g.current ?? '—')}</td>
+                    <td>{data.ratio ? shown(g.proposed) : groupDigits(g.proposed ?? '—')}</td>
+                  </>}
                   <td className={signedClass(g.change)} title={g.change_exact ? `Exact: ${g.change_exact}` : undefined}>{data.ratio ? changeShown(g.change) : <>{minus(groupDigits(g.change ?? '—'))}{unit ? ` ${unit}` : ''}</>}</td>
                   <td>
                     <span className="share-bar" aria-hidden="true"><span style={{ width: `${Math.min(100, Math.abs(share) * 100)}%` }} /></span>
@@ -220,7 +243,8 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] }: { runId:
       <small style={{ display: 'block' }}>{data.ratio
         ? 'Each group’s effect is the exact sum of its records’ effects, and the groups add up exactly to the change in the overall ratio. Shown values are rounded; hover an effect for its exact fraction.'
         : 'Exact sums over every record. Shares are rounded for display; a value can move the total in either direction.'}</small>
-      {data.coverage_note && <small style={{ display: 'block' }}>{data.coverage_note}</small>}
+      {data.coverage_note && <small style={{ display: 'block' }}>{sideTotals ? data.coverage_note : 'Only records whose inclusion changed are listed for this large dataset, so each value’s change is exact; its totals on each side are not shown.'}</small>}
+      {data.grouping === 'day' && <small style={{ display: 'block' }}>Timestamps are grouped by calendar day.</small>}
       {unavailableNote}
     </div>
   );
@@ -240,8 +264,6 @@ type Props = {
   versions?: Version[];
   /** Columns the calculations filter on; the breakdown opens on the first available one. */
   breakdownColumns?: string[];
-  /** Saved case id: the seal shows its case number. Without it, the run's number is used. */
-  caseId?: string;
   /** Replay outcome shown on the seal. */
   sealStatus?: 'verifying' | 'intact' | 'broken' | null;
   /** Shown under the answer, beside the seal (a saved case's written conclusion). */
@@ -266,14 +288,25 @@ function inclusion(row: AnyEvidence, side: 'baseline' | 'target') {
   if ((side === 'baseline' ? row.baseline_present : row.target_present) === false) return 'Not in this load';
   const included = side === 'baseline' ? row.baseline_included : row.target_included;
   const nullTerm = side === 'baseline' ? row.baseline_null_term : row.target_null_term;
-  if (!included) return 'Excluded';
+  if (!included) {
+    // Two tables: say when the join, not a condition, left the record out.
+    const joinIn = side === 'baseline' ? row.baseline_join_included : row.target_join_included;
+    if (joinIn === false) return 'Excluded · no matching lookup row';
+    return 'Excluded';
+  }
   return nullTerm ? 'Included · blank amount (ignored)' : 'Included';
 }
 
-export function ResultReport({ run, unit: declaredUnit, relational, baselineLabel, targetLabel, baselineSql, targetSql, baselineDescription, targetDescription, snapshot, versions, breakdownColumns, caseId, sealStatus, note }: Props) {
+export function ResultReport({ run, unit: declaredUnit, relational, baselineLabel, targetLabel, baselineSql, targetSql, baselineDescription, targetDescription, snapshot, versions, breakdownColumns, sealStatus, note }: Props) {
   const [tab, setTab] = useState<Tab>('records');
   const result = run.result as Result;
   const kind = result.aggregate;
+  // The same calculation on an earlier and a later load of one dataset, instead of two calculations.
+  const loads = Boolean((run as Run).target_snapshot_id);
+  const [cur, pro] = loads ? ['Earlier load', 'Later load'] : ['Current', 'Proposed'];
+  const differing = result.change_summary
+    ? Object.entries(result.change_summary).filter(([k]) => k !== 'unchanged').reduce((n, [, v]) => n + (v?.records || 0), 0)
+    : result.evidence_coverage?.listed_records;
   const ratio = kind === 'ratio' ? result.ratio ?? null : null;
   const percent = ratio?.unit === 'share';
   // COUNT(*) counts records and COUNT(DISTINCT) counts values: the dataset's declared unit does not apply.
@@ -281,13 +314,17 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   const noun = ratio ? 'value' : kind === 'count_distinct' || kind === 'count' ? 'count' : 'total';
   const evidence = useEvidenceSummary(run);
   const top = (evidence.summary?.top_changes || []) as AnyEvidence[];
-  const total = evidence.summary?.total ?? 0;
+  // Large changed-records-only runs state how many records they list in the result itself,
+  // so the count is right before the evidence summary has loaded.
+  const listedTotal: number | null = result.evidence_coverage?.listed_records ?? evidence.summary?.total ?? null;
+  const summaryLoading = Boolean(run.result) && !evidence.summary && !evidence.problem;
   const summary = useMemo(() => summarizeResult(result, unit, evidence.summary ? {
     rows: top.map<RecordDelta>(r => ({ key: recordKey(r), delta: r.delta })),
     total: evidence.summary.total,
     complete: true,
     changedCount: evidence.summary.changed,
-  } : undefined), [result, unit, evidence.summary]);
+    differing,
+  } : undefined, loads ? 'loads' : 'calculations'), [result, unit, evidence.summary]);
 
   const [offset, setOffset] = useState(0);
   const [changedOnly, setChangedOnly] = useState(false);
@@ -300,11 +337,21 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   const records = useRecordPage(run.result ? run.id : '', { offset, changedOnly, q, order, withContext: shown.length > 0 });
   const pages = Math.max(1, Math.ceil(records.total / PAGE));
   const pageNo = Math.floor(offset / PAGE) + 1;
+  const waitingFor = summaryLoading || (records.busy && records.rows.length === 0);
+  const waited = useElapsed(waitingFor);
+  // The first opening of a result verifies every listed record against the seal before any is shown.
+  const loadingNote = (what: string) => <>
+    {what}{listedTotal != null && listedTotal > 10_000
+      ? ` Every one of the ${groupDigits(String(listedTotal))} listed records is checked against the seal before any is shown, so the first opening of a large result can take a minute or two; later openings are quick.`
+      : ''}{waited >= 3 ? ` (${waited} s)` : ''}
+  </>;
   const goPage = (n: number) => setOffset((Math.min(Math.max(1, n), pages) - 1) * PAGE);
   const show = (v: string | null) => (v == null ? (ratio ? 'Undefined' : 'Undefined (no values)')
     : percent ? `${groupDigits(percentOf(v))}%` : unit ? `${groupDigits(v)} ${unit}` : groupDigits(v));
   const num = (v: string | null | undefined) => (v == null ? '—' : groupDigits(v));
   const keyHeader = kind === 'count_distinct' ? (result.distinct?.entity_column ?? 'Value') : 'Record';
+  const listLabel = loads ? 'Records that differ between the loads' : result.evidence_coverage ? 'Listed records'
+    : `All ${kind === 'count_distinct' ? `${keyHeader} values` : 'records'}`;
   const changeOf = (r: AnyEvidence) => r.delta;
   const changeText = (r: AnyEvidence) => {
     if (!ratio && r.change) return <>{minus(num(r.delta))} <small>· {CHANGE_LABEL[r.change] || r.change}</small></>;
@@ -349,13 +396,13 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
           <p className="answer-sentence" aria-live="polite">{summary.headline}{summary.recordsSentence ? ` ${summary.recordsSentence}` : ''}</p>
           {evidence.problem && <p className="disabled-reason">The record summary could not be loaded: {evidence.problem}</p>}
           <div className="answer-pair">
-            <span>Current {noun}<b>{show(result.baseline_value)}</b></span>
-            <span>Proposed {noun}<b>{show(result.target_value)}</b></span>
+            <span>{cur} {noun}<b>{show(result.baseline_value)}</b></span>
+            <span>{pro} {noun}<b>{show(result.target_value)}</b></span>
             <span>Unexplained<b>{result.residual == null ? 'Not applicable' : ratio ? '0 (exact)' : show(result.residual)}</b></span>
           </div>
           {note}
         </section>
-        <SealCard run={run} caseId={caseId} snapshot={snapshot} status={sealStatus} />
+        <SealCard run={run} snapshot={snapshot} status={sealStatus} />
       </div>
 
       <div className="tabs-wrap"><div className="tabs result-tabs" role="tablist" aria-label="Result details">
@@ -395,27 +442,34 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
       {tab === 'breakdown' && kind === 'count_distinct' && result.distinct && <DistinctPanel distinct={result.distinct} />}
 
       {/* Kept mounted so its column list feeds the record table's "Show columns"; hidden outside its tab. */}
-      {run.result && <div hidden={tab !== 'breakdown'}><Breakdown runId={run.id} unit={unit} percent={percent} onColumns={setColumns} preferred={breakdownColumns} /></div>}
+      {run.result && <div hidden={tab !== 'breakdown'}><Breakdown runId={run.id} unit={unit} percent={percent} onColumns={setColumns} preferred={breakdownColumns} loads={loads} /></div>}
+
+      {tab === 'records' && summaryLoading && (
+        <div className="guided-explain run-progress" role="status">
+          <span className="run-spinner" aria-hidden="true" />
+          <span>{loadingNote('Finding the records that explain the difference.')}</span>
+        </div>
+      )}
 
       {tab === 'records' && top.length > 0 && (
         <div>
           <h3 style={{ fontSize: 14, margin: '0 0 6px' }}>{kind === 'count_distinct' ? `${keyHeader} values` : 'Records'} that explain the difference{top.length > 1 ? ' (largest first)' : ''}</h3>
           <div className="table-scroll">
             <table className="stack-table">
-              <thead><tr><th>{keyHeader}</th><th>Current</th><th>Proposed</th><th className="figure-cell">{ratio ? 'Effect on the ratio' : 'Change'}</th></tr></thead>
+              <thead><tr><th>{keyHeader}</th><th>{cur}</th><th>{pro}</th><th className="figure-cell">{ratio ? 'Effect on the ratio' : 'Change'}</th></tr></thead>
               <tbody>
                 {top.slice(0, 10).map(r => (
                   <tr key={recordKey(r)}>
                     <td className="mono-cell">{recordKey(r)}</td>
-                    <td className="side-cell" data-label="Current">{sideCell(r, 'baseline')}</td>
-                    <td className="side-cell" data-label="Proposed">{sideCell(r, 'target')}</td>
+                    <td className="side-cell" data-label={cur}>{sideCell(r, 'baseline')}</td>
+                    <td className="side-cell" data-label={pro}>{sideCell(r, 'target')}</td>
                     <td className={signedClass(changeOf(r))} data-label={ratio ? 'Effect' : 'Change'} title={r.effect_exact ? `Exact: ${r.effect_exact}${percent ? ' (×100 for points)' : ''}` : undefined}>{changeText(r)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {(evidence.summary?.changed ?? 0) > 10 && <small>Showing the 10 largest of {groupDigits(String(evidence.summary!.changed))} changed {kind === 'count_distinct' ? `${keyHeader} values` : 'records'}. Use “Supporting records” to see them all.</small>}
+          {(evidence.summary?.changed ?? 0) > 10 && <small>Showing the 10 largest of {groupDigits(String(evidence.summary!.changed))} changed {kind === 'count_distinct' ? `${keyHeader} values` : 'records'}. Open “{listLabel}” below to see them all.</small>}
         </div>
       )}
 
@@ -427,8 +481,8 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
       )}
 
       <div className="detail-stack">
-        <details hidden={tab !== 'records'} open={top.length === 0}>
-          <summary>All {kind === 'count_distinct' ? `${keyHeader} values` : 'records'} ({groupDigits(String(total))})</summary>
+        <details hidden={tab !== 'records'} open={top.length === 0 && !summaryLoading}>
+          <summary>{listLabel} ({listedTotal == null ? '…' : groupDigits(String(listedTotal))})</summary>
           <div>
             {result.evidence_coverage
               ? <p>This dataset has {groupDigits(String(result.evidence_coverage.total_records))} records. Listed here are the {groupDigits(String(result.evidence_coverage.listed_records))} whose inclusion{kind === 'ratio' ? ' or contribution' : ''} changed; the other {groupDigits(String(result.evidence_coverage.total_records - result.evidence_coverage.listed_records))} are included by both calculations ({groupDigits(String(result.evidence_coverage.unchanged_included_in_both))}) or by neither ({groupDigits(String(result.evidence_coverage.unchanged_included_in_neither))}), so each contributes the same to both totals and nothing to the change. Change = proposed contribution − current contribution.</p>
@@ -468,7 +522,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
             {records.problem && <p className="disabled-reason">Records could not be loaded: {records.problem}</p>}
             <div className="table-scroll" aria-busy={records.busy}>
               <table className="stack-table">
-                <thead><tr><th>{keyHeader}</th>{shown.map(c => <th key={c}>{columnLabel(c)}</th>)}<th>Current</th><th>Proposed</th><th className="figure-cell">{ratio ? 'Effect on the ratio' : 'Change'}</th></tr></thead>
+                <thead><tr><th>{keyHeader}</th>{shown.map(c => <th key={c}>{columnLabel(c)}</th>)}<th>{cur}</th><th>{pro}</th><th className="figure-cell">{ratio ? 'Effect on the ratio' : 'Change'}</th></tr></thead>
                 <tbody>
                   {records.rows.map(r => (
                     <tr key={recordKey(r)}>
@@ -476,11 +530,12 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
                         {kind === 'count_distinct' && <EntityRecordsButton runId={run.id} entity={recordKey(r)} />}
                       </td>
                       {shown.map(c => <td key={c} data-label={columnLabel(c)}>{showValue((r as { context?: Record<string, unknown> }).context?.[c])}</td>)}
-                      <td className="side-cell" data-label="Current">{sideCell(r, 'baseline')}</td>
-                      <td className="side-cell" data-label="Proposed">{sideCell(r, 'target')}</td>
+                      <td className="side-cell" data-label={cur}>{sideCell(r, 'baseline')}</td>
+                      <td className="side-cell" data-label={pro}>{sideCell(r, 'target')}</td>
                       <td className={signedClass(changeOf(r))} data-label={ratio ? 'Effect' : 'Change'} title={r.effect_exact ? `Exact: ${r.effect_exact}${percent ? ' (×100 for points)' : ''}` : undefined}>{changeText(r)}</td>
                     </tr>
                   ))}
+                  {records.busy && records.rows.length === 0 && <tr><td colSpan={4 + shown.length} role="status">{loadingNote('Loading records.')}</td></tr>}
                   {!records.busy && records.rows.length === 0 && <tr><td colSpan={4 + shown.length}>No records match.</td></tr>}
                 </tbody>
               </table>
@@ -574,18 +629,18 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   );
 }
 
-/** The evidence seal: case number, frozen data and evidence hashes, and the replay outcome. */
-function SealCard({ run, caseId, snapshot, status }: { run: Run | RelationalRun; caseId?: string; snapshot?: Snapshot | null; status?: 'verifying' | 'intact' | 'broken' | null }) {
+/** The evidence seal: case number, frozen data and evidence hashes, and the replay outcome.
+ *  The case number is the sealed run's, so it is the same during review and after saving. */
+function SealCard({ run, snapshot, status }: { run: Run | RelationalRun; snapshot?: Snapshot | null; status?: 'verifying' | 'intact' | 'broken' | null }) {
   const result = run.result as Result & { evidence_artifact?: { sha256?: string; row_count?: number } };
   const provenance = (result?.provenance || {}) as { database_hash?: string; snapshot_manifest_hash?: string };
   const short = (hash?: string) => (hash ? `${hash.slice(0, 4)}…${hash.slice(-4)}` : '—');
-  const id = caseId || run.id;
   const sealed = (run as { completed_at?: string }).completed_at || run.created_at;
   return (
     <aside className={`seal-card ${status ?? ''}`} aria-label="Evidence seal">
       <div className="seal-strip">
         <span>{status === 'intact' ? 'Seal intact' : status === 'broken' ? 'Seal broken' : status === 'verifying' ? 'Verifying' : 'Sealed'}</span>
-        <span className="seal-no">{`MG-${id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 4).toUpperCase()}`}</span>
+        <span className="seal-no">{caseNumber(run.id)}</span>
       </div>
       <dl>
         <dt>Dataset</dt><dd title={provenance.database_hash}>{snapshot?.name && <span className="seal-name">{snapshot.name}</span>}{short(provenance.database_hash)}</dd>

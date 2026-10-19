@@ -33,3 +33,18 @@ test('calculations saved by guided comparisons are grouped apart from imported q
   assert.deepEqual(fromComparisons.map(d => d.id), ['b', 'c']);
   assert.equal(isComparisonCalculation({ source_label: 'dbt' }), false);
 });
+
+import { groupSavedCalculations } from './guidedWorkflow.ts';
+
+test('saved calculations put those used in cases first, then the newest, and search name and SQL', () => {
+  const calc = (id, name, sql, at) => ({ definition: { name }, version: { id, raw_sql: sql, observed_at: at } });
+  const entries = [calc('a', 'Old test', "WHERE status = 'x'", '2026-01-01'), calc('b', 'Revenue paid', "WHERE status = 'paid'", '2026-03-01'),
+    calc('c', 'Newer test', 'SELECT SUM(amount) FROM snapshot', '2026-02-01')];
+  const all = groupSavedCalculations(entries, new Set(['a']), '');
+  assert.deepEqual(all.used.map(x => x.version.id), ['a']);
+  assert.deepEqual(all.other.map(x => x.version.id), ['b', 'c']);
+  const found = groupSavedCalculations(entries, new Set(), 'PAID', 'c');
+  assert.deepEqual([...found.used, ...found.other].map(x => x.version.id), ['b', 'c']);
+  assert.equal(found.shown, 2);
+  assert.equal(found.total, 3);
+});

@@ -128,8 +128,14 @@ export function plainLimitation(text: string, unit: string): string | null {
 export function summarizeResult(
   result: SummaryInput,
   unit: string,
-  records?: { rows: RecordDelta[]; total: number; complete: boolean; changedCount?: number },
+  records?: { rows: RecordDelta[]; total: number; complete: boolean; changedCount?: number;
+    /** Records that differ between the two sides (changed-only listings and two-load comparisons). */
+    differing?: number },
+  /** 'loads': the same calculation on an earlier and a later load of one dataset. */
+  compare: 'calculations' | 'loads' = 'calculations',
 ): ResultSummary {
+  const loads = compare === 'loads';
+  const current = loads ? 'earlier load' : 'current calculation', proposed = loads ? 'later load' : 'proposed calculation';
   const uncertainties: string[] = [];
   const delta = result.delta_target_minus_baseline;
   const defined = result.baseline_value != null && result.target_value != null && delta != null;
@@ -144,23 +150,24 @@ export function summarizeResult(
   if (!defined && isRatio && result.ratio) {
     const sides = (['baseline', 'target'] as const).filter(s => result.ratio![s].undefined_reason);
     headline = 'The change cannot be calculated: ' + sides.map(s =>
-      `the ${s === 'baseline' ? 'current' : 'proposed'} ratio is undefined because ${UNDEFINED_REASON[result.ratio![s].undefined_reason!] || 'it has no value'}`).join(', and ') + '.';
+      `the ${s === 'baseline' ? (loads ? 'earlier load’s' : 'current') : (loads ? 'later load’s' : 'proposed')} ratio is undefined because ${UNDEFINED_REASON[result.ratio![s].undefined_reason!] || 'it has no value'}`).join(', and ') + '.';
     uncertainties.push('An undefined ratio is not 0. The changes in its top and bottom parts are still shown exactly below.');
   } else if (!defined) {
     headline = result.baseline_value == null && result.target_value == null
-      ? 'The change cannot be calculated: neither calculation has any values to add up, so both totals are undefined (not zero).'
-      : `The change cannot be calculated: the ${result.baseline_value == null ? 'current' : 'proposed'} calculation has no values to add up, so its total is undefined (not zero).`;
+      ? `The change cannot be calculated: neither ${loads ? 'load' : 'calculation'} has any values to add up, so both totals are undefined (not zero).`
+      : `The change cannot be calculated: the ${result.baseline_value == null ? current : proposed} has no values to add up, so its total is undefined (not zero).`;
     uncertainties.push('An undefined total means there were no non-blank amounts to add; it is not the same as a total of 0.');
   } else if (sameValue) {
     direction = 'same';
-    headline = `Both calculations give the same ${noun} on this dataset${isRatio ? ' (exactly)' : ''}.`;
+    headline = loads ? `Both loads give the same ${noun}${isRatio ? ' (exactly)' : ''}.`
+      : `Both calculations give the same ${noun} on this dataset${isRatio ? ' (exactly)' : ''}.`;
     uncertainties.push(`Equal ${noun}s on this frozen dataset do not prove the two calculations are equivalent on other data.`);
   } else {
     direction = (exactGap ?? delta!).startsWith('-') ? 'down' : 'up';
     const amount = isRatio && result.ratio?.unit === 'share' ? `${percentOf(absDecimal(delta!))} percentage points` : withUnit(absDecimal(delta!), unit);
     headline = isRatio && isZeroDecimal(delta)
-      ? `The proposed calculation is ${direction === 'down' ? 'lower' : 'higher'} by less than the displayed precision. Exact change: ${exactGap}${result.ratio?.unit === 'share' ? ' (multiply by 100 for percentage points)' : ''}.`
-      : `The proposed calculation is ${amount} ${direction === 'down' ? 'lower' : 'higher'} than the current calculation.`;
+      ? `The ${proposed} is ${direction === 'down' ? 'lower' : 'higher'} by less than the displayed precision. Exact change: ${exactGap}${result.ratio?.unit === 'share' ? ' (multiply by 100 for percentage points)' : ''}.`
+      : `The ${proposed} is ${amount} ${direction === 'down' ? 'lower' : 'higher'} than the ${current}.`;
   }
 
   const changedRecords = (records?.rows || []).filter(r => r.delta != null && !isZeroDecimal(r.delta));
@@ -177,6 +184,12 @@ export function summarizeResult(
         : `${n} ${n === 1 ? `${item} changes` : `${item}s change`} contribution, but the changes cancel out.`;
     } else if (records.complete || records.changedCount != null) {
       recordsSentence = `${groupDigits(String(n))} ${noun} for the difference.`;
+      const quiet = (records.differing ?? 0) - n;
+      if (quiet > 0) {
+        recordsSentence += loads
+          ? ` Another ${groupDigits(String(quiet))} ${quiet === 1 ? 'record differs' : 'records differ'} between the loads without changing the total (outside the calculation, or a blank or zero amount).`
+          : ` Another ${groupDigits(String(quiet))} ${quiet === 1 ? 'record changes' : 'records change'} inclusion without changing the total (a blank or zero amount).`;
+      }
     } else {
       recordsSentence = `At least ${n} of the first ${records.rows.length} of ${records.total} records contribute to the difference.`;
     }

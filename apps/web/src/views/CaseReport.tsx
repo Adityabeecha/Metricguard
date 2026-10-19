@@ -57,7 +57,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
     return (
       <div className="view-container">
         <div className="alert error" role="alert">
-          <span>This investigation could not be opened: {problem}</span>
+          <span>This case could not be opened: {problem}</span>
           <button className="button secondary small" onClick={() => setAttempt(a => a + 1)}>Try again</button>
         </div>
         <button className="button secondary" onClick={onBack}><ArrowLeft size={15} /> Cases</button>
@@ -97,7 +97,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
       <div className="page-heading">
         <div>
           <h1>{detail.title}</h1>
-          <p><span className="case-no">{caseNumber(detail.id)}</span> · {KIND_LABEL[kind]} · recorded by {detail.actor_label}, {new Date(detail.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}{unit && ` · ${unit}`}</p>
+          <p><span className="case-no">{caseNumber(detail.run.id)}</span> · {KIND_LABEL[kind]} · recorded by {detail.actor_label}, {new Date(detail.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}{unit && ` · ${unit}`}</p>
         </div>
         <div className="heading-actions">
           <button className="button secondary" onClick={onBack}><ArrowLeft size={15} /> Cases</button>
@@ -111,7 +111,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
             baselineLabel={versionName(defs, detail.baseline_version_id)} targetLabel={versionName(defs, detail.target_version_id)}
             baselineSql={detail.baseline_version.raw_sql} targetSql={detail.target_version.raw_sql}
             snapshot={detail.snapshot} versions={defs.flatMap(d => d.versions)}
-            caseId={detail.id} sealStatus={pending(replay?.state) || replaying ? 'verifying' : replay?.result ? (same ? 'intact' : 'broken') : null}
+            sealStatus={pending(replay?.state) || replaying ? 'verifying' : replay?.result ? (same ? 'intact' : 'broken') : null}
             note={<div className="case-conclusion"><h2>Conclusion</h2><p style={{ whiteSpace: 'pre-wrap' }}>{detail.decision}</p></div>} />
         ) : (
           <>

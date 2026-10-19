@@ -252,3 +252,28 @@ test('errors: suggestions match the actual problem', () => {
   assert.match(classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: 'Only one SUM over the whole snapshot is supported' }).guidance, /COUNT\(DISTINCT column\).*AVG\(amount\)/);
   assert.match(classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: 'Exactly one SELECT is required' }).guidance, /single SELECT/);
 });
+
+import { closestValue, defaultConditionColumn, unknownFilterValues, unknownValueWarnings } from './comparisonBuilder.ts';
+
+const STATUS = { complete: true, distinct_count: 4, values: ['paid', 'cancelled', 'refunded', 'pending'].map(value => ({ value, count: 1 })) };
+
+test('typed condition values are checked against the values a column really holds', () => {
+  assert.deepEqual(unknownFilterValues({ column: 'status', op: 'eq', value: 'complete' }, 'string', STATUS), ['complete']);
+  assert.deepEqual(unknownFilterValues({ column: 'status', op: 'in', value: 'paid, Refunded' }, 'string', STATUS), ['Refunded']);
+  assert.deepEqual(unknownFilterValues({ column: 'status', op: 'eq', value: 'paid' }, 'string', STATUS), []);
+  // An incomplete list cannot prove a value is missing, and blank tests take no value.
+  assert.deepEqual(unknownFilterValues({ column: 'status', op: 'eq', value: 'x' }, 'string', { ...STATUS, complete: false }), []);
+  assert.deepEqual(unknownFilterValues({ column: 'status', op: 'is_null', value: 'x' }, 'string', STATUS), []);
+  assert.equal(closestValue('Refunded', STATUS), 'refunded');
+  assert.equal(closestValue('canceled', STATUS), 'cancelled');
+  assert.equal(closestValue('zzzzzz', STATUS), null);
+  assert.deepEqual(unknownValueWarnings({ column: 'status', op: 'eq', value: 'pend' }, { id: 'status', label: 'status', column: 'status', type: 'string' }, STATUS),
+    ['“pend” does not occur in status; did you mean “pending”?']);
+});
+
+test('a new condition starts on a column with a short list of values, not on an ID column', () => {
+  const cols = ['customer_id', 'status'].map(id => ({ id, label: id, column: id, type: 'string' }));
+  const known = { customer_id: { complete: false, distinct_count: 50001, values: [] }, status: STATUS };
+  assert.equal(defaultConditionColumn(cols, known), 'status');
+  assert.equal(defaultConditionColumn(cols, {}), '');
+});

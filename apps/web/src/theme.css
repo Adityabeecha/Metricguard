@@ -219,6 +219,14 @@ table th { font-family: var(--font-label); letter-spacing: 0.1em; }
 .attention-row .title { font-weight: 600; overflow-wrap: anywhere; }
 .attention-row .meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .attention-row .change { font: 600 14px var(--font-mono); white-space: nowrap; }
+.attention-row.dismissed { opacity: 0.65; }
+.attention-actions { display: flex; gap: 6px; align-items: center; }
+.attention-more { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; }
+.link-button { background: none; border: 0; padding: 0; color: var(--link-strong); font: 600 13px var(--font-ui); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+@media (max-width: 720px) {
+  .attention-row { grid-template-columns: auto minmax(0, 1fr); }
+  .attention-row .change, .attention-actions { grid-column: 2; }
+}
 .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 10px; }
 .section-title h2 { font: 700 16px var(--font-ui); margin: 0; }
 .section-title span { font: 500 12px var(--font-mono); color: var(--muted); }
@@ -317,6 +325,17 @@ th.figure-cell { text-align: right; }
 .cases-table th.change-cell { font: 600 11px var(--font-label); }
 .cases-table .name-link { color: var(--ink); font-weight: 600; text-decoration: none; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; font-size: 14px; }
 .cases-table .name-link:hover { color: var(--link); text-decoration: underline; }
+/* Long names wrap instead of pushing Updated out of view; below 1440px the dataset joins the name's second line. */
+/* Registers elsewhere scroll at max-content width; the Cases table fits its container instead. */
+.table-scroll .cases-table { min-width: 0; }
+.cases-table .c-name { min-width: 18ch; overflow-wrap: anywhere; }
+.cases-table .c-data { overflow-wrap: anywhere; }
+.cases-table .c-data-inline { display: none; }
+@media (min-width: 761px) and (max-width: 1439px) {
+  .cases-table .c-data { display: none; }
+  .cases-table .c-data-inline { display: inline; }
+  .inv-landing-table.cases-table th, .inv-landing-table.cases-table td { padding-left: 12px; padding-right: 12px; }
+}
 .tabs-wrap { position: relative; }
 @media (max-width: 760px) {
   .tabs-wrap::after { content: ''; position: absolute; top: 0; right: 0; bottom: 1px; width: 28px; pointer-events: none;

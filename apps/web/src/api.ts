@@ -31,8 +31,8 @@ export type DecimalColumn={name:string;precision:number;scale:number;unit_label:
 export type MeasureExpression={op:'sub';minuend:string;subtrahend:string};
 export type FlatContract={id:string;version:3|4|5|6|7|8;predicate_policy?:'flat-boolean-v1';measure_policy?:'flat-subtraction-v1'|'flat-case-v1'|'flat-multi-measure-v1';decimal_columns?:DecimalColumn[];measure_expression?:MeasureExpression;dimension_types?:Record<string,'string'|'boolean'|'date'|'timestamp'>;nullable_categories?:string[];version_number:number;name:string;row_key:string;measure:string;precision?:number;scale:number;categories:string[];measure_meaning:string;unit_label:string;values_comparable:boolean;scope:'entire_supplied_snapshot';null_policy:'blank_nullable'|'literal_NULL'|'native_null';contract_hash:string};
 export type EvidenceSummary={total:number;changed:number;blank_amount_rows:number;top_changes:Array<Evidence&{row_key?:string;fact_key?:string}>};
-export type BreakdownGroup={value:string|boolean|null;records:number;changed_records:number;current:string|null;proposed:string|null;change:string|null;change_exact?:string|null;current_numerator?:string;proposed_numerator?:string;current_denominator?:string;proposed_denominator?:string};
-export type EvidenceBreakdown={available:boolean;columns:string[];reason?:string;column?:string;total_change?:string|null;total_change_exact?:string|null;ratio?:boolean;groups?:BreakdownGroup[];other_groups?:number;other_change?:string|null;unavailable_columns?:Record<string,string>;coverage_note?:string};
+export type BreakdownGroup={value:string|boolean|null;no_match?:boolean;records:number;changed_records:number;current:string|null;proposed:string|null;change:string|null;change_exact?:string|null;current_numerator?:string;proposed_numerator?:string;current_denominator?:string;proposed_denominator?:string};
+export type EvidenceBreakdown={available:boolean;columns:string[];reason?:string;column?:string;total_change?:string|null;total_change_exact?:string|null;ratio?:boolean;groups?:BreakdownGroup[];other_groups?:number;other_change?:string|null;unavailable_columns?:Record<string,string>;coverage_note?:string;grouping?:'day'};
 export type FlatEvidence=Evidence&{row_key?:string;measure?:string|null;categories?:Record<string,string|null>;source_payment_ids?:string[]};
 /** One lookup table of a relational dataset (contract v2 lists 1–4; v1 has exactly one, as `dimension`). */
 export type RelationalLookup={role:string; table:string; key:string; grain:string; categories:string[]; fact_foreign_key:string};
@@ -511,6 +511,13 @@ export type ConnectedIdentity = {
   role: 'owner' | 'analyst' | 'reader' | null;
 };
 
+export type ColumnValues = {
+  column: string; distinct_count: number; blank_count: number;
+  /** True when every distinct value is listed, so an unlisted value does not occur. */
+  complete: boolean;
+  values: Array<{ value: string; count: number }>;
+};
+
 export const api = {
   download: async (path:string, filename:string) => {
     const response = await apiFetch(path);
@@ -530,7 +537,9 @@ export const api = {
   getActiveWorkspace,
   bootstrap: (projectId?: string) => {
     const pid = projectId || activeWorkspaceId;
-    return request<Bootstrap>(pid ? `/bootstrap?project_id=${encodeURIComponent(pid)}` : '/bootstrap');
+    // The server lists datasets by id; every picker shows them newest first.
+    return request<Bootstrap>(pid ? `/bootstrap?project_id=${encodeURIComponent(pid)}` : '/bootstrap')
+      .then(data => ({ ...data, snapshots: [...(data.snapshots || [])].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')) }));
   },
   // Only workspaces the caller can open: verified memberships, or the local fallback's workspaces.
   listWorkspaces: () => request<Workspace[]>('/projects'),
@@ -726,6 +735,13 @@ export const api = {
     method: 'POST', headers: {'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID()}, body: '{}',
   }),
   run: (id: string) => request<Run>(`/comparisons/${encodeURIComponent(id)}`),
+  /** The values a single-table dataset's filter column holds, most common first. */
+  columnValues: (snapshotId: string, column: string) =>
+    request<ColumnValues>(`/snapshots/${encodeURIComponent(snapshotId)}/column-values?column=${encodeURIComponent(column)}`),
+  /** How many records a calculation's conditions include (null for CASE datasets). */
+  matchCount: (snapshotId: string, rawSql: string) =>
+    request<{ snapshot_id: string; counts: { matched: number; total: number } | null }>(`/snapshots/${encodeURIComponent(snapshotId)}/match-count`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ raw_sql: rawSql }) }),
   evidence: (id: string, offset: number, limit: number) =>
     request<{ items: Evidence[]; total: number }>(
       `/comparisons/${encodeURIComponent(id)}/evidence?offset=${offset}&limit=${limit}`

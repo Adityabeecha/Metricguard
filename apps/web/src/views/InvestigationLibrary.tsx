@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, FolderOpen, Plus } from 'lucide-react';
+import { ArrowRight, FolderOpen, Plus, X } from 'lucide-react';
 import { api, versionName, type Bootstrap, type InvestigationDraft, type Run } from '../api';
 import {
-  buildLibraryItems, caseNumber, filterLibraryItems, KIND_LABEL, STAMP, unexplainedRuns,
+  buildLibraryItems, caseNumber, filterLibraryItems, hasDefinedResult, KIND_LABEL, readDismissedRuns, STAMP, unexplainedRuns, writeDismissedRuns,
   type LibraryItem, type LibraryStatus,
 } from '../investigationLibrary';
 import { groupDigits, resultDisplayValue, resultUnit, valueWithUnit } from '../resultSummary';
@@ -11,6 +11,8 @@ type Props = {
   data: Bootstrap;
   workspaceId: string;
   onStart: () => void;
+  /** Add a dataset (an empty workspace has nothing to compare yet). */
+  onAddData?: () => void;
   onOpen: (item: LibraryItem) => void;
   onOpenRun: (run: Run) => void;
 };
@@ -18,7 +20,7 @@ type Props = {
 const STATUS_ORDER: LibraryStatus[] = ['saved', 'draft', 'running', 'refused'];
 
 /** Cases: what still needs a conclusion, then every case in the workspace. */
-export function InvestigationLibrary({ data, workspaceId, onStart, onOpen, onOpenRun }: Props) {
+export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, onOpen, onOpenRun }: Props) {
   const [drafts, setDrafts] = useState<InvestigationDraft[]>(data.investigation_drafts || []);
   const [draftProblem, setDraftProblem] = useState('');
   const [query, setQuery] = useState('');
@@ -33,7 +35,25 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onOpen, onOpe
 
   const items = useMemo(() => buildLibraryItems(data, drafts), [data, drafts]);
   const visible = filterLibraryItems(items, { query, kind: 'all', status });
-  const open = useMemo(() => unexplainedRuns(data.runs || [], data.investigations || []).slice(0, 4), [data]);
+  const [dismissed, setDismissed] = useState<Set<string>>(() => readDismissedRuns(workspaceId));
+  useEffect(() => { setDismissed(readDismissedRuns(workspaceId)); }, [workspaceId]);
+  const [showHidden, setShowHidden] = useState(false);
+  const [showAllOpen, setShowAllOpen] = useState(false);
+  const needing = useMemo(() => unexplainedRuns(data.runs || [], data.investigations || [], { dismissed }), [data, dismissed]);
+  // Undefined results and dismissed runs, shown on request so nothing is lost.
+  const hidden = useMemo(() => {
+    const shown = new Set(needing.map(r => r.id));
+    return unexplainedRuns(data.runs || [], data.investigations || [], { dismissed, includeUndefined: true, includeDismissed: true })
+      .filter(r => !shown.has(r.id));
+  }, [data, dismissed, needing]);
+  const listed = showHidden ? [...needing, ...hidden] : needing;
+  const open = showAllOpen ? listed : listed.slice(0, 4);
+  const setDismissedRun = (id: string, value: boolean) => setDismissed(prev => {
+    const next = new Set(prev);
+    if (value) next.add(id); else next.delete(id);
+    writeDismissedRuns(workspaceId, next);
+    return next;
+  });
   const datasetName = (id: string) => data.snapshots.find(s => s.id === id)?.name || 'Dataset';
 
   return (
@@ -45,24 +65,49 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onOpen, onOpe
         </div>
       </div>
 
-      {open.length > 0 && (
+      {(listed.length > 0 || hidden.length > 0) && (
         <section className="attention" aria-labelledby="attention-title">
-          <div className="section-title"><h2 id="attention-title">Needs a conclusion</h2><span>{open.length}</span></div>
+          <div className="section-title"><h2 id="attention-title">Needs a conclusion</h2><span>{needing.length}</span></div>
           {open.map(run => {
             const unit = resultUnit(run.result, data.snapshots.find(s => s.id === run.snapshot_id)?.unit_label || '');
             const change = resultDisplayValue(run.result, run.result?.delta_target_minus_baseline);
+            const defined = hasDefinedResult(run);
+            const isDismissed = dismissed.has(run.id);
             return (
-              <div className="attention-row" key={run.id}>
+              <div className={`attention-row${isDismissed ? ' dismissed' : ''}`} key={run.id}>
                 <span className="case-no">{caseNumber(run.id)}</span>
                 <div>
-                  <div className="title">{versionName(data.definitions, run.baseline_version_id)} → {versionName(data.definitions, run.target_version_id)}</div>
-                  <div className="meta">{datasetName(run.snapshot_id)}</div>
+                  <div className="title">{run.target_snapshot_id
+                    ? <>{versionName(data.definitions, run.baseline_version_id)} · two loads</>
+                    : <>{versionName(data.definitions, run.baseline_version_id)} → {versionName(data.definitions, run.target_version_id)}</>}</div>
+                  <div className="meta">{datasetName(run.snapshot_id)}{run.target_snapshot_id && <> → {datasetName(run.target_snapshot_id)}</>}{!defined && ' · result Undefined (no records matched)'}{isDismissed && ' · dismissed'}</div>
                 </div>
-                <span className="change">{valueWithUnit(change, unit)}</span>
-                <button className="button secondary small" onClick={() => onOpenRun(run)}>Write conclusion <ArrowRight size={12} /></button>
+                <span className="change">{defined ? valueWithUnit(change, unit).replace(/^-/, '−') : 'Undefined'}</span>
+                <span className="attention-actions">
+                  <button className="button secondary small" onClick={() => onOpenRun(run)}>Write conclusion <ArrowRight size={12} /></button>
+                  {isDismissed
+                    ? <button className="button secondary small" onClick={() => setDismissedRun(run.id, false)}>Restore</button>
+                    : <button className="icon-button button secondary small" aria-label={`Dismiss ${caseNumber(run.id)} from this list`} title="Dismiss from this list"
+                        onClick={() => setDismissedRun(run.id, true)}><X size={14} /></button>}
+                </span>
               </div>
             );
           })}
+          {listed.length === 0 && <p className="meta" style={{ margin: 0 }}>Nothing needs a conclusion.</p>}
+          {(listed.length > 4 || hidden.length > 0) && (
+            <div className="attention-more">
+              {listed.length > 4 && (
+                <button type="button" className="link-button" onClick={() => setShowAllOpen(v => !v)}>
+                  {showAllOpen ? 'Show fewer' : `Show all ${listed.length}`}
+                </button>
+              )}
+              {hidden.length > 0 && (
+                <button type="button" className="link-button" aria-pressed={showHidden} onClick={() => setShowHidden(v => !v)}>
+                  {showHidden ? 'Hide dismissed and Undefined results' : `Show ${hidden.length} dismissed or Undefined`}
+                </button>
+              )}
+            </div>
+          )}
         </section>
       )}
 
@@ -85,24 +130,28 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onOpen, onOpe
           <div className="empty-panel" style={{ padding: 40, textAlign: 'center', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 8 }}>
             <FolderOpen size={28} style={{ color: 'var(--kraft)' }} />
             <h2 style={{ fontSize: 16 }}>{items.length ? 'No cases match' : 'No cases yet'}</h2>
-            <p>{items.length ? 'Try another search or status.' : 'Compare two calculations of a metric; the result becomes a case you can seal and replay.'}</p>
+            <p>{items.length ? 'Try another search or status.'
+              : data.snapshots.length === 0 && onAddData ? 'Start by adding the data to compare: a CSV, Parquet or Excel file, two connected tables, or a warehouse table. Then compare two calculations of a metric; the result becomes a case you can seal and replay.'
+              : 'Compare two calculations of a metric; the result becomes a case you can seal and replay.'}</p>
             {items.length ? <button className="button secondary" onClick={() => { setQuery(''); setStatus('all'); }}>Show all cases</button>
+              : data.snapshots.length === 0 && onAddData ? <button className="button primary" onClick={onAddData}><Plus size={15} /> Add data</button>
               : <button className="button primary" onClick={onStart}><Plus size={15} /> New comparison</button>}
           </div>
         ) : (
           <div className="table-scroll">
             <table className="inv-landing-table cases-table">
               <caption className="sr-only">Cases</caption>
-              <thead><tr><th>Case</th><th>Name</th><th>Dataset</th><th className="change-cell">Change</th><th>Status</th><th>Updated</th></tr></thead>
+              <thead><tr><th>Case</th><th>Name</th><th className="c-data">Dataset</th><th className="change-cell">Change</th><th>Status</th><th>Updated</th></tr></thead>
               <tbody>
                 {visible.map(item => (
                   <tr key={`${item.source}:${item.id}`} onClick={() => onOpen(item)}>
-                    <td className="c-case"><span className="case-no">{caseNumber(item.id)}</span></td>
+                    <td className="c-case"><span className="case-no">{item.number}</span></td>
                     <td className="c-name">
                       <button type="button" className="name-link" onClick={e => { e.stopPropagation(); onOpen(item); }}>{item.title}</button>
                       <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                         {item.metricNames.length ? `Metric: ${item.metricNames.join(', ')}` : `${item.currentLabel} → ${item.proposedLabel}`}
                         {item.kind !== 'single' && ` · ${KIND_LABEL[item.kind]}`}
+                        <span className="c-data-inline"> · {item.datasetName}</span>
                       </div>
                     </td>
                     <td className="c-data">{item.datasetName}</td>

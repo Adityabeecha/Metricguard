@@ -6,6 +6,8 @@ export interface RouteState {
   tab?: string;
   query: Record<string, string>;
   rawPath: string;
+  /** The path named no known page; the app says so instead of quietly showing Cases. */
+  notFound?: boolean;
 }
 
 export function parseRoute(pathname: string, search: string = '', defaultWorkspaceId: string = 'local-retail'): RouteState {
@@ -46,6 +48,7 @@ export function parseRoute(pathname: string, search: string = '', defaultWorkspa
         break;
       case 'data':
       case 'datasets':
+      case 'data-sources':
         page = 'data';
         break;
       case 'changes':
@@ -84,7 +87,7 @@ export function parseRoute(pathname: string, search: string = '', defaultWorkspa
         break;
       default:
         page = 'dashboard';
-        break;
+        return { workspaceId, page, tab, query, rawPath: clean, notFound: true };
     }
     return { workspaceId, page, tab, query, rawPath: clean };
   }
@@ -135,9 +138,12 @@ export function parseRoute(pathname: string, search: string = '', defaultWorkspa
     case 'settings':
       page = 'settings';
       break;
-    default:
+    case '':
       page = 'dashboard';
       break;
+    default:
+      page = 'dashboard';
+      return { workspaceId: defaultWorkspaceId, page, tab, query, rawPath: clean, notFound: true };
   }
 
   return { workspaceId: defaultWorkspaceId, page, tab, query, rawPath: clean };
