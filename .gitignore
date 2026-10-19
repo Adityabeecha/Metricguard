@@ -38,3 +38,12 @@ apps/web/tsconfig.tsbuildinfo
 
 # Graphify extraction cache: kept locally for refreshes, not published.
 graphify-out/cache/
+
+# Locally installed agent skills and their tooling: installed per machine, not published.
+/.claude/skills/
+/.claude/agents/
+/.claude/worktrees/
+/skills-lock.json
+.impeccable/config.local.json
+.impeccable/hook.cache.json
+.impeccable/questions/
