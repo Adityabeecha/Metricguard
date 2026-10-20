@@ -1,6 +1,47 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { authPage, authPageTitle, connectionControls, oauthErrorMessage, configuredProviders, safeWorkspaceReturn, shouldRedirectToSignIn } from './authFlow.ts';
+import { authPage, authPageTitle, accountInitials, accountMenuActions, endAccountSession, localKeyAccess, signOutDestination, connectionControls, oauthErrorMessage, configuredProviders, safeWorkspaceReturn, shouldRedirectToSignIn } from './authFlow.ts';
+
+test('account initials use the signed-in name, with email and unknown fallbacks', () => {
+  assert.equal(accountInitials({ name: '  Ada   Lovelace ', email: 'ada@example.com' }), 'AL');
+  assert.equal(accountInitials({ name: 'Prince' }), 'P');
+  assert.equal(accountInitials({ name: 'Élodie Van Dijk' }), 'ÉD');
+  assert.equal(accountInitials({ name: ' ', email: 'grace@example.com' }), 'G');
+  assert.equal(accountInitials(null), '?');
+});
+
+test('account actions preserve settings and sign-out while keys require confirmed local access', () => {
+  const cookie = { verified: true, session: true };
+  assert.deepEqual(accountMenuActions(cookie, true), ['settings', 'signout']);
+  assert.deepEqual(accountMenuActions(cookie, false), ['settings', 'signout']);
+  assert.deepEqual(accountMenuActions({ verified: true, session: false }, true), ['settings', 'signout']);
+  assert.deepEqual(accountMenuActions({ verified: true, session: false }, false), ['settings', 'key', 'signout']);
+  assert.deepEqual(accountMenuActions({ verified: false }, false), ['settings', 'key']);
+  assert.deepEqual(accountMenuActions(null, false, true), ['settings', 'signout']);
+  assert.deepEqual(accountMenuActions(null, false, true, true), ['settings', 'key', 'signout']);
+  assert.deepEqual(accountMenuActions(null, false), ['settings']);
+  for (const unknown of [null, undefined]) assert.deepEqual(accountMenuActions(null, unknown), ['settings']);
+  assert.equal(localKeyAccess(false), true);
+  assert.equal(localKeyAccess(true), false);
+  assert.equal(localKeyAccess(undefined), false);
+});
+
+test('successful sign-out clears identity only after the server has ended the session', async () => {
+  const events = [];
+  let signedIn = true;
+  await endAccountSession(async () => { events.push('server'); }, () => { events.push('clear'); signedIn = false; });
+  assert.equal(signedIn, false);
+  assert.deepEqual(events, ['server', 'clear']);
+  assert.equal(signOutDestination(true), '/signin');
+  assert.equal(signOutDestination(undefined), '/signin');
+  assert.equal(signOutDestination(false), null);
+});
+
+test('failed server sign-out retains the current identity so the user can retry', async () => {
+  let signedIn = true;
+  await assert.rejects(endAccountSession(async () => { throw new Error('offline'); }, () => { signedIn = false; }), /offline/);
+  assert.equal(signedIn, true);
+});
 
 test('sign-in and sign-up are public auth routes with optional trailing slash', () => {
   assert.equal(authPage('/signin'), 'signin');

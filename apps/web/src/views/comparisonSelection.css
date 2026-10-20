@@ -1,0 +1,31 @@
+.comparison-kind {
+  border: 0;
+  border-top: 2px solid var(--ink);
+  border-bottom: 1px solid var(--line);
+  padding: 14px 0;
+  margin: 0 0 22px;
+  display: grid;
+  gap: 12px;
+}
+.comparison-kind legend { font-size: 16px; font-weight: 700; padding: 0 8px 0 0; }
+.comparison-kind label { display: flex; align-items: center; gap: 8px; color: var(--ink); }
+.comparison-kind input { width: 16px; height: 16px; min-height: 0; margin: 0; accent-color: var(--seal); }
+.comparison-dataset-group { border-bottom: 1px solid var(--line); }
+.comparison-dataset-group .dataset-row { width: 100%; }
+.comparison-load-picker { padding: 8px 16px 14px; max-width: 640px; font-size: 12px; }
+.comparison-load-picker select { width: 100%; max-width: 100%; }
+.comparison-load-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.comparison-load-pair label, .comparison-load-pair select { min-width: 0; max-width: 100%; }
+.comparison-loads .dataset-list { margin-bottom: 14px; }
+@media (max-width: 760px) {
+  .comparison-load-pair { grid-template-columns: 1fr; }
+  .comparison-load-picker { padding: 8px 0 14px; }
+}
+
+/* Keep the same-data setup a ruled working register rather than nested cards. */
+.guided-page .guided-card { border:0; border-top:2px solid var(--ink); border-bottom:1px solid var(--line); border-radius:0; background:transparent; padding:18px 0; }
+.guided-page .dataset-row { border-radius:0; box-shadow:none; }
+@media (max-width:760px) {
+  .guided-page .step-rail { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); overflow:visible; }
+  .guided-page .step-rail .step { min-width:0; flex-direction:column; justify-content:flex-start; padding:8px 3px; white-space:normal; overflow-wrap:anywhere; text-align:center; line-height:1.35; font-size:12px; }
+}

@@ -54,7 +54,7 @@ export function Ledger(props: LedgerProps) {
   return (
     <section className="ledger" aria-labelledby="exhibit-a">
       <div className="ledger-head">
-        <h3 id="exhibit-a"><span className="exhibit">A</span> Records that explain the difference</h3>
+        <h3 id="exhibit-a"><span className="exhibit">A</span> {labels.loads ? 'Records that change the total' : 'Records that explain the difference'}</h3>
         <div className="ledger-tabs" role="tablist" aria-label="Kind of change">
           <button type="button" role="tab" aria-selected={category === ''} onClick={() => onCategory('')}>
             All changes <span className="n">{groupDigits(String(allCount))}</span>
@@ -70,14 +70,14 @@ export function Ledger(props: LedgerProps) {
       {problem && <p className="disabled-reason">Records could not be loaded: {problem}</p>}
       <table className="ledger-table" aria-busy={busy}>
         <thead>
-          <tr><th scope="col">{keyHeader}</th><th scope="col">Current → Proposed</th><th scope="col" className="num">Change</th>
+          <tr><th scope="col">{keyHeader}</th><th scope="col">{labels.loads ? 'Earlier load → Later load' : 'Current → Proposed'}</th><th scope="col" className="num">Change</th>
             {additive && <th scope="col" className="num">Running total</th>}</tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (
             <tr key={keyOf(r)}>
               <td className="key" data-label={keyHeader}>{keyOf(r)}</td>
-              <td className="move" data-label="Current → Proposed">
+              <td className="move" data-label={labels.loads ? 'Earlier load → Later load' : 'Current → Proposed'}>
                 <span className={`was${leaves(r) ? ' left' : ''}`}>{side(r, 'baseline')}</span>
                 <span className="arrow" aria-label="becomes">→</span>
                 <span className="now">{side(r, 'target')}</span>
@@ -110,7 +110,7 @@ export function Ledger(props: LedgerProps) {
         <p className={`ledger-balance${props.balanced ? ' ok' : ''}`}>{props.balanceText}</p>
         {props.unchanged != null && props.unchanged > 0 && (
           <p className="ledger-unchanged">
-            ✓ {groupDigits(String(props.unchanged))} {props.unchangedNoun} unchanged · <button type="button" className="link-button" onClick={props.onShowRegister}>Show them</button>
+            ✓ {groupDigits(String(props.unchanged))} {props.unchangedNoun}{labels.loads ? ' do not change the total' : ' unchanged'} · <button type="button" className="link-button" onClick={props.onShowRegister}>Show them</button>
           </p>
         )}
       </div>

@@ -118,13 +118,13 @@ export function summarizeDataset(snapshot: Snapshot, contracts: Contracts): Data
     };
   }
 
-  // Original fixed-schema orders snapshot (v1) or a v2 mapped extract: its roles are fixed by the product.
+  // Original fixed-schema orders snapshot (v1) or a v2 mapped file: its roles are fixed by the product.
   if (!snapshot.execution_policy || snapshot.mapping_hash || snapshot.schema?.order_id) {
     const unit = declaredUnit(snapshot.currency, snapshot.unit_label);
     const fixedRoles: Record<string, ColumnRole> = { order_id: 'key', order_amount: 'measure', refund_amount: 'measure' };
     return {
       kind: 'retail',
-      kindLabel: 'Orders extract (fixed schema)',
+      kindLabel: 'Orders file (fixed schema)',
       contractName: null,
       keyLabel: 'order_id',
       measureLabel: 'order_amount',

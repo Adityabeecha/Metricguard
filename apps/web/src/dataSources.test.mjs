@@ -230,3 +230,57 @@ test('older and expression datasets explain the exact ratio limitation and remed
   assert.match(ratioUnavailableReason({mode:'relational_snapshot',version:2}), /two connected tables.*one flat table/);
   assert.equal(ratioUnavailableReason({version:5}), '');
 });
+
+import * as onboarding from './onboardingPolicy.ts';
+
+test('early upload waits for limits, previews once, and discards old file/workspace responses', async () => {
+  assert.equal(typeof onboarding.createUploadPreviewQueue, 'function');
+  const pending = [];
+  const applied = [];
+  const queue = onboarding.createUploadPreviewQueue(async (file, limits, project, isCurrent) => {
+    await new Promise(resolve => pending.push(resolve));
+    if (isCurrent()) applied.push(`${project}:${file}:${limits.max_rows}`);
+  });
+  queue.select('first.csv', 'alpha');
+  assert.equal(pending.length, 0);
+  queue.setLimits({max_rows:50,max_upload_mb:1}, 'alpha');
+  assert.equal(pending.length, 1);
+  queue.setLimits({max_rows:50,max_upload_mb:1}, 'alpha');
+  assert.equal(pending.length, 1);
+  queue.select('second.csv', 'alpha');
+  pending.shift()(); await Promise.resolve();
+  assert.deepEqual(applied, []);
+  queue.cancel();
+  queue.select('third.csv', 'beta');
+  assert.equal(pending.length, 1);
+  queue.setLimits({max_rows:100,max_upload_mb:2}, 'beta');
+  pending.shift()(); pending.shift()(); await Promise.resolve();
+  assert.deepEqual(applied, ['beta:third.csv:100']);
+});
+
+test('newer-load reuse requires identical columns, compatible roles/types, and allows only declared blanks', () => {
+  assert.equal(typeof onboarding.loadCompatibilityProblem, 'function');
+  const contract = {row_key:'id',measure:'amount',categories:['day'],dimension_types:{day:'date'},nullable_categories:[],scale:2,unit_label:'USD'};
+  const preview = parseCsvText('id,amount,day\nA,1.25,2026-01-01\n');
+  assert.equal(onboarding.loadCompatibilityProblem(preview,contract), '');
+  assert.match(onboarding.loadCompatibilityProblem({...preview,headers:[...preview.headers,'extra']},contract), /same columns/);
+  assert.match(onboarding.loadCompatibilityProblem({...preview,observed_types:{...preview.observed_types,day:'string'}},contract), /day/);
+  assert.match(onboarding.loadCompatibilityProblem({...preview,null_counts:{day:1}},contract), /blanks/);
+  assert.match(onboarding.loadCompatibilityProblem({...preview,observed_types:{...preview.observed_types,amount:'string'}},contract), /amount/);
+});
+
+test('unit suggestions prefer explicit source, then currency in a column name, then last confirmed unit', () => {
+  assert.equal(typeof onboarding.suggestUploadUnit, 'function');
+  assert.deepEqual(onboarding.suggestUploadUnit('amount_usd','EUR','Source currency','INR'), {unit:'EUR',source:'Source currency'});
+  assert.deepEqual(onboarding.suggestUploadUnit('Revenue (USD)','','','INR'), {unit:'USD',source:'Column name “Revenue (USD)”'});
+  assert.deepEqual(onboarding.suggestUploadUnit('amount','','','INR'), {unit:'INR',source:'Last unit used in this workspace'});
+  assert.deepEqual(onboarding.suggestUploadUnit('amount','','',''), {unit:'',source:undefined});
+});
+
+test('success action compares using the newly created dataset and back action stays in datasets', async () => {
+  assert.equal(typeof onboarding.completeDatasetUpload, 'function');
+  const destinations = [];
+  await onboarding.completeDatasetUpload('new-dataset','compare',id => destinations.push(`compare:${id}`),id => destinations.push(`back:${id}`));
+  await onboarding.completeDatasetUpload('new-dataset','datasets',id => destinations.push(`compare:${id}`),id => destinations.push(`back:${id}`));
+  assert.deepEqual(destinations,['compare:new-dataset','back:new-dataset']);
+});

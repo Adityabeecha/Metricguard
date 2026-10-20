@@ -39,7 +39,7 @@ export function sourcePolicyIssue(name: string, policy: DatasetContract['null_po
   const lower = name.toLowerCase();
   if (lower.endsWith('.csv')) return policy === 'native_null' ? 'CSV requires a blank or literal NULL policy in the approved contract.' : null;
   if (lower.endsWith('.parquet')) return policy === 'native_null' ? null : 'Parquet requires native NULL policy in the approved contract.';
-  return 'Choose a CSV or Parquet extract.';
+  return 'Choose a CSV or Parquet file.';
 }
 
 export function comparisonIssue(left: Version | undefined, right: Version | undefined, snapshot: Snapshot | undefined, context?: Pick<Context, 'contract_hash' | 'mapping_hash'> & Partial<Pick<Context, 'unit'>>): string | null {

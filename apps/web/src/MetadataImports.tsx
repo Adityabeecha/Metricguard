@@ -218,7 +218,7 @@ export function MetadataImports({
             <FileUploadControl
               id="pbi-tmdl-upload"
               label="Select TMDL document"
-              helperText="Upload a .tmdl file to extract tabular model measures and DAX expressions."
+              helperText="Upload a .tmdl file to read model measures and DAX expressions."
               accept=".tmdl"
               file={tmdlFile}
               onFileSelect={setTmdlFile}

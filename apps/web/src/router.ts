@@ -155,12 +155,13 @@ export function parseRoute(pathname: string, search: string = '', defaultWorkspa
   return { workspaceId: defaultWorkspaceId, page, tab, query, rawPath: clean };
 }
 
-export type SitePage = 'home' | 'signin' | 'signup' | 'privacy' | 'terms' | 'workspace' | 'not-found';
+export type SitePage = 'home' | 'signin' | 'signup' | 'privacy' | 'terms' | 'demo' | 'workspace' | 'not-found';
 
 /** Public routes never mount workspace components or fetch their data. */
 export function sitePage(pathname: string): SitePage {
   const clean = pathname.replace(/\/+$/, '') || '/';
   if (clean === '/') return 'home';
+  if (/^\/demo(\/mg-f3a3)?$/i.test(clean)) return 'demo';
   if (clean === '/signin' || clean === '/signup' || clean === '/privacy' || clean === '/terms') {
     return clean.slice(1) as SitePage;
   }

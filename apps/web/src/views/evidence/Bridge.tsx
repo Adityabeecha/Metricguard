@@ -1,3 +1,4 @@
+import { evidenceCountLabel } from './evidencePresentation';
 import { Stamp } from './Stamp';
 
 export type BridgeStep = { key: string; label: string; value: number; text: string; records: number };
@@ -10,16 +11,17 @@ export type BridgeProps = {
   /** One sentence read by screen readers instead of the drawing. */
   description: string;
   onPick?: (key: string) => void;
+  recordsAffectTotal?: boolean;
 };
 
-const W = 900, CHART = 170, TOP = 28, LABELS = 58;
+const W = 900, CHART = 170, TOP = 28, LABELS = 78;
 
 /**
  * The reconciliation bridge (docs/design/evidence-ui-spec.md §2): current total, one step per change
  * category, the unexplained remainder and the proposed total. Numbers on the bars are the exact
  * strings from the server; the drawing only positions them.
  */
-export function Bridge({ start, end, steps, residualText, balanced, description, onPick }: BridgeProps) {
+export function Bridge({ start, end, steps, residualText, balanced, description, onPick, recordsAffectTotal = false }: BridgeProps) {
   const levels = [start.value];
   steps.forEach(s => levels.push(levels[levels.length - 1] + s.value));
   levels.push(end.value);
@@ -64,12 +66,12 @@ export function Bridge({ start, end, steps, residualText, balanced, description,
             <g key={s.key} className={onPick ? 'bridge-step pickable' : 'bridge-step'} onClick={onPick ? () => onPick(s.key) : undefined}
                role={onPick ? 'button' : undefined} tabIndex={onPick ? 0 : undefined}
                onKeyDown={onPick ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(s.key); } }) : undefined}
-               aria-label={onPick ? `${s.label}: ${s.text}, ${s.records} records. Show these records.` : undefined}>
+               aria-label={onPick ? `${s.label}: ${s.text}, ${evidenceCountLabel(s.records, recordsAffectTotal)}. Show these records.` : undefined}>
               <line x1={x(col - 1) + bw} x2={x(col)} y1={y(from)} y2={y(from)} className="bridge-connector" />
               <rect x={x(col)} y={top} width={bw} height={height} className={s.value < 0 ? 'bridge-down' : 'bridge-up'} />
               <text x={x(col) + bw / 2} y={top - 8} className="bridge-figure" textAnchor="middle">{s.text}</text>
               <text x={x(col) + bw / 2} y={bottom + 20} className="bridge-label" textAnchor="middle">{s.label}</text>
-              <text x={x(col) + bw / 2} y={bottom + 38} className="bridge-records" textAnchor="middle">{s.records.toLocaleString('en-US')} record{s.records === 1 ? '' : 's'}</text>
+              <text x={x(col) + bw / 2} y={bottom + 38} className="bridge-records" textAnchor="middle">{evidenceCountLabel(s.records)}{recordsAffectTotal && <tspan x={x(col) + bw / 2} dy="15">{s.records === 1 ? 'that changes the total' : 'that change the total'}</tspan>}</text>
             </g>
           );
         })}
@@ -95,7 +97,7 @@ export function Bridge({ start, end, steps, residualText, balanced, description,
         {steps.map(s => (
           <li key={s.key}>
             <button type="button" disabled={!onPick} onClick={() => onPick?.(s.key)}>
-              <span>{s.label}<small>{s.records.toLocaleString('en-US')} record{s.records === 1 ? '' : 's'}</small></span><b>{s.text}</b>
+              <span>{s.label}<small>{evidenceCountLabel(s.records, recordsAffectTotal)}</small></span><b>{s.text}</b>
             </button>
           </li>
         ))}

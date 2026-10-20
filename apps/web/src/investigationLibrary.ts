@@ -31,7 +31,7 @@ export type LibraryItem = {
 export const KIND_LABEL: Record<LibraryKind, string> = {
   single: 'Single table',
   relational: 'Two tables',
-  orders: 'Orders extract',
+  orders: 'Orders file',
 };
 
 export const STATUS_LABEL: Record<LibraryStatus, string> = {

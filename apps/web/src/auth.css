@@ -29,3 +29,12 @@
 .button.account-delete { color: var(--danger); background: var(--danger-tint); border: 1px solid var(--danger-line); }
 .button.account-delete:hover { border-color: var(--danger); }
 @media (max-width: 480px) { .auth-header { padding: 20px 16px; } .auth-card { padding: 24px 20px; } .auth-card h1 { font-size: 25px; } }
+
+/* Visitors without an invite: sample case link and waitlist request. */
+.auth-request { display: grid; gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--line); }
+.auth-request-lead { margin: 0; font-size: 13px; color: var(--text-2); }
+.auth-request-lead a { display: inline-flex; align-items: center; gap: 4px; color: var(--link); font-weight: 600; text-underline-offset: 2px; }
+.auth-request-form { display: grid; gap: 6px; }
+.auth-request-form label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.auth-request-form > div { display: flex; gap: 8px; }
+.auth-request-form input { flex: 1; min-width: 0; }

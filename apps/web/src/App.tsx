@@ -12,7 +12,7 @@ import {
 import { api, ApiError, hasApiCredential, type Bootstrap, type Run } from './api';
 import { GateScreen, restoreSession, WorkspaceChooser } from './AuthScreens';
 import { chooseWorkspaceAfterConnect, classifyLoadError, readReloadEnded, type GateState } from './authState';
-import { ConnectionControl, describeAuthError, useIdentityEpoch } from './identity';
+import { AccountMenu, describeAuthError, useIdentityEpoch } from './identity';
 import { ThemeSwitch } from './ThemeSwitch';
 import { Logo } from './Logo';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -35,6 +35,7 @@ import { loadAuthProviders } from './authApi';
 import { shouldRedirectToSignIn } from './authFlow';
 import { sitePage } from './router';
 import { PublicPages } from './PublicPages';
+import { useDialog } from './useDialog';
 
 
 const NAV_ITEMS: Array<{ id: Page; label: string; icon: React.ReactNode }> = [
@@ -71,9 +72,21 @@ function WorkspaceApp() {
   dataRef.current = data;
   const [chooserOpen, setChooserOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileNavigation, setMobileNavigation] = useState(() => window.matchMedia('(max-width: 900px)').matches);
   const prevWorkspaceRef = useRef(route.workspaceId);
   const identityEpoch = useIdentityEpoch();
-  const [authRequired, setAuthRequired] = useState(false);
+  const [authRequired, setAuthRequired] = useState<boolean | null>(null);
+  const navigationRef = useDialog<HTMLElement>(mobileMenuOpen, () => setMobileMenuOpen(false));
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 900px)');
+    const sync = () => {
+      setMobileNavigation(media.matches);
+      if (!media.matches) setMobileMenuOpen(false);
+    };
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -82,7 +95,7 @@ function WorkspaceApp() {
   }, []);
 
   useEffect(() => {
-    if (!shouldRedirectToSignIn(gate, authRequired, hasApiCredential())) return;
+    if (!shouldRedirectToSignIn(gate, authRequired === true, hasApiCredential())) return;
     const returnTo = window.location.pathname + window.location.search;
     window.location.replace(`/signin?return_to=${encodeURIComponent(returnTo)}`);
   }, [gate, authRequired, identityEpoch]);
@@ -297,7 +310,10 @@ function WorkspaceApp() {
       <a className="skip-link" href="#main-content">Skip to content</a>
       {chooser}
       {/* Sidebar matching Final v3 */}
-      <aside className={`sidebar ${mobileMenuOpen ? 'open' : ''}`}>
+      {mobileMenuOpen && <div className="mobile-navigation-backdrop" aria-hidden="true" onClick={() => setMobileMenuOpen(false)} />}
+      <aside ref={navigationRef} id="workspace-navigation" className={`sidebar ${mobileMenuOpen ? 'open' : ''}`}
+        inert={mobileNavigation && !mobileMenuOpen}
+        role={mobileMenuOpen ? 'dialog' : undefined} aria-modal={mobileMenuOpen ? true : undefined} aria-label={mobileMenuOpen ? 'Workspace navigation' : undefined}>
         <div className="brand">
           <Logo size={30} />
           <div>
@@ -368,6 +384,8 @@ function WorkspaceApp() {
             className="mobile-menu icon-button"
             onClick={() => setMobileMenuOpen(true)}
             aria-label="Open navigation"
+            aria-expanded={mobileMenuOpen}
+            aria-controls="workspace-navigation"
           >
             <Menu size={20} />
           </button>
@@ -378,8 +396,7 @@ function WorkspaceApp() {
 
           <div className="topbar-right">
             <ThemeSwitch compact />
-            <ConnectionControl workspaceId={route.workspaceId} />
-            <span className="avatar">MG</span>
+            <AccountMenu workspaceId={route.workspaceId} authRequired={authRequired} onSettings={() => navigate({ page: 'settings', tab: 'account' })} />
           </div>
         </header>
 
@@ -433,6 +450,7 @@ function WorkspaceApp() {
 
               {route.page === 'data' && (
                 <DataSourcesView key={route.workspaceId} data={data} refresh={refresh} openAdd={route.query.add === '1'}
+                  onCompare={id => startWith({ dataset: id })}
                   onCreatedReturn={route.query.return === 'start' ? (id => navigate({ page: 'start', query: { dataset: id } })) : undefined} />
               )}
 

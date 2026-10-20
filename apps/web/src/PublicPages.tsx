@@ -8,6 +8,9 @@ import { Bridge } from './views/evidence/Bridge';
 import { HashPrint } from './views/evidence/HashPrint';
 import { Stamp } from './views/evidence/Stamp';
 import { homeRedirect, type SitePage } from './router';
+import { DemoCasePage } from './DemoCasePage';
+import { scrollToHash } from './publicScroll';
+import { CONTACT_EMAIL, HOSTING_REGION } from './publicFacts';
 import './public.css';
 
 type PublicPage = Exclude<SitePage, 'workspace' | 'signin' | 'signup'>;
@@ -21,7 +24,7 @@ export function PublicPages({ page }: { page: PublicPage }) {
     return () => window.removeEventListener('scroll', update);
   }, []);
   useEffect(() => {
-    const titles = { home: 'MetricGuard — Explain the difference. Keep the proof.', privacy: 'Privacy — MetricGuard', terms: 'Terms — MetricGuard', 'not-found': 'Page not found — MetricGuard' };
+    const titles = { home: 'MetricGuard — Explain the difference. Keep the proof.', privacy: 'Privacy — MetricGuard', terms: 'Terms — MetricGuard', demo: 'Sample case MG-F3A3 — MetricGuard', 'not-found': 'Page not found — MetricGuard' };
     document.title = titles[page];
     if (page !== 'home') return;
     let active = true;
@@ -45,7 +48,7 @@ export function PublicPages({ page }: { page: PublicPage }) {
       <div className="public-header-actions"><ThemeSwitch compact /><a className="public-signin" href="/signin">Sign in</a><a className="button primary" href="/signup">Sign up</a></div>
     </div></header>
     <main id="public-content" className={page === 'home' ? 'public-home-main' : 'public-width'}>
-      {page === 'home' ? <Homepage /> : page === 'not-found' ? <NotFound /> : <LegalPage kind={page} />}
+      {page === 'home' ? <Homepage /> : page === 'demo' ? <DemoCasePage /> : page === 'not-found' ? <NotFound /> : <LegalPage kind={page} />}
     </main>
     <footer className="public-footer public-width"><div><span>© MetricGuard</span><span>Built for data analysts</span></div><nav aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://github.com/Adityabeecha/Metricguard" rel="noreferrer">GitHub</a></nav></footer>
   </div>;
@@ -54,6 +57,12 @@ export function PublicPages({ page }: { page: PublicPage }) {
 function Homepage() {
   const [choice, setChoice] = useState(readThemeChoice);
   const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const go = () => scrollToHash(window.location.hash, document, window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    const frame = requestAnimationFrame(go);
+    window.addEventListener('hashchange', go);
+    return () => { cancelAnimationFrame(frame); window.removeEventListener('hashchange', go); };
+  }, []);
   useEffect(() => {
     const update = () => setChoice(readThemeChoice());
     window.addEventListener('mg-theme-change', update);
@@ -86,7 +95,8 @@ function Homepage() {
       <div className="hero-copy" data-reveal>
         <h1 id="home-title">Your metric changed. See exactly which records changed it.</h1>
         <p className="public-lead">Compare two calculations, follow the record-level difference, and hand over sealed evidence anyone with access can replay.</p>
-        <div className="hero-actions"><a className="button primary public-cta" href="/signup">Sign up — free beta <ArrowRight size={18} aria-hidden="true" /></a><a className="home-how-link" href="#how">See how it works <ArrowRight size={16} aria-hidden="true" /></a></div>
+        <div className="hero-actions"><a className="button primary public-cta" href="/signup">Sign up — free beta <ArrowRight size={18} aria-hidden="true" /></a><a className="button secondary public-cta" href="/demo/MG-F3A3">Open the sample case <ArrowRight size={18} aria-hidden="true" /></a></div>
+        <p className="hero-sub-links"><a className="home-how-link" href="#how">See how it works <ArrowRight size={14} aria-hidden="true" /></a></p>
         <p className="public-beta">Beta · by invitation</p>
       </div>
       <HeroReconciliation />
@@ -99,7 +109,7 @@ function Homepage() {
         <span className="disagreement-mark" aria-hidden="true">?</span>
         <div className="dashboard-tile"><span>Product</span><div>Revenue<strong>2.47B</strong></div><div className="tile-lines alternate" aria-hidden="true"><i /><i /><i /><i /><i /></div></div>
       </div>
-      <p className="illustration-note">Illustrative totals, not customer data.</p>
+      <p className="illustration-note">Illustrative totals.</p>
       <p className="home-problem-line">Two teams, one metric, two numbers, and hours of SQL and spreadsheets to find the records that disagree, with nothing to hand over at the end.</p>
     </div></section>
 
@@ -110,31 +120,30 @@ function Homepage() {
         <article className="home-step" data-reveal><span className="step-number">02</span><h3>Define the current and proposed</h3><p>Change the rule, keep the data.</p><div className="step-vignette sql-vignette"><code>SUM(amount)</code><code>SUM(amount)<br /><mark>WHERE status = 'completed'</mark></code></div></article>
         <article className="home-step" data-reveal><span className="step-number">03</span><h3>Read, explain and seal it</h3><p>Keep the answer and its proof.</p><div className="step-vignette answer-vignette"><strong>−340.00 <small>INR</small></strong><span className="mini-seal"><Fingerprint size={14} aria-hidden="true" />SEALED</span></div></article>
       </div>
-      <p className="illustration-note">Workflow illustrations. The case below uses eight synthetic orders.</p>
+      <p className="illustration-note">Sample case uses synthetic orders.</p>
     </div></section>
 
     <section className="home-section home-panel" id="evidence" aria-labelledby="evidence-title"><div className="public-width">
       <div className="evidence-heading" data-reveal><h2 id="evidence-title">See the evidence.</h2><p>The answer, the contributing records and the seal. One case.</p></div>
       <figure className="public-case" data-reveal>
-        <div className="browser-frame"><div className="browser-bar" aria-hidden="true"><span className="browser-dots"><i /><i /><i /></span><span>MetricGuard / Demo case</span><LockKeyhole size={13} /></div>
+        <a className="browser-frame case-link" href="/demo/MG-F3A3" aria-label="Open sample case MG-F3A3"><div className="browser-bar" aria-hidden="true"><span className="browser-dots"><i /><i /><i /></span><span>MetricGuard / Demo case</span><LockKeyhole size={13} /></div>
           <div className="evidence-image"><picture>
             <source media={mobileDarkMedia} srcSet="/images/case-mobile-dark.webp" width="358" height="570" />
             <source media="(max-width: 759px)" srcSet="/images/case-mobile-light.webp" width="358" height="570" />
             <source media={darkMedia} srcSet="/images/case-dark.webp" />
             <img src="/images/case-light.webp" width="1366" height="1000" loading="lazy" decoding="async" alt="Real MetricGuard demo case: the answer, −340.00 INR; the reconciliation bridge from current 750.75 INR to proposed 410.75 INR, balanced; and the evidence seal MG-F3A3 with its hash fingerprints." />
           </picture><span className="shot-pin pin-answer" aria-hidden="true">1</span><span className="shot-pin pin-records" aria-hidden="true">2</span><span className="shot-pin pin-seal" aria-hidden="true">3</span></div>
-        </div>
-        <figcaption><span><b>1</b>The answer</span><span><b>2</b>The reconciliation bridge</span><span><b>3</b>The evidence seal</span><small className="mobile-crop-note">Mobile detail: the answer and seal. The bridge and records follow below in the full case.</small></figcaption>
+        </a>
+        <figcaption><span><b>1</b>The answer</span><span><b>2</b>The reconciliation bridge</span><span><b>3</b>The evidence seal</span><a className="case-open-link" href="/demo/MG-F3A3">Open this case — the tabs work there <ArrowRight size={14} aria-hidden="true" /></a><small className="mobile-crop-note">Mobile detail: the answer and seal. The bridge and records follow below in the full case.</small></figcaption>
       </figure>
     </div></section>
 
     <section className="home-section" aria-labelledby="support-title"><div className="public-width" data-reveal>
       <h2 id="support-title">Works with your data.</h2>
       <div className="home-register">
-        <dl><dt>Sources</dt>{['CSV', 'Parquet', 'Excel', 'Two connected tables', 'PostgreSQL', 'Snowflake', 'BigQuery'].map(text => <dd key={text}>{text}</dd>)}</dl>
+        <dl><dt>Sources</dt>{['CSV', 'Parquet', 'Excel', 'Two connected tables', 'PostgreSQL'].map(text => <dd key={text}>{text}</dd>)}{['Snowflake', 'BigQuery'].map(text => <dd key={text}>{text} <span className="beta-tag">Beta</span></dd>)}</dl>
         <dl><dt>Calculations</dt>{['SUM', 'COUNT', 'COUNT DISTINCT', 'AVG', 'Ratios', 'Rates', 'Shares', 'Margins'].map(text => <dd key={text}>{text}</dd>)}</dl>
       </div>
-      <p className="home-limit">Snowflake and BigQuery: stand-in servers verified; live-service checks pending. Supported SQL only.</p>
     </div></section>
 
     <section className="home-section home-panel" id="security" aria-labelledby="security-title"><div className="public-width">
@@ -181,22 +190,21 @@ function HeroReconciliation() {
   </figure>;
 }
 
-// Draft — review before launch. Replace [region] and [contact email] before publishing.
 function LegalPage({ kind }: { kind: 'privacy' | 'terms' }) {
   return <article className="public-legal">
     <h1>{kind === 'privacy' ? 'Privacy' : 'Terms of use'}</h1>
     <p className="public-lead">MetricGuard is an invitation-only beta for investigating metric differences.</p>
     {kind === 'privacy' ? <>
       <h2>What we store</h2><p>Your account email and name, workspace membership, uploaded datasets, calculation definitions, comparison results, supporting evidence and saved conclusions. Sign-in uses Google or GitHub; MetricGuard does not store your provider password.</p>
-      <h2>Where data is stored</h2><p>The hosted setup uses Neon (Postgres) for account and application records, Cloudflare R2 for datasets and evidence, and Northflank to run the application. Region: [region]. Local installations store data on the computer running MetricGuard.</p>
+      <h2>Where data is stored</h2><p>The hosted setup uses Neon (Postgres) for account and application records, Cloudflare R2 for datasets and evidence, and Northflank to run the application. Region: {HOSTING_REGION}. Local installations store data on the computer running MetricGuard.</p>
       <h2>Retention and deletion</h2><p>The beta has no automatic retention period yet. Data remains until you delete it. In Settings, choose Delete my account and type DELETE. This removes your account and workspaces you own with no other members, including their uploaded data and results.</p><p>Shared workspace records remain for other members, and your membership is removed. Required audit attribution is anonymised. Downloaded reports and copies held by other people cannot be removed by MetricGuard. Active jobs must finish before deletion; a storage failure requires retrying the deletion.</p>
-      <h2>Access and contact</h2><p>Workspace roles control access. Session cookies keep you signed in; your theme choice is stored in your browser. For privacy questions or help deleting data, contact [contact email].</p>
+      <h2>Access and contact</h2><p>Workspace roles control access. Session cookies keep you signed in; your theme choice is stored in your browser. For privacy questions or help deleting data, contact <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.</p>
     </> : <>
       <h2>Using the beta</h2><p>Use MetricGuard only with data you are authorised to process and share with your workspace. Protect your account and API keys. The beta may change or be unavailable; keep independent copies of anything you need.</p>
       <h2>What a result means</h2><p>MetricGuard compares supported calculations on the frozen inputs you provide. A matching replay verifies reproducibility, not the business meaning of a metric or the accuracy of its source data. Review the definitions, context and evidence before relying on a result.</p>
-      <h2>Your information</h2><p>We store your account email and name, uploaded datasets and results. The hosted setup uses Neon (Postgres), Cloudflare R2 and Northflank in [region]. See the <a href="/privacy">privacy page</a> for details.</p>
+      <h2>Your information</h2><p>We store your account email and name, uploaded datasets and results. The hosted setup uses Neon (Postgres), Cloudflare R2 and Northflank in {HOSTING_REGION}. See the <a href="/privacy">privacy page</a> for details.</p>
       <h2>Keeping and deleting data</h2><p>There is no automatic expiry during this beta. Use Settings → Delete my account to remove your account and sole-member owned workspaces. Shared workspace records remain for other members. Downloaded or independently retained copies remain outside this deletion.</p>
-      <h2>Questions</h2><p>Contact [contact email] for support or questions about these terms.</p>
+      <h2>Questions</h2><p>Contact <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> for support or questions about these terms.</p>
     </>}
   </article>;
 }

@@ -93,6 +93,10 @@ oauth_identities = Table('oauth_identities', metadata,
     Column('user_id', ForeignKey('users.id'), nullable=False))
 oauth_states = Table('oauth_states', metadata,
     Column('nonce_hash', String, primary_key=True), Column('expires_at', Float, nullable=False))
+# Beta waitlist: an email asking for an invitation. Requesting never grants access.
+access_requests = Table('access_requests', metadata,
+    Column('email', String, primary_key=True), Column('created_at', String, nullable=False),
+    Column('last_requested_at', String, nullable=False), Column('request_count', Integer, nullable=False))
 
 project_members = Table('project_members', metadata,
     Column('id', String, primary_key=True),
@@ -997,6 +1001,28 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                 oauth_states.c.nonce_hash == hashlib.sha256(state.encode()).hexdigest(),
                 oauth_states.c.expires_at > time.time()))
             return changed.rowcount == 1
+
+    def request_access(self, email: str, max_rows: int = 5000) -> None:
+        """Record a waitlist email once (repeats only bump a counter); the list is capped."""
+        email = email.strip().casefold()
+        stamp = now()
+        with self.engine.begin() as conn:
+            known = conn.execute(update(access_requests).where(access_requests.c.email == email).values(
+                last_requested_at=stamp, request_count=access_requests.c.request_count + 1)).rowcount
+            if known:
+                return
+            if conn.execute(select(func.count()).select_from(access_requests)).scalar_one() >= max_rows:
+                raise DomainError('ACCESS_REQUESTS_FULL', 'The waitlist is full right now. Please try again later.', 429)
+            try:
+                with conn.begin_nested():
+                    conn.execute(insert(access_requests).values(email=email, created_at=stamp,
+                                                                last_requested_at=stamp, request_count=1))
+            except IntegrityError:
+                pass  # a concurrent request recorded the same email
+
+    def access_request_list(self) -> list[dict]:
+        with self.engine.connect() as conn:
+            return [dict(r) for r in conn.execute(select(access_requests).order_by(access_requests.c.created_at)).mappings()]
 
     def oauth_sign_in(self, provider: str, subject: str, email: str, name: str,
                       signup_mode: str, invited: set[str]) -> tuple[dict, str]:

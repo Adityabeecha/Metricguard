@@ -78,7 +78,7 @@ export function CustodyLog({ detail, replays, live, replaying, blocker, onReplay
           </li>
           <li className="done">
             <div>
-              <div className="what">Compared on the isolated engine</div>
+              <div className="what">Compared</div>
               <div className="when">{when(run.completed_at || run.created_at)}{duration != null ? ` · ${duration} s` : ''}</div>
               <div className="detail">Evidence <HashPrint hash={evidenceHash(run)} /></div>
             </div>

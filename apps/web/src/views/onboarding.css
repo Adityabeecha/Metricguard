@@ -1,0 +1,37 @@
+/* Upload questions and column register share the case-file rules in DESIGN.md. */
+.datasources-container .onboarding-load-choice { min-width:0; margin:var(--space-md, 14px) 0; padding:var(--space-md, 14px) 0; border:0; border-top:2px solid var(--ink); border-bottom:1px solid var(--line); }
+.datasources-container .onboarding-load-choice legend { padding:0; font-weight:700; }
+.datasources-container .onboarding-load-choice p { color:var(--muted); }
+.datasources-container .onboarding-load-choice label { display:flex; align-items:flex-start; gap:8px; margin:8px 0; }
+.datasources-container .onboarding-row-actions { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+.datasources-container .onboarding-column-types { min-width:0; margin:14px 0; border:0; border-top:2px solid var(--ink); border-bottom:1px solid var(--line); border-radius:0; padding:14px 0; background:transparent; }
+.datasources-container .onboarding-column-types summary { cursor:pointer; font-weight:600; margin-bottom:14px; }
+.datasources-container .onboarding-types-register { min-width:0; }
+.datasources-container .onboarding-types-register table { table-layout:fixed; }
+.datasources-container .onboarding-types-register td, .datasources-container .onboarding-types-register th { overflow-wrap:anywhere; vertical-align:top; }
+.datasources-container .onboarding-types-register select { width:100%; min-width:0; max-width:100%; }
+.datasources-container .step-confirm-body .form-grid, .datasources-container .step-confirm-body label { min-width:0; }
+.datasources-container .step-confirm-body .form-grid select, .datasources-container .step-confirm-body .form-grid input { max-width:100%; min-width:0; }
+.datasources-container .onboarding-unit-confirm { align-self:center; }
+.datasources-container .sources-scroll-list .source-card-item { border-radius:0; box-shadow:none; border:0; border-bottom:1px solid var(--line); }
+.datasources-container .sources-scroll-list { border-top:2px solid var(--ink); }
+.datasources-container .source-card-footer { gap:8px; flex-wrap:wrap; }
+@media (max-width:760px) {
+  .datasources-container .onboarding-types-register table, .datasources-container .onboarding-types-register tbody, .datasources-container .onboarding-types-register tr, .datasources-container .onboarding-types-register td { display:block; width:100%; }
+  .datasources-container .onboarding-types-register thead { display:none; }
+  .datasources-container .onboarding-types-register td { display:grid; grid-template-columns:minmax(90px, 30%) minmax(0, 1fr); gap:8px; box-sizing:border-box; }
+  .datasources-container .onboarding-types-register td::before { font-family:var(--font-label); color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; }
+  .datasources-container .onboarding-types-register td:nth-child(1)::before { content:'Column'; }
+  .datasources-container .onboarding-types-register td:nth-child(2)::before { content:'Type'; }
+  .datasources-container .onboarding-types-register td:nth-child(3)::before { content:'Used as'; }
+  .datasources-container .onboarding-types-register td:nth-child(4)::before { content:'Blanks allowed'; }
+  .datasources-container .onboarding-types-register td:nth-child(5)::before { content:'Sample value'; }
+  .datasources-container .modal-footer { flex-wrap:wrap; }
+  .datasources-container .modal-footer .button { white-space:normal; height:auto; min-height:36px; }
+}
+
+.datasources-container .onboarding-inspect-button { background:transparent; border:0; color:var(--link); padding:0; font:inherit; }
+
+.datasources-container .summary-stat-grid { display:flex; flex-wrap:wrap; gap:0; border-top:2px solid var(--ink); border-bottom:1px solid var(--line); }
+.datasources-container .summary-stat-grid .stat-box { flex:1 1 150px; border:0; border-radius:0; box-shadow:none; background:transparent; padding:12px 16px; }
+.datasources-container .summary-stat-grid .stat-num { font-size:18px; }

@@ -837,7 +837,7 @@ export function MetricsView({
           <div className="drift-impact-container">
             <div className="unassigned-header">
               <h3>Candidate Impact & Materiality Drift</h3>
-              <p>Deterministic verification runs evaluated against immutable snapshots.</p>
+              <p>Deterministic verification runs evaluated against frozen snapshots.</p>
             </div>
 
             {candidateRuns.length > 0 ? (
@@ -1194,7 +1194,7 @@ export function MetricsView({
                 <div style={{ background: 'var(--panel-2)', padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--line)' }}>
                   <div>Target version: <span className="mono-cell font-semibold">{promoteCandidateTarget.versionId.slice(0, 10)}…</span></div>
                   <div style={{ marginTop: '4px', color: 'var(--muted)', fontSize: '12px' }}>
-                    An immutable state transition record will be generated automatically.
+                    A frozen state transition record will be generated automatically.
                   </div>
                 </div>
               </div>

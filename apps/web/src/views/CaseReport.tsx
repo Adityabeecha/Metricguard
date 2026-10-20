@@ -164,7 +164,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
 
       <section aria-label="Result">
         {detail.run.result ? (
-          <ResultReport run={detail.run} unit={declaredUnit} relational={relational}
+          <ResultReport savedCase run={detail.run} unit={declaredUnit} relational={relational}
             baselineLabel={versionName(defs, detail.baseline_version_id)} targetLabel={versionName(defs, detail.target_version_id)}
             baselineSql={detail.baseline_version.raw_sql} targetSql={detail.target_version.raw_sql}
             snapshot={detail.snapshot} versions={defs.flatMap(d => d.versions)} breakdownColumns={breakdownColumns}

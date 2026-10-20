@@ -8,7 +8,7 @@ import type { FlatContract, RelationalContract, RelationalLookup } from './api';
  *  datasets; only subtraction (v6) and CASE (v7) datasets over 100,000 rows are refused (server-checked too). */
 export function aggregateRowLimitReason(rowCount: number, contractVersion?: number): string {
   return rowCount > 100_000 && (contractVersion === 6 || contractVersion === 7)
-    ? 'Subtraction and CASE datasets over 100,000 rows cannot be compared yet; use a smaller extract' : '';
+    ? 'Subtraction and CASE datasets over 100,000 rows cannot be compared yet; use a smaller file' : '';
 }
 
 /** Lookup tables of a relational contract, the same shape for contract v1 (one) and v2 (several). */

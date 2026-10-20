@@ -1,3 +1,4 @@
+import { evidenceCountLabel, twoLoadCountNotes, evidenceSealLabel } from './evidence/evidencePresentation';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type DistinctSummary, type EntityRecords, type EvidenceBreakdown, type Evidence, type EvidenceSummary, type FlatEvidence, type RatioBlock, type RelationalEvidence, type RelationalRun, type Result, type Run, type Snapshot, type Version } from '../api';
 import { resultUnit, fractionDisplay, groupDigits, percentOf, summarizeResult, type RecordDelta } from '../resultSummary';
@@ -299,6 +300,7 @@ type Props = {
   /** Columns the calculations filter on; the breakdown opens on the first available one. */
   breakdownColumns?: string[];
   /** Replay outcome shown on the seal. */
+  savedCase?: boolean;
   sealStatus?: 'verifying' | 'intact' | 'broken' | null;
   /** Shown under the answer, beside the seal (a saved case's written conclusion). */
   note?: ReactNode;
@@ -333,7 +335,7 @@ function inclusion(row: AnyEvidence, side: 'baseline' | 'target') {
   return nullTerm ? 'Included · blank amount (ignored)' : 'Included';
 }
 
-export function ResultReport({ run, unit: declaredUnit, relational, baselineLabel, targetLabel, baselineSql, targetSql, baselineDescription, targetDescription, snapshot, versions, breakdownColumns, sealStatus, note, onCustody }: Props) {
+export function ResultReport({ run, unit: declaredUnit, relational, baselineLabel, targetLabel, baselineSql, targetSql, baselineDescription, targetDescription, snapshot, versions, breakdownColumns, sealStatus, note, onCustody, savedCase = false }: Props) {
   const [tab, setTab] = useState<Tab>('records');
   const result = run.result as Result;
   const expired = run.evidence_state === 'expired';
@@ -437,7 +439,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
       value: Number(percent ? percentOf(stepValue(c)) : stepValue(c)), text: fmt(stepValue(c)) })),
     residualText: fmt(residual),
     balanced,
-    description: `${cur} ${show(result.baseline_value)}, ${categories.map(c => `${categoryLabel(c.key, labels).toLowerCase()} ${fmt(stepValue(c))} (${c.records} records)`).join(', ')}, unexplained ${fmt(residual)}, equals ${pro.toLowerCase()} ${show(result.target_value)}${balanced ? '; balanced' : ''}.`,
+    description: `${cur} ${show(result.baseline_value)}, ${categories.map(c => `${categoryLabel(c.key, labels).toLowerCase()} ${fmt(stepValue(c))} (${evidenceCountLabel(c.records, loads)})`).join(', ')}, unexplained ${fmt(residual)}, equals ${pro.toLowerCase()} ${show(result.target_value)}${balanced ? '; balanced' : ''}.`,
   } : null;
   const ledgerTotal = ledgerCategory
     ? fmt(stepValue(categories?.find(c => c.key === ledgerCategory) ?? { change: '0' }))
@@ -470,11 +472,12 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
           </div>
           {note}
         </section>
-        <SealCard run={run} snapshot={snapshot} status={sealStatus} onCustody={onCustody} />
+        <SealCard run={run} snapshot={snapshot} status={sealStatus} onCustody={onCustody} saved={savedCase} />
       </div>
 
-      {bridge && !expired && <Bridge {...bridge} onPick={pickCategory} />}
+      {bridge && !expired && <Bridge {...bridge} onPick={pickCategory} recordsAffectTotal={loads} />}
 
+      {loads && !expired && twoLoadCountNotes(result.change_summary, categories).map(note => <p className="helper-muted" key={note}>{note}</p>)}
       <div className="tabs-wrap"><div className="tabs result-tabs" role="tablist" aria-label="Result details">
         {([['records', 'A', kind === 'count_distinct' ? `${keyHeader} values` : 'Records'], ['breakdown', 'B', 'Where it sits'], ['definitions', 'C', 'Definitions'], ['notes', 'D', 'Limits']] as Array<[Tab, string, string]>).map(([id, letter, label]) => (
           <button key={id} type="button" role="tab" aria-selected={tab === id} className={`tab ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
@@ -711,21 +714,21 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
 
 /** The evidence seal: case number, frozen data and evidence hashes, and the replay outcome.
  *  The case number is the sealed run's, so it is the same during review and after saving. */
-function SealCard({ run, snapshot, status, onCustody }: { run: Run | RelationalRun; snapshot?: Snapshot | null; status?: 'verifying' | 'intact' | 'broken' | null; onCustody?: () => void }) {
+function SealCard({ run, snapshot, status, onCustody, saved = false }: { saved?: boolean; run: Run | RelationalRun; snapshot?: Snapshot | null; status?: 'verifying' | 'intact' | 'broken' | null; onCustody?: () => void }) {
   const result = run.result as Result & { evidence_artifact?: { sha256?: string; row_count?: number } };
   const provenance = (result?.provenance || {}) as { database_hash?: string; snapshot_manifest_hash?: string };
   const sealed = (run as { completed_at?: string }).completed_at || run.created_at;
   return (
     <aside className={`seal-card ${status ?? ''}`} aria-label="Evidence seal">
       <div className="seal-strip">
-        <span>{status === 'intact' ? 'Seal intact' : status === 'broken' ? 'Seal broken' : status === 'verifying' ? 'Verifying' : 'Sealed'}</span>
+        <span>{evidenceSealLabel(saved, status)}</span>
         <span className="seal-no">{caseNumber(run.id)}</span>
       </div>
       <dl>
         <dt>Dataset</dt><dd title={provenance.database_hash}>{snapshot?.name && <span className="seal-name">{snapshot.name}</span>}<HashPrint hash={provenance.database_hash} size={18} /></dd>
         <dt>Evidence</dt><dd title={result?.evidence_artifact?.sha256}><HashPrint hash={result?.evidence_artifact?.sha256} size={18} /></dd>
-        <dt>Sealed</dt><dd>{sealed ? new Date(sealed).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</dd>
-        <dt>Engine</dt><dd>{run.execution_mode === 'isolated' ? 'Isolated runner · no network' : run.execution_mode}</dd>
+        <dt>{saved ? 'Sealed' : 'Compared'}</dt><dd>{sealed ? new Date(sealed).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</dd>
+        <dt>Engine</dt><dd>{run.execution_mode === 'isolated' ? 'MetricGuard' : run.execution_mode}</dd>
       </dl>
       <div className={`seal-status ${status === 'intact' ? 'intact' : status === 'broken' ? 'broken' : ''}`} role="status">
         {status === 'intact' ? 'Seal intact · replay matched byte for byte'

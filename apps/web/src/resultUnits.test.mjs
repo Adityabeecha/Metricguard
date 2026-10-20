@@ -37,7 +37,7 @@ test('large snapshots allow every aggregate except on subtraction and CASE datas
   for (const version of [3, 4, 5, 8, undefined]) assert.equal(aggregateRowLimitReason(5000000, version), '');
   for (const version of [6, 7]) {
     assert.equal(aggregateRowLimitReason(100000, version), '');
-    assert.equal(aggregateRowLimitReason(100001, version), 'Subtraction and CASE datasets over 100,000 rows cannot be compared yet; use a smaller extract');
+    assert.equal(aggregateRowLimitReason(100001, version), 'Subtraction and CASE datasets over 100,000 rows cannot be compared yet; use a smaller file');
   }
 });
 

@@ -151,3 +151,24 @@ test('a missing qualified filter never selects the same name from a different lo
   assert.equal(preferredBreakdownColumn(['dimension.status'], ['fact.status']), undefined);
   assert.equal(preferredBreakdownColumn(['dimension.status'], ['status']), 'dimension.status');
 });
+
+
+import { evidenceCountLabel, twoLoadCountNotes, evidenceSealLabel } from './views/evidence/evidencePresentation.ts';
+test('two-load counts separate every changed record from records affecting the total', () => {
+  const summary = { added:{records:300,delta:'203'},removed:{records:20,delta:'-9'},value_changed:{records:5,delta:'1'} };
+  const categories = [{key:'added',records:203},{key:'removed',records:9},{key:'value_changed',records:3}];
+  const notes = twoLoadCountNotes(summary,categories);
+  assert.match(notes[0], /^300 new records in the later load; 203 change the total/);
+  assert.match(notes[1], /^20 records removed from the later load; 9 change the total/);
+  assert.match(notes[2], /^5 records changed value; 3 change the total/);
+  assert.deepEqual(twoLoadCountNotes(summary,null),[]);
+  assert.match(twoLoadCountNotes({added:{records:2,delta:'0'}},[])[0], /0 change the total/);
+  assert.equal(evidenceCountLabel(203,true),'203 records that change the total');
+  assert.equal(evidenceCountLabel(1,true),'1 record that changes the total');
+});
+test('only a saved case may claim its evidence is sealed', () => {
+  assert.equal(evidenceSealLabel(false,null),'EVIDENCE READY');
+  assert.equal(evidenceSealLabel(false,'intact'),'EVIDENCE READY');
+  assert.equal(evidenceSealLabel(true,null),'SEALED');
+  assert.equal(evidenceSealLabel(true,'intact'),'Seal intact');
+});

@@ -3,6 +3,37 @@ import type { GateState } from './authState';
 export type OAuthProvider = 'google' | 'github';
 export type AuthProviders = { providers: OAuthProvider[]; signup_mode: 'invite' | 'open'; auth_required: boolean };
 
+/** Only an explicit server capability enables the local key workflow. */
+export function localKeyAccess(authRequired: boolean | null | undefined): boolean {
+  return authRequired === false;
+}
+
+export function accountInitials(user: { name?: string | null; email?: string | null } | null | undefined): string {
+  const name = user?.name?.trim();
+  if (name) {
+    const parts = name.split(/\s+/);
+    return (Array.from(parts[0])[0] + (parts.length > 1 ? Array.from(parts[parts.length - 1])[0] : '')).toLocaleUpperCase();
+  }
+  return Array.from(user?.email?.trim() || '')[0]?.toLocaleUpperCase() || '?';
+}
+
+export function accountMenuActions(identity: { session?: boolean; verified?: boolean } | null, authRequired: boolean | null | undefined, connected = false, verificationFailed = false): Array<'settings' | 'key' | 'signout'> {
+  const actions: Array<'settings' | 'key' | 'signout'> = ['settings'];
+  if (localKeyAccess(authRequired) && identity?.session !== true && (identity !== null || verificationFailed)) actions.push('key');
+  if (identity?.verified || connected) actions.push('signout');
+  return actions;
+}
+
+export function signOutDestination(authRequired: boolean | null | undefined): string | null {
+  return localKeyAccess(authRequired) ? null : '/signin';
+}
+
+/** Keep the current account recoverable when the server cannot end its cookie. */
+export async function endAccountSession(endSession: () => Promise<unknown>, clearIdentity: () => void): Promise<void> {
+  await endSession();
+  clearIdentity();
+}
+
 export function authPage(path: string): 'signin' | 'signup' | null {
   const match = path.match(/^\/(signin|signup)\/?$/);
   return match ? match[1] as 'signin' | 'signup' : null;

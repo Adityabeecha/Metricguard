@@ -517,7 +517,7 @@ export function ChangesView({
               <strong>Analyzed with verified exact agreement</strong>
               <div>
                 All {activeDiff.counts.total_declared_metrics_affected} affected declared metrics produced identical analytical totals
-                on immutable reference snapshot {snapName}.
+                on frozen reference snapshot {snapName}.
               </div>
             </div>
           </div>
@@ -803,7 +803,7 @@ export function ChangesView({
                 Coverage Analysis
               </h3>
               <p style={{ margin: '2px 0 0', fontSize: '13px', color: 'var(--muted)' }}>
-                How much of this revision did MetricGuard actually analyze against immutable evidence?
+                How much of this revision did MetricGuard actually analyze against frozen evidence?
               </p>
             </div>
 
@@ -1159,7 +1159,7 @@ export function ChangesView({
         <section className="panel" style={{ marginBottom: '24px' }}>
           <div className="panel-header">
             <h2>Recent analyzed changes</h2>
-            <p>Orchestrated revision-level impact comparisons evaluated on immutable snapshots.</p>
+            <p>Orchestrated revision-level impact comparisons evaluated on frozen snapshots.</p>
           </div>
 
           {filteredDiffs.length > 0 ? (
@@ -1305,7 +1305,7 @@ export function ChangesView({
                   Run Metric Diff
                 </h3>
                 <p className="modal-subtitle">
-                  Analyze declared business metric impact between two revisions against an immutable snapshot.
+                  Analyze declared business metric impact between two revisions against a frozen snapshot.
                 </p>
               </div>
               <button
@@ -1430,7 +1430,7 @@ export function ChangesView({
                       ))}
                     </select>
                     <small className="field-hint">
-                      Single immutable extract holding test data strictly constant across runs.
+                      Single frozen file holding test data strictly constant across runs.
                     </small>
                   </div>
 

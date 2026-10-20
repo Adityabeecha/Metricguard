@@ -103,6 +103,8 @@ def test_unverified_and_invite_gate_create_nothing(setup, provider):
     assert callback(client, provider, state).headers['location'].endswith('error=waitlist')
     with store.engine.connect() as db:
         assert db.execute(select(users).where(users.c.id != 'local-analyst')).first() is None
+    # The refused, provider-verified email is on the waitlist, so the page's message is true.
+    assert [r['email'] for r in store.access_request_list()] == ['not-invited@example.com']
 
 
 def test_existing_user_ignores_invite_gate_and_api_key_still_works(setup):

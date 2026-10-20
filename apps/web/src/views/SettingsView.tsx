@@ -114,7 +114,6 @@ export function SettingsView({
             <section className="panel">
               <div className="panel-header">
                 <h2>Workspace information</h2>
-                <p>Active analytical context</p>
               </div>
               <div style={{ padding: '16px 20px' }}>
                 <div className="form-stack">
@@ -136,8 +135,7 @@ export function SettingsView({
 
             <section className="panel">
               <div className="panel-header">
-                <h2>Reconciliation engine</h2>
-                <p>Deterministic analysis engine status</p>
+                <h2>Comparison engine</h2>
               </div>
               <div style={{ padding: '16px 20px' }}>
                 <div className="form-stack">

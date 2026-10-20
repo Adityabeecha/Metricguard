@@ -10,6 +10,8 @@ import { classifyInvestigationError, type ClassifiedInvestigationError } from '.
 import { groupDigits } from '../resultSummary';
 import { ConditionHelp, ConditionValue } from './ConditionFields';
 import { CHANGE_LABEL, ResultReport } from './ResultReport';
+import { comparisonDatasetGroups } from '../comparisonSelection';
+import { useRecordedBy } from '../useRecordedBy';
 
 const pending = (state?: string) => state === 'queued' || state === 'running' || state === 'pending';
 const KINDS: SnapshotChangeKind[] = ['added', 'removed', 'value_changed', 'entered_filter', 'left_filter', 'unchanged'];
@@ -21,6 +23,7 @@ type Props = {
   refresh: () => Promise<Bootstrap | null>;
   /** Called with the new case id once the comparison is saved as a case. */
   onSaved?: (caseId: string) => void;
+  prefillDataset?: string;
 };
 
 /** A load in a picker: its label, when it was loaded, and its size. Loads of one dataset often share a name. */
@@ -30,12 +33,16 @@ export function loadLabel(s: Snapshot): string {
 }
 
 /** One calculation run on two data loads of the same dataset (e.g. September vs October). */
-export function SnapshotChange({ data, refresh, onSaved }: Props) {
-  const groups = useMemo(() => (data.flat_contracts || []).filter(c => SUPPORTED.has(c.version)).map(contract => ({
-    contract,
-    snapshots: data.snapshots.filter(s => s.execution_policy !== 'relational_snapshot_v1' && s.contract_hash === contract.contract_hash)
-      .sort((a, b) => a.created_at.localeCompare(b.created_at)),
-  })).filter(g => g.snapshots.length >= 2), [data.flat_contracts, data.snapshots]);
+export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props) {
+  const groups = useMemo(() => {
+    const choices = data.snapshots.flatMap(snapshot => {
+      const flat = (data.flat_contracts || []).find(c => SUPPORTED.has(c.version) && c.contract_hash === snapshot.contract_hash);
+      return flat && snapshot.execution_policy !== 'relational_snapshot_v1' ? [{ snapshot, flat }] : [];
+    });
+    return comparisonDatasetGroups(choices).filter(g => g.loads.length >= 2).map(g => ({
+      contract: g.latest.flat, snapshots: g.loads.map(c => c.snapshot).reverse(),
+    }));
+  }, [data.flat_contracts, data.snapshots]);
   const [contractId, setContractId] = useState('');
   const group = groups.find(g => g.contract.id === contractId) || null;
   const [baselineId, setBaselineId] = useState('');
@@ -50,10 +57,15 @@ export function SnapshotChange({ data, refresh, onSaved }: Props) {
   const [problem, setProblem] = useState<ClassifiedInvestigationError | null>(null);
   const [title, setTitle] = useState('');
   const [decision, setDecision] = useState('');
-  const [actor, setActor] = useState(() => { try { return localStorage.getItem('mg.actor') || ''; } catch { return ''; } });
+  const [actor, setActor] = useRecordedBy(data.project.id);
   const engineReady = data.mode === 'isolated' && data.runner_available;
   const contract = group?.contract;
   const columns = useMemo(() => contract ? flatFilterColumns(contract) : [], [contract]);
+
+  useEffect(() => {
+    const preferred = groups.find(g => g.snapshots.some(s => s.id === prefillDataset));
+    setContractId(current => groups.some(g => g.contract.id === current) ? current : preferred?.contract.id || (groups.length === 1 ? groups[0].contract.id : ''));
+  }, [groups, prefillDataset]);
 
   const saved = useMemo(() => group ? data.definitions.flatMap(d => d.versions
     .filter(v => v.contract_hash === group.contract.contract_hash && v.support_state === 'executable')
@@ -173,24 +185,24 @@ export function SnapshotChange({ data, refresh, onSaved }: Props) {
   const money = (v: string) => `${groupDigits(v).replace(/^-/, '−')}${unit ? ` ${unit}` : ''}`;
   const saveBlocker = !title.trim() ? 'Give the case a name.' : !decision.trim() ? 'Write your conclusion.' : !actor.trim() ? 'Enter who is recording this.' : '';
   return (
-    <section className="guided-card" aria-labelledby="snapshot-change">
+    <section className="guided-card comparison-loads" aria-labelledby="snapshot-change">
       <h2 id="snapshot-change">Same calculation, two data loads</h2>
-      <p className="lead">Run one calculation on an earlier and a later load of the same dataset and see which records were added, removed or changed. Records are matched by the dataset's row key, and their changes add up exactly to the change in the total.</p>
+      <p className="lead">Run one calculation on an earlier and a later load of the same dataset and see which records were added, removed or changed. Records are matched by their ID column, and their changes add up exactly to the change in the total.</p>
       {groups.length === 0 ? (
         <div className="guided-explain">No dataset has two loads yet. On the Datasets page, open a dataset and choose <b>Add a newer load</b>; or upload a file with the same columns and settings and keep “Add this file as a new load” ticked.</div>
       ) : (
         <>
-          <div className="dataset-options" role="group" aria-label="Datasets with several loads">
+          <div className="dataset-list" role="group" aria-label="Datasets with several loads">
             {groups.map(g => (
-              <button key={g.contract.id} type="button" className="dataset-option" aria-pressed={g.contract.id === contractId} onClick={() => setContractId(g.contract.id)}>
-                <strong>{g.contract.name}</strong>
-                <span>{g.snapshots.length} loads · row key <code>{g.contract.row_key}</code></span>
+              <button key={g.contract.id} type="button" className="dataset-row" aria-pressed={g.contract.id === contractId} onClick={() => setContractId(g.contract.id)}>
+                <strong>{g.contract.name} <span className="example">· {g.snapshots.length} loads</span></strong>
+                <span className="detail">Records matched by <code>{g.contract.row_key}</code></span>
               </button>
             ))}
           </div>
           {group && contract && (
             <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <div className="comparison-load-pair">
                 <label>Earlier load
                   <select value={baselineId} onChange={e => { setBaselineId(e.target.value); setRun(null); }}>
                     {group.snapshots.map(s => <option key={s.id} value={s.id}>{loadLabel(s)}</option>)}
@@ -219,7 +231,7 @@ export function SnapshotChange({ data, refresh, onSaved }: Props) {
                   {mode === 'form' ? (
                     <>
                       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                        <label>What do you want to compare?
+                        <label>What do you want to calculate?
                           <select value={form.aggregate || 'sum'} onChange={e => update({ ...form, aggregate: e.target.value as 'sum' | 'count' })}>
                             <option value="sum">Total {amountLabel} (SUM)</option>
                             {supportsCount(contract) && <option value="count">Number of records (COUNT)</option>}

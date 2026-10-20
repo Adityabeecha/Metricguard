@@ -1,0 +1,26 @@
+.account-control { position: relative; flex: none; }
+.topbar .account-trigger { width: 36px; height: 36px; border: 1px solid var(--line-strong); cursor: pointer; padding: 0; background: var(--rail); color: var(--rail-text); font: 700 12px var(--font-mono); }
+.account-trigger:hover { background: var(--rail-2); }
+.account-trigger:focus-visible, .account-popover button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.account-popover, .account-key-dialog { position: absolute; right: 0; top: calc(100% + 10px); z-index: 60; width: min(300px, calc(100vw - 32px)); border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--ink); box-shadow: var(--shadow-2); }
+.account-details { display: grid; gap: 4px; padding: 14px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.account-details strong { font-size: 14px; }
+.account-details span, .account-details small { color: var(--muted); font-size: 12px; }
+.account-popover [role="menu"] { display: grid; padding: 6px; }
+.account-popover [role="menuitem"] { min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); text-align: left; font: 600 13px var(--font-ui); cursor: pointer; }
+.account-popover [role="menuitem"]:hover, .account-popover [role="menuitem"]:focus { background: var(--panel-2); }
+.account-popover [role="menuitem"]:disabled { opacity: .55; cursor: wait; }
+.account-problem { margin: 0; padding: 8px 14px 14px; font-size: 12px; color: var(--danger); }
+.account-key-dialog { display: grid; gap: 12px; padding: 14px; }
+.account-key-dialog label { display: grid; gap: 6px; }
+.account-key-dialog small { color: var(--muted); }
+.account-key-heading, .account-key-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.account-key-actions { justify-content: flex-end; }
+.mobile-navigation-backdrop { position: fixed; inset: 0; z-index: 29; background: color-mix(in srgb, var(--rail) 45%, transparent); }
+@media (max-width: 760px) {
+  .shell .topbar { height: 52px; min-height: 52px; flex-wrap: nowrap; gap: 8px; padding: 0 12px; }
+  .shell .topbar .breadcrumbs, .shell .topbar .topbar-status { display: none; }
+  .shell .topbar .topbar-right { flex-wrap: nowrap; margin-left: auto; gap: 10px; }
+  .shell .topbar .theme-switch { display: inline-flex; flex: none; }
+  .shell .topbar .mobile-menu { flex: none; }
+}

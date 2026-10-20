@@ -199,14 +199,14 @@ export function Dashboard({
           </div>
           <h2>Start with your data</h2>
           <p>
-            MetricGuard compares metric logic against immutable evidence. Upload a CSV or
-            Parquet extract to create a validated snapshot and begin reconciliation.
+            MetricGuard compares metric logic against frozen evidence. Upload a CSV or
+            Parquet file to create a validated snapshot and begin reconciliation.
           </p>
           <button
             className="button primary"
             onClick={() => onNavigate('data')}
           >
-            <Database size={16} /> Add data source <ArrowRight size={16} />
+            <Database size={16} /> Add dataset <ArrowRight size={16} />
           </button>
         </section>
       )}

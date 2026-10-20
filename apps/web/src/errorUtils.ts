@@ -29,7 +29,7 @@ export function humanizeError(
     rawMsg = err;
   }
 
-  // Extract error code if embedded in error message or status code
+  // file error code if embedded in error message or status code
   if (!rawCode && rawMsg) {
     const match = rawMsg.match(/\b(ROW_KEY_NOT_UNIQUE|DUPLICATE_KEY|NULL_IN_ROW_KEY|NULL_KEY|MEASURE_NOT_NUMERIC|INVALID_MEASURE|INVALID_SCHEMA|UPLOAD_LIMIT|UNSUPPORTED_FORMAT|INVALID_CONTRACT|ISOLATION_REQUIRED)\b/i);
     if (match) {
@@ -53,7 +53,7 @@ export function humanizeError(
       return {
         title: 'Row Key Not Unique',
         message: `The selected row key "${context?.key || 'column'}" contains duplicate values. Every row in your dataset must have a unique identifier.`,
-        suggestion: 'Select a column with distinct values per row, or deduplicate the extract before uploading.',
+        suggestion: 'Select a column with distinct values per row, or deduplicate the file before uploading.',
         field: context?.key || 'row_key',
         code: rawCode,
       };
@@ -90,7 +90,7 @@ export function humanizeError(
       return {
         title: 'File Size Limit Exceeded',
         message: 'The selected file exceeds the upload limit: 512 MiB for one-table CSV or Parquet files, 25 MiB for other uploads.',
-        suggestion: 'Upload a smaller extract, or prepare a narrower one (fewer rows or columns).',
+        suggestion: 'Upload a smaller file, or prepare a narrower one (fewer rows or columns).',
         code: rawCode,
       };
 
@@ -98,7 +98,7 @@ export function humanizeError(
       return {
         title: 'Unsupported File Format',
         message: 'MetricGuard accepts CSV (.csv) and Parquet (.parquet) files.',
-        suggestion: 'Please convert your extract to CSV or Parquet format.',
+        suggestion: 'Please convert your file to CSV or Parquet format.',
         code: rawCode,
       };
 

@@ -15,8 +15,11 @@ import { DIRECT_TWO_TABLE_LIMIT, PrepareTwoTable } from './PrepareTwoTable';
 import { TwoTableUpload } from './TwoTableUpload';
 import { ConditionHelp, ConditionValue } from './ConditionFields';
 import { WarehouseSource } from './WarehouseSource';
-import { SnapshotChange } from './SnapshotChange';
+import { SnapshotChange, loadLabel } from './SnapshotChange';
 import { comparisonRequestKey, groupSavedCalculations } from '../guidedWorkflow';
+import { COMPARISON_KINDS, comparisonDatasetGroups, emptyCalculationSides, initialComparisonLoad, matchCountKey } from '../comparisonSelection';
+import { useRecordedBy } from '../useRecordedBy';
+import './comparisonSelection.css';
 
 type Side = 'baseline' | 'target';
 type SideState = { name: string; mode: 'form' | 'sql'; form: CalculationForm; sql: string; refusal: ClassifiedInvestigationError | null;
@@ -57,12 +60,12 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   const [problem, setProblem] = useState<ClassifiedInvestigationError | null>(null);
   const [title, setTitle] = useState('');
   const [decision, setDecision] = useState('');
-  const [actor, setActor] = useState(() => { try { return localStorage.getItem('mg.actor') || ''; } catch { return ''; } });
+  const [actor, setActor] = useRecordedBy(data.project.id);
   const [draft, setDraft] = useState<InvestigationDraft | null>(null);
   const [origin, setOrigin] = useState<string>('');
   const [showTwoTable, setShowTwoTable] = useState(false);
   const [showWarehouse, setShowWarehouse] = useState(false);
-  const [showLoads, setShowLoads] = useState(false);
+  const [comparisonKind, setComparisonKind] = useState<'calculations' | 'loads'>('calculations');
   const [loadingPrefill, setLoadingPrefill] = useState(Boolean(prefill?.from || prefill?.left));
   const [elapsed, setElapsed] = useState(0);
   const skipReset = useRef(false);
@@ -87,13 +90,22 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     return flat ? [{ snapshot, flat }] : [];
   }), [data.snapshots, data.flat_contracts, data.relational_contracts]);
 
+  // A dataset can have several loads. Entering from an upload keeps that exact load;
+  // otherwise the sole dataset starts on its latest load.
+  const appliedDatasetPrefill = useRef('');
+  useEffect(() => {
+    if (prefill?.from || prefill?.left) return;
+    const preferred = prefill?.dataset && appliedDatasetPrefill.current !== prefill.dataset ? prefill.dataset : undefined;
+    setSnapshotId(current => initialComparisonLoad(choices, current, preferred));
+    if (preferred && choices.some(c => c.snapshot.id === preferred)) appliedDatasetPrefill.current = preferred;
+  }, [choices, prefill?.dataset, prefill?.from, prefill?.left]);
+
   const [datasetQuery, setDatasetQuery] = useState('');
+  const datasetGroups = useMemo(() => comparisonDatasetGroups(choices), [choices]);
   const visibleChoices = useMemo(() => {
     const q = datasetQuery.trim().toLowerCase();
-    return [...choices]
-      .sort((a, b) => (b.snapshot.created_at || '').localeCompare(a.snapshot.created_at || ''))
-      .filter(c => !q || c.snapshot.name.toLowerCase().includes(q));
-  }, [choices, datasetQuery]);
+    return datasetGroups.filter(g => !q || `${g.name} ${g.loads.map(c => c.snapshot.name).join(' ')}`.toLowerCase().includes(q));
+  }, [datasetGroups, datasetQuery]);
   const choice = choices.find(c => c.snapshot.id === snapshotId) || null;
   const contract = choice?.flat || choice?.relational || null;
   const relational = Boolean(choice?.relational);
@@ -227,7 +239,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     return choice?.flat ? buildFlatSql(choice.flat, s.form) : buildRelationalSql(choice!.relational!, s.form);
   };
   const safeSql = (side: Side) => { try { return sqlFor(side); } catch { return ''; } };
-  const countKey = (sql: string) => `${choice?.snapshot.id}|${sql.trim()}`;
+  const countKey = (sql: string) => matchCountKey(choice?.snapshot.id || '', sql);
   async function lookupCount(sql: string): Promise<MatchCount | 'error'> {
     const key = countKey(sql);
     if (key in counts) return counts[key];
@@ -271,7 +283,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     }
     return problems;
   };
-  const calcBlocker = !engineReady ? (isolated ? 'The comparison engine is not running. Start it with scripts\\mg.ps1 start.' : 'New comparisons need the isolated engine. Start MetricGuard with scripts\\mg.ps1 start.')
+  const validationBlocker = !engineReady ? (isolated ? 'The comparison engine is not running. Start it with scripts\\mg.ps1 start.' : 'New comparisons need the isolated engine. Start MetricGuard with scripts\\mg.ps1 start.')
     : [...sideProblems('baseline'), ...sideProblems('target')][0] || (safeSql('baseline').trim() && safeSql('baseline').trim() === safeSql('target').trim()
       && !(sides.baseline.reuse && sides.baseline.reuse.versionId === sides.target.reuse?.versionId)
       ? 'The two calculations are identical; change one of them.' : '');
@@ -283,8 +295,12 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     if (!choice?.flat || stage !== 1) return;
     const timer = setTimeout(() => { for (const sql of [baselineLive, targetLive]) if (sql) void lookupCount(sql); }, 400);
     return () => clearTimeout(timer);
-  }, [baselineLive, targetLive, stage]);
+  }, [baselineLive, targetLive, stage, choice?.snapshot.id]);
   const liveCount = (side: Side) => { const sql = side === 'baseline' ? baselineLive : targetLive; return sql ? counts[countKey(sql)] : undefined; };
+  const emptySides = emptyCalculationSides(choice?.snapshot.id || '', { baseline: baselineLive, target: targetLive }, counts);
+  const calcBlocker = validationBlocker || (emptySides.length ? 'No records match. Edit the conditions before comparing.' : '');
+  const activeCalculation = useRef('');
+  activeCalculation.current = JSON.stringify([choice?.snapshot.id, baselineLive, targetLive]);
 
   /** A name that says what the calculation does, unless the analyst typed their own. */
   function definitionName(side: Side, sql: string): string {
@@ -296,20 +312,22 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     return (where ? `Where ${where}` : 'All records').replace(/\s+/g, ' ').slice(0, 160);
   }
 
-  async function registerAndCompare(acceptEmpty = false) {
-    if (!choice || !contract || actionInFlight.current) return;
+  async function registerAndCompare() {
+    if (!choice || !contract || actionInFlight.current || calcBlocker) return;
     actionInFlight.current = true;
+    const requestedCalculation = activeCalculation.current;
     const retryOf = run?.state === 'failed' ? run.id : null;
     setBusy(true); setProblem(null); setRun(null); setEmptyWarning(null);
     try {
       // A calculation that includes no records still takes a full run on a large dataset and
       // ends at 0 (or Undefined for averages and ratios); say so before spending that time.
-      if (choice.flat && !acceptEmpty) {
+      if (choice.flat) {
         const empty: string[] = [];
         for (const side of ['baseline', 'target'] as Side[]) {
           let sql: string;
           try { sql = sqlFor(side); } catch { continue; }
           const found = await lookupCount(sql);
+          if (requestedCalculation !== activeCalculation.current) return;
           if (found && found !== 'error' && found.matched === 0) empty.push(side === 'baseline' ? 'current' : 'proposed');
         }
         if (empty.length) { setEmptyWarning(empty); return; }
@@ -412,14 +430,14 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
         </div>
       </div>
 
-      <nav className="step-rail" aria-label="Comparison steps">
+      {comparisonKind === 'calculations' && <nav className="step-rail" aria-label="Comparison steps">
         {STAGES.map((s, i) => (
           <button type="button" key={s.title} className={`step ${i < stage ? 'done' : ''}`} aria-current={i === stage ? 'step' : undefined}
             disabled={!canEnter(i)} onClick={() => setStage(i)} title={s.hint}>
             <span className="n">{i + 1}</span>{s.title}
           </button>
         ))}
-      </nav>
+      </nav>}
 
       {!engineReady && (
         <div className="alert error" role="status">
@@ -439,6 +457,20 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
       )}
 
       {stage === 0 && (
+        <>
+        <fieldset className="comparison-kind">
+          <legend>What do you want to compare?</legend>
+          {COMPARISON_KINDS.map(kind => (
+            <label key={kind.value}>
+              <input type="radio" name="comparison-kind" value={kind.value} checked={comparisonKind === kind.value}
+                onChange={() => setComparisonKind(kind.value)} />
+              {kind.label}
+            </label>
+          ))}
+        </fieldset>
+        {comparisonKind === 'loads' ? (
+          <SnapshotChange data={data} refresh={refresh} onSaved={id => onOpenInvestigation(id, false)} prefillDataset={snapshotId || prefill?.dataset} />
+        ) : (
         <section className="guided-card" aria-labelledby="stage-data">
           <h2 id="stage-data">Choose data</h2>
           {choices.length === 0 ? (
@@ -446,18 +478,29 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
           ) : (
             <>
               <div className="picker-toolbar">
-                <input type="search" aria-label="Search datasets" placeholder={`Search ${choices.length} datasets`} value={datasetQuery} onChange={e => setDatasetQuery(e.target.value)} />
+                <input type="search" aria-label="Search datasets" placeholder={`Search ${datasetGroups.length} datasets`} value={datasetQuery} onChange={e => setDatasetQuery(e.target.value)} />
               </div>
               <div className="dataset-list" role="group" aria-label="Datasets, newest first">
-                {visibleChoices.map(c => {
+                {visibleChoices.map(g => {
+                  const c = g.loads.find(load => load.snapshot.id === snapshotId) || g.latest;
+                  const selected = g.loads.some(load => load.snapshot.id === snapshotId);
                   const s = summarizeDataset(c.snapshot, data);
                   return (
-                    <button key={c.snapshot.id} type="button" className="dataset-row" aria-pressed={c.snapshot.id === snapshotId} onClick={() => setSnapshotId(c.snapshot.id)}>
-                      <strong>{c.snapshot.name}</strong>
-                      <span className="rows">{groupDigits(String(c.snapshot.row_count))} {c.relational ? 'facts' : 'rows'}</span>
+                    <div key={g.key} className="comparison-dataset-group">
+                    <button type="button" className="dataset-row" aria-pressed={selected} onClick={() => setSnapshotId(c.snapshot.id)}>
+                      <strong>{g.name} <span className="example">· {g.loads.length} {g.loads.length === 1 ? 'load' : 'loads'}</span></strong>
+                      <span className="rows">{groupDigits(String(c.snapshot.row_count))} records</span>
                       <span className="added">{c.snapshot.created_at ? new Date(c.snapshot.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''} · {c.snapshot.id.replace(/[^0-9a-zA-Z]/g, '').slice(0, 6)}</span>
                       <span className="detail">{s.kindLabel} · totals <code>{s.measureLabel}</code> in {s.unitLabel}{s.filterColumns.length > 0 ? ` · filter by ${s.filterColumns.join(', ')}` : ''}</span>
                     </button>
+                    {selected && g.loads.length > 1 && (
+                      <label className="comparison-load-picker">Data load
+                        <select value={snapshotId} onChange={e => setSnapshotId(e.target.value)}>
+                          {g.loads.map((load, i) => <option key={load.snapshot.id} value={load.snapshot.id}>{i === 0 ? 'Latest · ' : ''}{loadLabel(load.snapshot)}</option>)}
+                        </select>
+                      </label>
+                    )}
+                    </div>
                   );
                 })}
                 {visibleChoices.length === 0 && <p className="disabled-reason">No dataset matches “{datasetQuery}”.</p>}
@@ -467,7 +510,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
           {summary && (
             <div className="guided-explain">
               <b>You will compare calculations over {summary.measureLabel}</b> ({summary.measureMeaning || 'amount'}, unit {summary.unitLabel}) over {groupDigits(String(choice!.snapshot.row_count))} records.
-              {summary.joinLabel && <> Records link to the dimension through {summary.joinLabel}.</>}
+              {summary.joinLabel && <> Records link to the related table through {summary.joinLabel}.</>}
               <details style={{ marginTop: 8 }}>
                 <summary>Advanced details</summary>
                 <p>Contract “{summary.contractName}” · row key {summary.keyLabel} · policy {choice!.snapshot.execution_policy} · contract hash <code className="mono-cell">{choice!.snapshot.contract_hash}</code></p>
@@ -489,11 +532,6 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
           </div>
           {!choice && <span id="need-data" className="sr-only">Choose a dataset to continue.</span>}
           <div className="side-question">
-            <span>Did the metric change between two data loads?</span>
-            <button className="button secondary small" aria-expanded={showLoads} onClick={() => setShowLoads(v => !v)}>Compare two data loads</button>
-          </div>
-          {showLoads && <SnapshotChange data={data} refresh={refresh} onSaved={id => onOpenInvestigation(id, false)} />}
-          <div className="side-question">
             <span>Need new data?</span>
             <div className="report-actions">
               <button className="button secondary small" onClick={() => onNavigate('data', undefined, { add: '1', return: 'start' })}><UploadCloud size={14} /> Upload one table</button>
@@ -511,6 +549,8 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
               onCreated={id => { setShowTwoTable(false); setSnapshotId(id); }} />
           )}
         </section>
+        )}
+        </>
       )}
 
       {stage === 1 && choice && contract && (
@@ -757,7 +797,6 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                 of the {groupDigits(String(choice.snapshot.row_count))} records, so {emptyWarning.length > 1 ? 'their results' : 'its result'} would
                 be 0, or Undefined for an average or ratio. Check the condition values; a run on this dataset can take minutes.</span>
               <span className="report-actions">
-                <button className="button secondary small" onClick={() => void registerAndCompare(true)}>Run anyway</button>
                 <button onClick={() => setEmptyWarning(null)} aria-label="Dismiss message">×</button>
               </span>
             </div>
