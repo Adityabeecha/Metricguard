@@ -212,11 +212,11 @@ export function MetricsView({
   // Helper to determine support state for a metric
   const getMetricSupportState = (metric: MetricItem) => {
     if (!metric.active_binding?.definition_id) {
-      return { state: 'unbound', label: 'Unbound', isAnalyzable: false, reason: 'No active definition bound', version: null, definition: null };
+      return { state: 'unbound', label: 'No definition yet', isAnalyzable: false, reason: 'No approved calculation yet', version: null, definition: null };
     }
     const def = definitions.find((d) => d.id === metric.active_binding?.definition_id);
     if (!def) {
-      return { state: 'unbound', label: 'Unbound', isAnalyzable: false, reason: 'Definition not found', version: null, definition: null };
+      return { state: 'unbound', label: 'No definition yet', isAnalyzable: false, reason: 'Its calculation is no longer available', version: null, definition: null };
     }
     // Only use explicitly approved version from backend truth
     const approvedVerId = metric.active_binding?.approved_version_id;
@@ -234,9 +234,9 @@ export function MetricsView({
     const isAnalyzable = ver.support_state === 'executable' || ver.support_state === 'supported';
     return {
       state: isAnalyzable ? 'analyzable' : 'limited',
-      label: isAnalyzable ? 'Analyzable' : 'Limited / Refused',
+      label: isAnalyzable ? 'Can be compared' : 'Not supported',
       isAnalyzable,
-      reason: ver.support_reason || (isAnalyzable ? 'Compatible closed single-table IR' : 'Unsupported SQL structure'),
+      reason: ver.support_reason || (isAnalyzable ? 'Supported calculation' : "This SQL shape isn't supported"),
       version: ver,
       definition: def,
     };
@@ -568,7 +568,7 @@ export function MetricsView({
             className={`section-tab-button ${detailTab === 'impact' ? 'active' : ''}`}
             onClick={() => handleDetailTabClick('impact')}
           >
-            Candidate impact & drift ({candidateRuns.length})
+            Proposed changes and their impact ({candidateRuns.length})
           </button>
           <button
             type="button"
@@ -702,7 +702,7 @@ export function MetricsView({
                       <div className="implementation-meta-item">
                         <span className="meta-label">Support State</span>
                         <span className="meta-value">
-                          {candVer.support_state === 'executable' ? 'Analyzable' : 'Limited'}
+                          {candVer.support_state === 'executable' ? 'Can be compared' : 'Not supported'}
                         </span>
                       </div>
                       <div className="implementation-meta-item">
@@ -804,7 +804,7 @@ export function MetricsView({
                     <div className="implementation-meta-item">
                       <span className="meta-label">Support State</span>
                       <span className="meta-value">
-                        {ver.support_state === 'executable' ? 'Analyzable' : 'Refused'}
+                        {ver.support_state === 'executable' ? 'Can be compared' : 'Not supported'}
                       </span>
                     </div>
                     <div className="implementation-meta-item">
@@ -1298,7 +1298,7 @@ export function MetricsView({
                 className={`filter-pill ${supportFilter === sup ? 'active' : ''}`}
                 onClick={() => setSupportFilter(sup)}
               >
-                {sup === 'all' ? 'All' : sup === 'analyzable' ? 'Analyzable' : sup === 'limited' ? 'Limited' : 'Unbound'}
+                {sup === 'all' ? 'All' : sup === 'analyzable' ? 'Can be compared' : sup === 'limited' ? 'Not supported' : 'No definition yet'}
               </button>
             ))}
           </div>
@@ -1328,7 +1328,7 @@ export function MetricsView({
                   <div className="metric-row-meta">
                     <span className="metric-row-meta-item">
                       <FileCode2 size={14} color="var(--muted)" />
-                      Active: {support.definition ? support.definition.name : 'None (Unbound)'}
+                      Active: {support.definition ? support.definition.name : 'None yet'}
                     </span>
                     {support.version && (
                       <span className="metric-row-meta-item">

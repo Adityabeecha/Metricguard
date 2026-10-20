@@ -101,3 +101,12 @@ export async function loadSummaryBreakdown(
   }
   return selected;
 }
+
+/** A group's share of the absolute difference (0–1), computed exactly; ratio totals arrive as fractions like "1/3". */
+export function groupShare(change: string | null | undefined, changeExact: string | null | undefined, absTotal: string | null | undefined): number {
+  const total = absoluteFraction(absTotal);
+  const part = absoluteFraction(changeExact ?? change);
+  if (!total?.numerator || !part) return 0;
+  const num = part.numerator * total.denominator, den = part.denominator * total.numerator;
+  return Number((num * 1_000_000n) / den) / 1_000_000;
+}

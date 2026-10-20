@@ -20,6 +20,7 @@ import { comparisonRequestKey, groupSavedCalculations } from '../guidedWorkflow'
 import { COMPARISON_KINDS, comparisonDatasetGroups, emptyCalculationSides, initialComparisonLoad, matchCountKey } from '../comparisonSelection';
 import { useRecordedBy } from '../useRecordedBy';
 import './comparisonSelection.css';
+import { SampleDatasetButton } from './FirstRun';
 
 type Side = 'baseline' | 'target';
 type SideState = { name: string; mode: 'form' | 'sql'; form: CalculationForm; sql: string; refusal: ClassifiedInvestigationError | null;
@@ -474,7 +475,9 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
         <section className="guided-card" aria-labelledby="stage-data">
           <h2 id="stage-data">Choose data</h2>
           {choices.length === 0 ? (
-            <div className="guided-explain">No datasets yet. Upload one below; it appears here once validated.</div>
+            <div className="guided-explain">No datasets yet. Upload one below, or start with the sample.
+              <div style={{ marginTop: 10 }}><SampleDatasetButton data={data} projectId={data.project?.id || ''} onReady={async id => { await refresh(); setSnapshotId(id); }} /></div>
+            </div>
           ) : (
             <>
               <div className="picker-toolbar">
@@ -597,6 +600,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                      amount_ratio: 'Each total is added up separately; a record with one blank amount still counts in the other total.',
                      margin: 'The margin skips records where either amount is blank; the bottom total still includes them.' }[sides.target.form.aggregate || 'sum']}
                   {!supportsRatios(contract) && <> {ratioUnavailableReason(contract)}</>}
+                  {supportsRatios(contract) && amounts.length <= 1 && <span className="margin-hint"> Need a margin like (revenue − cost) ÷ revenue? Upload the file again and choose <b>Several amount columns</b> so both amounts are available.</span>}
                 </span>
               </label>
               {!supportsRatios(contract) && <button type="button" className="button secondary small" onClick={() => onNavigate('data', undefined, { add: '1', return: 'start' })}>Upload with these settings</button>}

@@ -93,6 +93,17 @@ oauth_identities = Table('oauth_identities', metadata,
     Column('user_id', ForeignKey('users.id'), nullable=False))
 oauth_states = Table('oauth_states', metadata,
     Column('nonce_hash', String, primary_key=True), Column('expires_at', Float, nullable=False))
+# Workspace invitations by email: the invited address joins the workspace when it signs in.
+workspace_invites = Table('workspace_invites', metadata,
+    Column('id', String, primary_key=True), Column('project_id', ForeignKey('projects.id'), nullable=False),
+    Column('email', String, nullable=False), Column('role', String, nullable=False),
+    Column('created_by', String), Column('created_at', String, nullable=False),
+    Column('accepted_at', String), Column('accepted_user_id', String), Column('revoked_at', String))
+# In-app feedback ("Report a problem / suggest"): free text only, read by the operator in the database.
+feedback = Table('feedback', metadata,
+    Column('id', String, primary_key=True), Column('user_id', String, nullable=False),
+    Column('project_id', String), Column('page', String), Column('app_version', String),
+    Column('message', String, nullable=False), Column('created_at', String, nullable=False))
 # Beta waitlist: an email asking for an invitation. Requesting never grants access.
 access_requests = Table('access_requests', metadata,
     Column('email', String, primary_key=True), Column('created_at', String, nullable=False),
@@ -1020,9 +1031,93 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
             except IntegrityError:
                 pass  # a concurrent request recorded the same email
 
+    def record_feedback(self, user_id: str, message: str, project_id: str | None, page: str | None,
+                        app_version: str | None, per_day: int = 10) -> dict:
+        message = (message or '').strip() if isinstance(message, str) else ''
+        if not 1 <= len(message) <= 4000:
+            raise DomainError('INVALID_FEEDBACK', 'Write between 1 and 4,000 characters.')
+        since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        with self.engine.begin() as conn:
+            recent = conn.execute(select(func.count()).select_from(feedback).where(
+                feedback.c.user_id == user_id, feedback.c.created_at > since)).scalar_one()
+            if recent >= per_day:
+                raise DomainError('RATE_LIMITED', 'Thanks — you have sent 10 notes today. Please try again tomorrow.', 429)
+            item = {'id': str(uuid4()), 'user_id': user_id, 'project_id': (project_id or None) and str(project_id)[:200],
+                    'page': (page or '')[:500] or None, 'app_version': (app_version or '')[:80] or None,
+                    'message': message, 'created_at': now()}
+            conn.execute(insert(feedback).values(**item))
+        return {'id': item['id'], 'received': True}
+
     def access_request_list(self) -> list[dict]:
         with self.engine.connect() as conn:
             return [dict(r) for r in conn.execute(select(access_requests).order_by(access_requests.c.created_at)).mappings()]
+
+    def create_invite(self, project_id: str, email: str, role: str, created_by: str | None) -> dict:
+        """Invite an email to a workspace (one pending invite per address; inviting again updates the role)."""
+        email = (email or '').strip().casefold()
+        if role not in ('analyst', 'reader', 'owner'):
+            raise DomainError('INVALID_ROLE', 'Role must be analyst, reader or owner.')
+        if not re.fullmatch(r'[^@\s<>"]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,}', email):
+            raise DomainError('INVALID_EMAIL', 'Enter a valid email address.')
+        self.get_project(project_id)
+        with self.engine.begin() as conn:
+            member = conn.execute(select(project_members.c.id).join(users, users.c.id == project_members.c.user_id).where(
+                project_members.c.project_id == project_id, project_members.c.revoked_at.is_(None),
+                func.lower(users.c.email) == email)).first()
+            if member:
+                raise DomainError('ALREADY_MEMBER', 'That person is already a member of this workspace.', 409)
+            pending = conn.execute(select(workspace_invites).where(workspace_invites.c.project_id == project_id,
+                workspace_invites.c.email == email, workspace_invites.c.accepted_at.is_(None),
+                workspace_invites.c.revoked_at.is_(None))).mappings().first()
+            if pending:
+                conn.execute(update(workspace_invites).where(workspace_invites.c.id == pending['id']).values(role=role))
+                return {**dict(pending), 'role': role}
+            if conn.execute(select(func.count()).select_from(workspace_invites).where(
+                    workspace_invites.c.project_id == project_id, workspace_invites.c.accepted_at.is_(None),
+                    workspace_invites.c.revoked_at.is_(None))).scalar_one() >= 50:
+                raise DomainError('TOO_MANY_INVITES', 'This workspace has 50 pending invites. Revoke some first.', 429)
+            invite = {'id': str(uuid4()), 'project_id': project_id, 'email': email, 'role': role, 'created_by': created_by,
+                      'created_at': now(), 'accepted_at': None, 'accepted_user_id': None, 'revoked_at': None}
+            conn.execute(insert(workspace_invites).values(**invite))
+            return invite
+
+    def list_invites(self, project_id: str) -> list[dict]:
+        with self.engine.connect() as conn:
+            return [dict(r) for r in conn.execute(select(workspace_invites).where(
+                workspace_invites.c.project_id == project_id, workspace_invites.c.accepted_at.is_(None),
+                workspace_invites.c.revoked_at.is_(None)).order_by(workspace_invites.c.created_at)).mappings()]
+
+    def revoke_invite(self, project_id: str, invite_id: str) -> dict:
+        with self.engine.begin() as conn:
+            changed = conn.execute(update(workspace_invites).where(workspace_invites.c.id == invite_id,
+                workspace_invites.c.project_id == project_id, workspace_invites.c.accepted_at.is_(None),
+                workspace_invites.c.revoked_at.is_(None)).values(revoked_at=now())).rowcount
+        if not changed:
+            raise DomainError('NOT_FOUND', 'Pending invite not found.', 404)
+        return {'id': invite_id, 'revoked': True}
+
+    @staticmethod
+    def _pending_invites(conn, email: str) -> list[dict]:
+        return [dict(r) for r in conn.execute(select(workspace_invites).where(workspace_invites.c.email == email,
+            workspace_invites.c.accepted_at.is_(None), workspace_invites.c.revoked_at.is_(None))).mappings()]
+
+    @staticmethod
+    def _accept_invites(conn, user_id: str, invites: list[dict]) -> list[str]:
+        joined = []
+        for invite in invites:
+            existing = conn.execute(select(project_members).where(project_members.c.project_id == invite['project_id'],
+                project_members.c.user_id == user_id)).mappings().first()
+            if existing:
+                if existing['revoked_at'] is not None:
+                    conn.execute(update(project_members).where(project_members.c.id == existing['id']).values(
+                        role=invite['role'], revoked_at=None))
+            else:
+                conn.execute(insert(project_members).values(id=str(uuid4()), project_id=invite['project_id'],
+                    user_id=user_id, role=invite['role'], created_at=now(), revoked_at=None))
+            conn.execute(update(workspace_invites).where(workspace_invites.c.id == invite['id']).values(
+                accepted_at=now(), accepted_user_id=user_id))
+            joined.append(invite['project_id'])
+        return joined
 
     def oauth_sign_in(self, provider: str, subject: str, email: str, name: str,
                       signup_mode: str, invited: set[str]) -> tuple[dict, str]:
@@ -1038,10 +1133,12 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                                            select(users).where(func.lower(users.c.email) == email)).mappings().all()
                     if len(matches) > 1 or (matches and not matches[0]['is_active']):
                         raise DomainError('OAUTH_FAILED', 'This account cannot sign in.', 403)
+                    # A workspace invite for this verified email also lets a new person in.
+                    pending = self._pending_invites(conn, email)
                     if matches:
                         user = dict(matches[0])
                     else:
-                        if signup_mode != 'open' and email not in invited:
+                        if signup_mode != 'open' and email not in invited and not pending:
                             raise DomainError('OAUTH_WAITLIST', 'An invitation is required.', 403)
                         user = {'id': str(uuid4()), 'name': name[:160] or 'Analyst', 'email': email,
                                 'api_key_hash': hashlib.sha256(secrets.token_urlsafe(48).encode()).hexdigest(),
@@ -1060,6 +1157,9 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                             project_members.c.revoked_at.is_(None))).first()
                         if member is None:
                             raise DomainError('OAUTH_FAILED', 'Personal workspace access is unavailable.', 403)
+                    joined = self._accept_invites(conn, user['id'], pending)
+                    if joined:
+                        pid = joined[-1]  # land in the workspace they were just invited to
                 return {key: value for key, value in user.items() if key != 'api_key_hash'}, pid
             except IntegrityError:
                 if attempt == 2:

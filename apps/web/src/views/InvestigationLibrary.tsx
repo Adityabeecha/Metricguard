@@ -6,6 +6,8 @@ import {
   type LibraryItem, type LibraryStatus,
 } from '../investigationLibrary';
 import { groupDigits, resultDisplayValue, resultUnit, valueWithUnit } from '../resultSummary';
+import { FirstRunGuide } from './FirstRun';
+import { ItemActions } from './ItemActions';
 
 type Props = {
   data: Bootstrap;
@@ -15,12 +17,16 @@ type Props = {
   onAddData?: () => void;
   onOpen: (item: LibraryItem) => void;
   onOpenRun: (run: Run) => void;
+  /** The sample dataset is ready: open New comparison with it selected. */
+  onSampleReady?: (snapshotId: string) => void;
+  /** Reload the workspace after a case is renamed or deleted. */
+  onChanged?: () => Promise<unknown>;
 };
 
 const STATUS_ORDER: LibraryStatus[] = ['saved', 'draft', 'running', 'refused'];
 
 /** Cases: what still needs a conclusion, then every case in the workspace. */
-export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, onOpen, onOpenRun }: Props) {
+export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, onOpen, onOpenRun, onSampleReady, onChanged }: Props) {
   const [drafts, setDrafts] = useState<InvestigationDraft[]>(data.investigation_drafts || []);
   const [draftProblem, setDraftProblem] = useState('');
   const [query, setQuery] = useState('');
@@ -64,6 +70,8 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
           <button className="button primary" onClick={onStart}><Plus size={16} /> New comparison</button>
         </div>
       </div>
+
+      {onAddData && onSampleReady && <FirstRunGuide data={data} projectId={workspaceId} onAddData={onAddData} onCompare={onStart} onSampleReady={onSampleReady} />}
 
       {(listed.length > 0 || hidden.length > 0) && (
         <section className="attention" aria-labelledby="attention-title">
@@ -131,9 +139,11 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
             <FolderOpen size={28} style={{ color: 'var(--kraft)' }} />
             <h2 style={{ fontSize: 16 }}>{items.length ? 'No cases match' : 'No cases yet'}</h2>
             <p>{items.length ? 'Try another search or status.'
+              : data.snapshots.length === 0 && onAddData && onSampleReady ? 'Your cases will appear here. Follow the three steps above to make the first one.'
               : data.snapshots.length === 0 && onAddData ? 'Start by adding the data to compare: a CSV, Parquet or Excel file, two connected tables, or a warehouse table. Then compare two calculations of a metric; the result becomes a case you can seal and replay.'
               : 'Compare two calculations of a metric; the result becomes a case you can seal and replay.'}</p>
             {items.length ? <button className="button secondary" onClick={() => { setQuery(''); setStatus('all'); }}>Show all cases</button>
+              : data.snapshots.length === 0 && onAddData && onSampleReady ? null
               : data.snapshots.length === 0 && onAddData ? <button className="button primary" onClick={onAddData}><Plus size={15} /> Add data</button>
               : <button className="button primary" onClick={onStart}><Plus size={15} /> New comparison</button>}
           </div>
@@ -141,7 +151,7 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
           <div className="table-scroll">
             <table className="inv-landing-table cases-table">
               <caption className="sr-only">Cases</caption>
-              <thead><tr><th>Case</th><th>Name</th><th className="c-data">Dataset</th><th className="change-cell">Change</th><th>Status</th><th>Updated</th></tr></thead>
+              <thead><tr><th>Case</th><th>Name</th><th className="c-data">Dataset</th><th className="change-cell">Change</th><th>Status</th><th>Updated</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {visible.map(item => (
                   <tr key={`${item.source}:${item.id}`} onClick={() => onOpen(item)}>
@@ -163,6 +173,12 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
                       {item.problem && <div className="disabled-reason">{item.problem}</div>}
                     </td>
                     <td className="mono-cell c-updated" style={{ whiteSpace: 'nowrap' }}>{item.updatedAt ? new Date(item.updatedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</td>
+                    <td className="c-actions">{item.source === 'saved' && onChanged && (
+                      <ItemActions name={item.title} kind="case"
+                        deleteNote="The comparison and its evidence stay; only this saved case is removed."
+                        onRename={async title => { await api.renameInvestigation(item.id, title); await onChanged(); }}
+                        onDelete={async () => { await api.deleteInvestigation(item.id); await onChanged(); }} />
+                    )}</td>
                   </tr>
                 ))}
               </tbody>

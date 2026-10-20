@@ -157,3 +157,8 @@
 .bridge-list li:not(:has(button)) > span { display: inline; padding: 0; width: auto; }
 .bridge-caption { flex-wrap: wrap; }
 .bridge-caption .mg-stamp { margin-right: 4px; }
+
+/* Ledger: record search and the 'Where it sits' group filter. */
+.ledger-search input { width: min(260px, 100%); font: 500 13px var(--font-mono); }
+.ledger-group { margin: 0; font-size: 13px; color: var(--text-2); }
+.where-table .group-pick { font: inherit; font-weight: 600; text-align: left; }

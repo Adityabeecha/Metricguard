@@ -6,6 +6,7 @@ import { Terminal } from 'lucide-react';
 import { ThemeSwitch } from '../ThemeSwitch';
 import { UsagePanel } from './UsagePanel';
 import { AccountSettings } from './AccountSettings';
+import { MembersPanel } from './MembersPanel';
 
 interface SettingsViewProps {
   data: Bootstrap;
@@ -87,6 +88,7 @@ export function SettingsView({
         >
           Integrations
         </button>
+        <button type="button" className={`section-tab-button ${currentTab === 'members' ? 'active' : ''}`} onClick={() => handleTabClick('members')}>Members</button>
         <button type="button" className={`section-tab-button ${currentTab === 'usage' ? 'active' : ''}`} onClick={() => handleTabClick('usage')}>Usage</button>
         {developerMode && (
           <button
@@ -100,6 +102,7 @@ export function SettingsView({
       </div>
 
       {currentTab === 'usage' && <UsagePanel workspaceId={data.project.id} />}
+      {currentTab === 'members' && <MembersPanel workspaceId={data.project.id} workspaceName={data.project.name} />}
       {currentTab === 'system' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           <AccountSettings />

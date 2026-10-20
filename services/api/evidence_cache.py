@@ -348,6 +348,31 @@ def _group_value(row: dict, context: dict[str, dict] | None, column: str, bucket
     return value
 
 
+def group_page(path: Path, key: tuple, verify_all: Callable[[], Any], column: str, context: dict[str, dict] | None,
+               value, offset: int, limit: int, *, no_match: bool = False, bucket: str | None = None,
+               query: str = '') -> tuple[list[dict], int]:
+    """Changed records whose ``column`` equals ``value`` (one row of the breakdown), largest change first."""
+    entry = _fresh(Path(path), key, verify_all)
+    wanted = NO_MATCH if no_match else value
+    query = query.strip().lower()
+    view_key = ('group', column, json.dumps(wanted), bucket, query, id(context))
+    if view_key not in entry.views:
+        matches = []
+        for number, row in enumerate(iter_rows(path, key, verify_all)):
+            magnitude = _magnitude(row.get('delta'))
+            if not magnitude or _group_value(row, context, column, bucket) != wanted:
+                continue
+            if query and query not in record_key(row).lower():
+                continue
+            matches.append((-magnitude, number, row))
+        matches.sort(key=lambda item: (item[0], item[1]))
+        if len(entry.views) > 8:
+            entry.views.clear()
+        entry.views[view_key] = [row for _, _, row in matches]  # type: ignore[assignment]
+    rows = entry.views[view_key]  # type: ignore[assignment]
+    return rows[offset:offset + limit], len(rows)
+
+
 def _public_group(group: dict) -> dict:
     if group['value'] == NO_MATCH:
         return {**group, 'value': None, 'no_match': True}

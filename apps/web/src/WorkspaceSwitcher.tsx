@@ -151,7 +151,7 @@ export function WorkspaceSwitcher({
                       {isDefaultWs && <span className="demo-chip-small">Default</span>}
                       {ws.role && <span className="demo-chip-small">{ws.role}</span>}
                     </div>
-                    <small>{ws.id}</small>
+                    {workspaceHint(ws.id) && <small>{workspaceHint(ws.id)}</small>}
                   </div>
                   {selected && <Check size={15} className="selected-check" />}
                 </button>
@@ -248,4 +248,11 @@ export function WorkspaceSwitcher({
       )}
     </div>
   );
+}
+
+/** A short line under a workspace name: never a raw generated id. */
+export function workspaceHint(id: string): string {
+  if (id.startsWith('personal-')) return 'Personal workspace';
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return '';
+  return id;
 }

@@ -1,0 +1,28 @@
+/* Row menu: rename / delete a dataset or case. */
+.item-actions { position: relative; display: inline-flex; }
+.item-actions-trigger { display: inline-grid; place-items: center; width: 28px; height: 28px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.item-actions-trigger:hover, .item-actions-trigger[aria-expanded="true"] { border-color: var(--line-strong); color: var(--ink); }
+.item-actions-pop { position: fixed; z-index: 60; display: grid; gap: 8px; min-width: 180px; width: max-content; max-width: min(320px, 86vw); padding: 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow-2); text-align: left; font-size: 13px; color: var(--ink); }
+.item-actions-pop[role="menu"] { padding: 4px; gap: 0; }
+.item-actions-pop[role="menu"] button { padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); text-align: left; font: inherit; cursor: pointer; }
+.item-actions-pop[role="menu"] button:hover, .item-actions-pop[role="menu"] button:focus-visible { background: var(--panel-2); }
+.item-actions-pop[role="menu"] .danger { color: var(--danger); }
+.item-actions-pop p { margin: 0; }
+.item-actions-pop label { display: grid; gap: 4px; font-weight: 600; font-size: 12px; }
+.item-actions-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.cases-table .c-actions { width: 40px; text-align: right; }
+.beta-tag { display: inline-block; margin-left: 6px; padding: 0 5px; border: 1px solid var(--line-strong); border-radius: 3px; color: var(--muted); font: 600 10px/16px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; vertical-align: 2px; }
+
+/* Settings → Members */
+.invite-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.invite-form label { display: grid; gap: 4px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.invite-form input { min-width: min(280px, 100%); }
+.members-sub { margin: 0 0 6px; font-size: 13px; }
+.invite-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.invite-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.invite-actions { display: inline-flex; gap: 14px; }
+.share-note { font-size: 12px; color: var(--text-2); }
+.plain-fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.changes-start { text-align: left; margin: 0 auto 16px; padding-left: 20px; display: grid; gap: 8px; max-width: 52ch; font-size: 14px; color: var(--text-2); }
+.changes-start a { color: var(--link); }

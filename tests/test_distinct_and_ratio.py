@@ -461,6 +461,14 @@ def test_http_distinct_and_ratio_runs_breakdowns_and_replay(tmp_path):
         assert all('effect' in row for row in page['items'])
         by_segment = client.get(f"/api/v1/comparisons/{ratio['id']}/evidence-breakdown?column=segment").json()
         assert by_segment['ratio'] and by_segment['total_change_exact'] == ratio['result']['ratio']['gap_exact']
+        # Click-through: one group's records, the same records the breakdown counted as changed.
+        for group in by_segment['groups']:
+            listed = client.get(f"/api/v1/comparisons/{ratio['id']}/evidence-group",
+                                params={'column': 'segment', 'value': json.dumps(group['value'])}).json()
+            assert listed['total'] == group['changed_records']
+            assert all('effect' in row for row in listed['items'])
+        assert client.get(f"/api/v1/comparisons/{ratio['id']}/evidence-group", params={'column': 'nope', 'value': '"x"'}).status_code == 422
+        assert client.get(f"/api/v1/comparisons/{ratio['id']}/evidence-group", params={'column': 'segment', 'value': '{bad'}).status_code == 422
         csv_text = client.get(f"/api/v1/comparisons/{ratio['id']}/evidence.csv").text
         assert csv_text.splitlines()[0].startswith('record,current_numerator_input,current_denominator_input')
         for run_id in (ratio['id'], distinct['id']):

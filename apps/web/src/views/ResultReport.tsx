@@ -6,10 +6,10 @@ import { RelationalEvidencePanel } from './RelationalEvidencePanel';
 import { caseNumber } from '../investigationLibrary';
 import { decimalSum } from '../exactDecimal';
 import { Bridge } from './evidence/Bridge';
-import { Ledger } from './evidence/Ledger';
+import { Ledger, type LedgerGroup } from './evidence/Ledger';
 import { categoryLabel, type CategoryKey } from './evidence/categories';
 import { HashPrint } from './evidence/HashPrint';
-import { preferredBreakdownColumn } from './evidence/breakdownSelection';
+import { groupShare, preferredBreakdownColumn } from './evidence/breakdownSelection';
 
 const PAGE = 100;
 
@@ -174,7 +174,7 @@ function EntityRecordsButton({ runId, entity }: { runId: string; entity: string 
 }
 
 /** Exact split of the change by one filter column, largest first. */
-function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads }: { runId: string; unit: string; percent?: boolean; onColumns: (c: string[]) => void; preferred?: string[] ; loads?: boolean }) {
+function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, onPickGroup }: { runId: string; unit: string; percent?: boolean; onColumns: (c: string[]) => void; preferred?: string[] ; loads?: boolean; onPickGroup?: (group: LedgerGroup) => void }) {
   const [column, setColumn] = useState('');
   const [data, setData] = useState<EvidenceBreakdown | null>(null);
   const [busy, setBusy] = useState(false);
@@ -211,15 +211,15 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads }: 
     g.no_match ? `No matching ${data.column?.split('.')[0] === 'dimension' ? 'lookup' : data.column?.split('.')[0]} row` : showValue(g.value);
   const shown = (v: string | null | undefined) => v == null ? '—' : percent ? groupDigits(percentOf(v)) : groupDigits(v);
   const changeShown = (v: string | null | undefined) => v == null ? '—' : minus(percent ? `${groupDigits(percentOf(v))} pts` : `${groupDigits(v)}${unit ? ` ${unit}` : ''}`);
-  const absTotal = Math.abs(Number(data.abs_change_total ?? 0));
   const recordTotal = data.total_records || 0;
   const groups = [...(data.groups || [])];
   const moved = groups.filter(g => g.change != null && /[1-9]/.test(g.change));
   const still = groups.filter(g => !(g.change != null && /[1-9]/.test(g.change)));
   type Line = { key: string; label: string; change: string | null | undefined; exact?: string | null; records: number; changed: number;
-    current?: string | null; proposed?: string | null; other?: boolean };
+    current?: string | null; proposed?: string | null; other?: boolean; value?: unknown; noMatch?: boolean };
   const lines: Line[] = [...moved, ...still].map(g => ({ key: `${g.no_match ? 'no-match' : ''}${showValue(g.value)}`, label: groupLabel(g),
-    change: g.change, exact: g.change_exact, records: g.records, changed: g.changed_records, current: g.current, proposed: g.proposed }));
+    change: g.change, exact: g.change_exact, records: g.records, changed: g.changed_records, current: g.current, proposed: g.proposed,
+    value: g.value, noMatch: g.no_match }));
   if ((data.other_groups || 0) > 0) {
     lines.push({ key: '__other', label: `Other (${groupDigits(String(data.other_groups))} values)`, change: data.other_change,
       records: data.other_records ?? 0, changed: data.other_changed_records ?? 0, other: true });
@@ -249,13 +249,18 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads }: 
         </tr></thead>
         <tbody>
           {lines.map(line => {
-            const diffShare = absTotal ? Math.abs(Number(line.change || 0)) / absTotal : 0;
+            const diffShare = groupShare(line.change, line.exact, data.abs_change_total);
             const recordShare = recordTotal ? line.records / recordTotal : 0;
             const concentrated = !line.other && diffShare >= 0.1 && diffShare >= 2 * recordShare;
             const zero = !(line.change != null && /[1-9]/.test(line.change));
             return (
               <tr key={line.key} className={zero ? 'muted' : line.other ? 'other' : undefined}>
-                <th scope="row" data-label={columnLabel(data.column || '')}>{line.label}{concentrated && <span className="concentrated">Concentrated</span>}</th>
+                <th scope="row" data-label={columnLabel(data.column || '')}>
+                  {onPickGroup && !line.other && line.changed > 0
+                    ? <button type="button" className="link-button group-pick" title="Show these records" onClick={() => onPickGroup({ column: data.column || '', columnLabel: columnLabel(data.column || ''),
+                        value: line.value ?? null, noMatch: line.noMatch, label: line.label, totalText: changeShown(line.change) })}>{line.label}</button>
+                    : line.label}
+                  {concentrated && <span className="concentrated">Concentrated</span>}</th>
                 <td className="num change" data-label="Change" title={line.exact ? `Exact: ${line.exact}` : undefined}>{changeShown(line.change)}</td>
                 <td className="shares" data-label="Share">
                   <span className="share-track" aria-hidden="true">
@@ -374,6 +379,8 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   const [shown, setShown] = useState<string[]>([]);
   const [csvProblem, setCsvProblem] = useState('');
   const [ledgerCategory, setLedgerCategory] = useState<CategoryKey | ''>('');
+  const [ledgerGroup, setLedgerGroup] = useState<LedgerGroup | null>(null);
+  const pickGroup = (group: LedgerGroup) => { setLedgerGroup(group); setLedgerCategory(''); setTab('records'); };
   const [registerOpen, setRegisterOpen] = useState(false);
   const records = useRecordPage(run.result && !expired ? run.id : '', { offset, changedOnly, q, order, withContext: shown.length > 0 });
   const pages = Math.max(1, Math.ceil(records.total / PAGE));
@@ -450,7 +457,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   const balanceText = ratio
     ? <>Record effects add up exactly to the change in the ratio ({fmt(result.delta_target_minus_baseline)}){balanced ? <> · <b>Balanced ✓</b></> : null}</>
     : <>Listed changes {fmt(listedChange)} + unexplained {fmt(residual)} = {fmt(result.delta_target_minus_baseline)}{balanced ? <> · <b>Balanced ✓</b></> : null}</>;
-  const pickCategory = (key: string) => { setLedgerCategory(key as CategoryKey); setTab('records'); };
+  const pickCategory = (key: string) => { setLedgerGroup(null); setLedgerCategory(key as CategoryKey); setTab('records'); };
 
   return (
     <div className="result-summary">
@@ -515,7 +522,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
       {tab === 'breakdown' && kind === 'count_distinct' && result.distinct && <DistinctPanel distinct={result.distinct} />}
 
       {/* Kept mounted so its column list feeds the record table's "Show columns"; hidden outside its tab. */}
-      {run.result && !expired && <div hidden={tab !== 'breakdown'}><Breakdown runId={run.id} unit={unit} percent={percent} onColumns={setColumns} preferred={breakdownColumns} loads={loads} /></div>}
+      {run.result && !expired && <div hidden={tab !== 'breakdown'}><Breakdown runId={run.id} unit={unit} percent={percent} onColumns={setColumns} preferred={breakdownColumns} loads={loads} onPickGroup={pickGroup} /></div>}
 
       {expired && (tab === 'records' || tab === 'breakdown') && <p className="disabled-reason" role="status">Detailed records expired — rerun to see them</p>}
       {tab === 'records' && summaryLoading && (
@@ -526,7 +533,8 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
       )}
 
       {tab === 'records' && categories && categories.length > 0 && !expired && (
-        <Ledger runId={run.id} categories={categories} category={ledgerCategory} onCategory={setLedgerCategory} labels={labels}
+        <Ledger runId={run.id} categories={categories} category={ledgerCategory} onCategory={key => { setLedgerGroup(null); setLedgerCategory(key); }} labels={labels}
+          group={ledgerGroup} onClearGroup={() => setLedgerGroup(null)}
           keyHeader={keyHeader} side={sideCell} change={changeText} additive={!ratio} totalText={ledgerTotal}
           balanceText={balanceText} balanced={balanced} unchanged={unchanged}
           unchangedNoun={kind === 'count_distinct' ? `${keyHeader} values` : 'records'}

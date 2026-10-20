@@ -1,6 +1,7 @@
 import { resultUnit } from '../resultSummary';
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Copy, Download, Link2, Pencil, RefreshCw } from 'lucide-react';
+import { ArrowLeft, BookmarkCheck, Copy, Download, Link2, Pencil, RefreshCw } from 'lucide-react';
+import { SaveAsMetric } from './SaveAsMetric';
 import { api, ApiError, versionName, type Bootstrap, type InvestigationDetail, type Run } from '../api';
 import { caseNumber, KIND_LABEL } from '../investigationLibrary';
 import { ResultReport } from './ResultReport';
@@ -27,9 +28,12 @@ type Props = {
   /** The id is not a saved investigation (e.g. a draft or a bare run): hand over to the editor. */
   onNotSaved: () => void;
   refresh: () => Promise<Bootstrap | null>;
+  /** Open a metric (after "Save as metric"). */
+  onOpenMetric?: (metricId: string) => void;
 };
 
-export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, refresh }: Props) {
+export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, refresh, onOpenMetric }: Props) {
+  const [savingMetric, setSavingMetric] = useState(false);
   const [detail, setDetail] = useState<InvestigationDetail | null>(null);
   const [problem, setProblem] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -38,6 +42,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
   const [replaying, setReplaying] = useState(false);
   const [custodyOpen, setCustodyOpen] = useState(false);
   const [copied, setCopied] = useState<'' | 'summary' | 'link'>('');
+  const [alone, setAlone] = useState(false);
   const copyRef = useRef<() => void>(() => undefined);
 
   // "C" copies the case summary (ignored while typing or with a modifier key).
@@ -137,6 +142,15 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
   };
   copyRef.current = () => { void copySummary(); };
 
+  // Copy the link; if nobody else is in the workspace, say so (the link only opens for members).
+  const share = async () => {
+    await copyText(link); setCopied('link');
+    try {
+      const members = await api.get<Array<{ revoked_at?: string | null }>>(`/projects/${encodeURIComponent(data.project.id)}/members`);
+      setAlone(members.filter(m => !m.revoked_at).length <= 1);
+    } catch { setAlone(false); }
+  };
+
   const startReplay = async () => {
     setReplaying(true); setReplayProblem('');
     try { setReplay(await api.replayInvestigation(detail.id)); }
@@ -156,9 +170,11 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
           <button className="button secondary small" onClick={() => void copySummary()} title="Copy a summary for Slack, Jira or a pull request (shortcut: C)">
             <Copy size={15} /> Copy summary
           </button>
-          <button className="button secondary small" onClick={() => void copyText(link).then(() => setCopied('link'))}><Link2 size={15} /> Copy link</button>
+          <button className="button secondary small" title="Copy a link to this case for workspace members" onClick={() => void share()}><Link2 size={15} /> Share</button>
           <button className="button secondary small" onClick={() => onEdit(relational)}><Pencil size={15} /> Edit comparison</button>
+          {!relational && detail.run.result && <button className="button secondary small" onClick={() => setSavingMetric(true)} title="Make one of these calculations the approved definition of a metric"><BookmarkCheck size={15} /> Save as metric</button>}
           {copied && <span className="copied-note" role="status">{copied === 'summary' ? 'Summary copied' : 'Link copied'}</span>}
+          {alone && <span className="share-note" role="status">Only you can open this link. <a href={`/w/${encodeURIComponent(data.project.id)}/settings?tab=members`}>Invite a teammate</a></span>}
         </div>
       </div>
 
@@ -184,6 +200,9 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
           <button className="button secondary small" onClick={() => void api.download(`/comparisons/${encodeURIComponent(detail.run.id)}/export?format=json`, `metricguard-${detail.run.id}.json`).catch(e => setReplayProblem(e instanceof Error ? e.message : String(e)))}>
             <Download size={14} /> JSON report
           </button>
+          <button className="button secondary small" onClick={() => void api.download(`/comparisons/${encodeURIComponent(detail.run.id)}/evidence.csv`, `metricguard-${detail.run.id}-records.csv`).catch(e => setReplayProblem(e instanceof Error ? e.message : String(e)))}>
+            <Download size={14} /> Records (CSV)
+          </button>
         </div>
       </section>
 
@@ -205,6 +224,8 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
           </p>
         )}
       </section>
+      {savingMetric && <SaveAsMetric data={data} detail={detail} onClose={() => setSavingMetric(false)}
+        onSaved={async metricId => { setSavingMetric(false); await refresh(); onOpenMetric?.(metricId); }} />}
       {custodyOpen && (
         <CustodyLog detail={detail} replays={replays} live={replay} replaying={replaying} blocker={replayBlocker}
           onReplay={() => void startReplay()} onClose={() => setCustodyOpen(false)} />

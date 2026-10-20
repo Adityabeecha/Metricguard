@@ -172,3 +172,14 @@ test('only a saved case may claim its evidence is sealed', () => {
   assert.equal(evidenceSealLabel(true,null),'SEALED');
   assert.equal(evidenceSealLabel(true,'intact'),'Seal intact');
 });
+
+test('group shares work for ratio fractions and plain decimals', async () => {
+  const { groupShare } = await import('./views/evidence/breakdownSelection.ts');
+  // Ratio comparison: effects as exact fractions, total as a fraction.
+  assert.equal(groupShare('0.010000', '1/100', '1/50'), 0.5);
+  assert.equal(groupShare('-0.003333', '-1/300', '1/50'), 0.166666);
+  assert.equal(groupShare('-200.00', null, '340.00').toFixed(4), '0.5882');
+  assert.equal(groupShare('0.00', null, '340.00'), 0);
+  assert.equal(groupShare(null, null, '340.00'), 0);
+  assert.equal(groupShare('5', null, null), 0);
+});

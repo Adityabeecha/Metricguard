@@ -746,6 +746,36 @@ def create_app(database_url=None, data_dir=None, mode=None):
         verify_object_access(store, item, auth, allowed_roles=('owner', 'analyst', 'reader'))
         return public_snapshot(item)
 
+    @app.patch('/api/v1/snapshots/{ident}')
+    async def rename_snapshot_route(ident: str, request: Request):
+        auth = get_auth_context(request, store)
+        verify_object_access(store, store.snapshot(ident), auth, allowed_roles=('owner', 'analyst'))
+        body = await request.json()
+        from .item_management import rename_snapshot
+        return public_snapshot(rename_snapshot(store, ident, body.get('name') if isinstance(body, dict) else None))
+
+    @app.delete('/api/v1/snapshots/{ident}')
+    def delete_snapshot_route(ident: str, request: Request):
+        auth = get_auth_context(request, store)
+        verify_object_access(store, store.snapshot(ident), auth, allowed_roles=('owner', 'analyst'))
+        from .item_management import delete_snapshot
+        return delete_snapshot(store, ident, data_dir)
+
+    @app.patch('/api/v1/investigations/{ident}')
+    async def rename_investigation_route(ident: str, request: Request):
+        auth = get_auth_context(request, store)
+        verify_object_access(store, store.investigation(ident), auth, allowed_roles=('owner', 'analyst'))
+        body = await request.json()
+        from .item_management import rename_investigation
+        return rename_investigation(store, ident, body.get('title') if isinstance(body, dict) else None)
+
+    @app.delete('/api/v1/investigations/{ident}')
+    def delete_investigation_route(ident: str, request: Request):
+        auth = get_auth_context(request, store)
+        verify_object_access(store, store.investigation(ident), auth, allowed_roles=('owner', 'analyst'))
+        from .item_management import delete_investigation
+        return delete_investigation(store, ident)
+
     def _flat_snapshot_for_lookup(ident, request):
         auth = get_auth_context(request, store)
         item = store.snapshot(ident)
@@ -1630,6 +1660,41 @@ def create_app(database_url=None, data_dir=None, mode=None):
         except (ValueError, KeyError, TypeError, OSError) as error:
             raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
 
+    @app.get('/api/v1/comparisons/{ident}/evidence-group')
+    def evidence_group(ident: str, request: Request, column: str = Query(..., min_length=1, max_length=200),
+                       value: str = Query('null', max_length=2000), no_match: bool = Query(False),
+                       q: str = Query('', max_length=256), offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100)):
+        """The changed records of one breakdown group (click-through from 'Where it sits'), largest first.
+
+        ``value`` is the group's value as JSON, exactly as the breakdown returned it (null for blank).
+        """
+        auth = get_auth_context(request, store)
+        run = store.get_run(ident)
+        verify_shared_access(request, store, auth, run)
+        verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        if expired_details(run):
+            return expired_details(run)
+        result = run.get('result') or {}
+        if not result.get('evidence_artifact'):
+            raise DomainError('EVIDENCE_UNAVAILABLE', 'This run has no stored record evidence.')
+        context, columns = run_context(run)
+        if column not in columns:
+            raise DomainError('INVALID_COLUMN', f"'{column}' is not a filter column of this dataset.")
+        try:
+            wanted = json.loads(value)
+        except ValueError as error:
+            raise DomainError('INVALID_VALUE', 'The group value is not valid.') from error
+        if isinstance(wanted, (dict, list)):
+            raise DomainError('INVALID_VALUE', 'The group value is not valid.')
+        path, key, verify_all = evidence_access(run)
+        bucket = 'day' if column_type(run, column) == 'timestamp' else None
+        try:
+            items, total = evidence_cache.group_page(path, key, verify_all, column, context, wanted, offset, limit,
+                                                     no_match=no_match, bucket=bucket, query=q)
+        except (ValueError, KeyError, TypeError, OSError) as error:
+            raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
+        return {'items': evidence_cache.annotate_ratio(items, result.get('ratio')), 'total': total, 'offset': offset, 'limit': limit}
+
     @app.get('/api/v1/comparisons/{ident}/entity-records')
     def entity_records(ident: str, request: Request, entity: str = Query(..., max_length=256),
                        offset: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=500)):
@@ -2047,6 +2112,39 @@ def create_app(database_url=None, data_dir=None, mode=None):
         auth = get_auth_context(request, store)
         verify_project_access(store, pid, auth, allowed_roles=('owner', 'analyst', 'reader'), require_verified=True)
         return store.list_project_members(pid)
+
+    @app.post('/api/v1/feedback', status_code=201)
+    async def send_feedback(request: Request):
+        """A note from a signed-in person: a problem or a suggestion, with the page it was sent from."""
+        auth = get_auth_context(request, store)
+        if auth.get('is_unverified') or not auth.get('user'):
+            raise DomainError('UNAUTHORIZED', 'Sign in to send feedback.', 401)
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise DomainError('INVALID_FEEDBACK', 'Write between 1 and 4,000 characters.')
+        return store.record_feedback(auth['user']['id'], body.get('message'), body.get('project_id'),
+                                     body.get('page'), body.get('app_version'))
+
+    @app.get('/api/v1/projects/{pid}/invites')
+    def list_invites_route(pid: str, request: Request):
+        auth = get_auth_context(request, store)
+        verify_project_access(store, pid, auth, allowed_roles=('owner',), require_verified=True)
+        return {'items': store.list_invites(pid)}
+
+    @app.post('/api/v1/projects/{pid}/invites', status_code=201)
+    async def create_invite_route(pid: str, request: Request):
+        auth = get_auth_context(request, store)
+        verify_project_access(store, pid, auth, allowed_roles=('owner',), require_verified=True)
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise DomainError('INVALID_EMAIL', 'Enter a valid email address.')
+        return store.create_invite(pid, body.get('email'), body.get('role') or 'analyst', auth['user']['id'])
+
+    @app.delete('/api/v1/projects/{pid}/invites/{invite_id}')
+    def revoke_invite_route(pid: str, invite_id: str, request: Request):
+        auth = get_auth_context(request, store)
+        verify_project_access(store, pid, auth, allowed_roles=('owner',), require_verified=True)
+        return store.revoke_invite(pid, invite_id)
 
     # -----------------------------------------------------------------------
     # V3 Reviews & Decisions

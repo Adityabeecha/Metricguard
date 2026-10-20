@@ -6,6 +6,7 @@ import {
   FilePlus2,
   FolderOpen,
   Menu,
+  MessageSquare,
   Settings,
   X,
 } from 'lucide-react';
@@ -36,6 +37,7 @@ import { shouldRedirectToSignIn } from './authFlow';
 import { sitePage } from './router';
 import { PublicPages } from './PublicPages';
 import { useDialog } from './useDialog';
+import { FeedbackDialog } from './views/FeedbackDialog';
 
 
 const NAV_ITEMS: Array<{ id: Page; label: string; icon: React.ReactNode }> = [
@@ -60,6 +62,7 @@ export function App() {
 }
 
 function WorkspaceApp() {
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [route, setRoute] = useState<RouteState>(() => {
     const initial = parseRoute(window.location.pathname, window.location.search);
     api.setActiveWorkspace(initial.workspaceId);
@@ -368,12 +371,18 @@ function WorkspaceApp() {
             <span>Settings</span>
           </button>
 
+          {authRequired && <button type="button" className="nav-item" onClick={() => setFeedbackOpen(true)}>
+            <MessageSquare size={17} />
+            <span>Feedback</span>
+          </button>}
+
           <div className={`status-indicator ${runnerReady ? 'ready' : 'warning'}`} role="status">
             <span className="status-dot" />
             <span>{runnerReady ? 'Engine ready' : 'Comparison engine not running'}</span>
           </div>
         </div>
       </aside>
+      {feedbackOpen && <FeedbackDialog workspaceId={route.workspaceId} onClose={() => setFeedbackOpen(false)} />}
 
       {/* Main Content */}
       <main className="main" id="main-content">
@@ -487,6 +496,8 @@ function WorkspaceApp() {
                   workspaceId={route.workspaceId}
                   onStart={() => navigate({ page: 'start' })}
                   onAddData={() => navigate({ page: 'data', query: { add: '1', return: 'start' } })}
+                  onSampleReady={async id => { await refresh(); startWith({ dataset: id }); }}
+                  onChanged={refresh}
                   onOpenRun={openRun}
                   onOpen={(item) => item.source === 'saved'
                     ? navigate({ page: 'investigations', query: { investigationId: item.id } })
@@ -501,6 +512,7 @@ function WorkspaceApp() {
                   refresh={refresh}
                   onBack={() => navigate({ page: 'investigations' })}
                   onEdit={() => startWith({ from: invId! })}
+                  onOpenMetric={metricId => navigate({ page: 'metrics', query: { metricId } })}
                   onNotSaved={() => {
                     // Drafts and bare runs open in the guided flow instead of the report.
                     const url = buildRouteUrl(route.workspaceId, 'start', undefined, { from: invId! });

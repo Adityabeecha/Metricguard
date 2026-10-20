@@ -1147,19 +1147,24 @@ export function ChangesView({
           <div className="empty-badge-icon">
             <GitCompareArrows size={26} />
           </div>
-          <h2>No changes analyzed yet</h2>
+          <h2>No metric changes checked yet</h2>
           <p>
-            Compare two revision manifests or SQL definitions against a fixed reference snapshot to observe metric impact.
+            This page shows how a change to your metric definitions moves the numbers, before you ship it.
+            There are two ways to start:
           </p>
+          <ol className="changes-start">
+            <li><b>Compare two versions of a saved metric.</b> Save a case as a metric, then compare its versions from <a href={`/w/${encodeURIComponent(data.project.id)}/metrics`}>Metrics</a>. No other tools needed.</li>
+            <li><b>Check a dbt or Power BI change.</b> Import two revisions in <a href={`/w/${encodeURIComponent(data.project.id)}/settings?tab=integrations`}>Settings → Integrations</a>, then run the check here.</li>
+          </ol>
           <button className="button primary" onClick={handleOpenRunModal}>
-            <Play size={15} /> Run metric diff
+            <Play size={15} /> Check a dbt or Power BI change
           </button>
         </section>
       ) : (
         <section className="panel" style={{ marginBottom: '24px' }}>
           <div className="panel-header">
             <h2>Recent analyzed changes</h2>
-            <p>Orchestrated revision-level impact comparisons evaluated on frozen snapshots.</p>
+            <p>How each definition change moved the metric, checked on frozen data.</p>
           </div>
 
           {filteredDiffs.length > 0 ? (

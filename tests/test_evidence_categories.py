@@ -122,3 +122,22 @@ def test_api_categories_reconcile_with_the_result(tmp_path):
                           params={'category': first['key'], 'limit': 100}).json()
         assert page['total'] == first['records']
         assert client.get(f"/api/v1/comparisons/{queued['id']}/evidence", params={'category': 'bogus'}).status_code == 422
+
+
+def test_group_page_lists_one_breakdown_group_largest_first(tmp_path, index_kind):
+    path, key = artifact(tmp_path, ROWS)
+    context = {'A': {'region': 'north'}, 'B': {'region': 'north'}, 'C': {'region': 'south'},
+               'D': {'region': None}, 'E': {'region': 'north'}, 'F': {'region': 'north'}}
+    rows, total = evidence_cache.group_page(path, key, lambda: None, 'region', context, 'north', 0, 10)
+    # B and F have no change, so only A and E are listed, the larger change first.
+    assert [r['order_id'] for r in rows] == ['A', 'E'] and total == 2
+    split = evidence_cache.breakdown(path, key, lambda: None, 'region', context)
+    north = next(g for g in split['groups'] if g['value'] == 'north')
+    assert north['changed_records'] == total
+    assert Decimal(north['change']) == sum(Decimal(r['delta']) for r in rows)
+    blank, count = evidence_cache.group_page(path, key, lambda: None, 'region', context, None, 0, 10)
+    assert [r['order_id'] for r in blank] == ['D'] and count == 1
+    found, count = evidence_cache.group_page(path, key, lambda: None, 'region', context, 'north', 0, 10, query='e')
+    assert [r['order_id'] for r in found] == ['E'] and count == 1
+    page2, count = evidence_cache.group_page(path, key, lambda: None, 'region', context, 'north', 1, 1)
+    assert [r['order_id'] for r in page2] == ['E'] and count == 2

@@ -522,6 +522,7 @@ export type ColumnValues = {
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
+  del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   download: async (path:string, filename:string) => {
     const response = await apiFetch(path);
     if (!response.ok) {
@@ -768,6 +769,13 @@ export const api = {
     if (view.order === 'impact') params.set('order', 'impact');
     return request<{ items: FlatEvidence[]; total: number }>(`/comparisons/${encodeURIComponent(id)}/evidence?${params}`);
   },
+  /** Changed records of one 'Where it sits' group; `value` is the group's value exactly as the breakdown returned it. */
+  evidenceGroup: (id: string, view: { column: string; value: unknown; noMatch?: boolean; q?: string; offset: number; limit: number }) => {
+    const params = new URLSearchParams({ column: view.column, value: JSON.stringify(view.value ?? null), offset: String(view.offset), limit: String(view.limit) });
+    if (view.noMatch) params.set('no_match', 'true');
+    if (view.q?.trim()) params.set('q', view.q.trim());
+    return request<{ items: FlatEvidence[]; total: number }>(`/comparisons/${encodeURIComponent(id)}/evidence-group?${params}`);
+  },
   flatEvidence: (id: string, offset: number, limit: number) =>
     request<{ items: FlatEvidence[]; total: number }>(
       `/comparisons/${encodeURIComponent(id)}/evidence?offset=${offset}&limit=${limit}`
@@ -885,6 +893,14 @@ export const api = {
       }
     );
   },
+  renameSnapshot: (id: string, name: string) =>
+    request<Snapshot>(`/snapshots/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }),
+  deleteSnapshot: (id: string) =>
+    request<{ deleted: boolean; id: string; comparisons_removed: number }>(`/snapshots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  renameInvestigation: (id: string, title: string) =>
+    request<Investigation>(`/investigations/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) }),
+  deleteInvestigation: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/investigations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   deleteInvestigationDraft: (pid: string | undefined, draftId: string) => {
     const targetPid = pid || activeWorkspaceId;
     return request<{ deleted: boolean; id: string }>(

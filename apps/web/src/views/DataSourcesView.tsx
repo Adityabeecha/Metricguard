@@ -26,6 +26,9 @@ import { WarehouseSource } from './WarehouseSource';
 import { humanizeError, type HumanizedError } from '../errorUtils';
 import { ROLE_LABEL, summarizeDataset } from '../datasetSummary';
 import { useDialog } from '../useDialog';
+import { SampleDatasetButton } from './FirstRun';
+import { ItemActions } from './ItemActions';
+import { isSampleDataset } from '../sampleDataset';
 import { DEFAULT_COMPOUND_FILTERS, defaultFlatImport, uploadLimitText, previewRowLimitMessage, canConfirmUpload, loadLabelAfterFilePick, inheritedUnit, datasetUsageLabel, type UploadLimits, createUploadPreviewQueue, suggestUploadUnit, loadCompatibilityProblem, completeDatasetUpload } from '../onboardingPolicy';
 
 interface DataSourcesViewProps {
@@ -684,9 +687,12 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
           <p>
             Upload a file. MetricGuard checks every row and freezes a copy, so comparisons always use the same data.
           </p>
-          <button className="button primary" onClick={openAddModal}>
-            <Plus size={16} /> Add dataset <ArrowRight size={16} />
-          </button>
+          <div className="empty-actions">
+            <button className="button primary" onClick={openAddModal}>
+              <Plus size={16} /> Add dataset <ArrowRight size={16} />
+            </button>
+            {onCompare && <SampleDatasetButton data={data} projectId={projectId} onReady={async id => { await refresh(); onCompare(id); }} />}
+          </div>
         </section>
       ) : (
         <div className="datasources-grid-layout">
@@ -753,6 +759,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                           <FileSpreadsheet size={16} />
                         </span>
                         <strong className="source-title">{snap.name}</strong>
+                        {isSampleDataset(snap) && <span className="beta-tag">Sample</span>}
                       </div>
                       {getSourceTypeBadge(snap)}
                     </div>
@@ -780,6 +787,10 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                       <div className="onboarding-row-actions">
                         <button type="button" className="button secondary small" disabled={!flatContracts.some(contract => contract.contract_hash === snap.contract_hash)} onClick={event => { event.stopPropagation(); const contract = flatContracts.find(contract => contract.contract_hash === snap.contract_hash); if (contract) openAddLoad(contract); }} title={flatContracts.some(contract => contract.contract_hash === snap.contract_hash) ? 'Upload a file with the same columns and meaning' : 'Newer loads are available for single-table datasets'}>Add newer load</button>
                         <button type="button" className="chevron-link onboarding-inspect-button" aria-label={`Inspect ${snap.name}`} aria-pressed={isSelected} onClick={() => setSelectedSnapshotId(snap.id)}>Inspect <ChevronRight size={14} /></button>
+                        <ItemActions name={snap.name} kind="dataset"
+                          deleteNote="Unsaved comparisons of this dataset go too. A dataset used by a saved case is kept until that case is deleted."
+                          onRename={async name => { await api.renameSnapshot(snap.id, name); await refresh(); }}
+                          onDelete={async () => { await api.deleteSnapshot(snap.id); if (selectedSnapshotId === snap.id) setSelectedSnapshotId(''); await refresh(); }} />
                       </div>
                     </div>
                   </div>

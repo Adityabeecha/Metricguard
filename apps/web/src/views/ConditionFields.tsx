@@ -53,10 +53,22 @@ export function ConditionHelp({ filter, column, known, onChange }: {
           ))}
         </div>
       )}
-      {!short && known.values.length > 0 && !known.complete && (
+      {dateRange(column, known) && <span className="example">{dateRange(column, known)}</span>}
+      {!short && known.values.length > 0 && !known.complete && !dateRange(column, known) && (
         <span className="example">{groupDigits(String(known.distinct_count))} different values; the box suggests the {known.values.length} most common.</span>
       )}
       {warnings.map(w => <span key={w} className="form-hint warn" role="status">{w}</span>)}
     </>
   );
+}
+
+/** For date columns (no value chips): the range present in the data, so a filter can be typed with confidence. */
+export function dateRange(column: FilterColumn | undefined, known: ColumnValues): string {
+  if (column?.type !== 'date' && column?.type !== 'timestamp') return '';
+  const values = known.values.map(v => v.value).filter(Boolean).sort();
+  if (!values.length) return '';
+  const first = values[0].slice(0, 10), last = values[values.length - 1].slice(0, 10);
+  const blanks = known.blank_count ? ` · ${groupDigits(String(known.blank_count))} blank` : '';
+  const span = first === last ? `Dates in this data: ${first}` : `Dates in this data: ${first} to ${last}`;
+  return `${span}${known.complete ? '' : ' (from the most common values)'}${blanks}. Use YYYY-MM-DD.`;
 }

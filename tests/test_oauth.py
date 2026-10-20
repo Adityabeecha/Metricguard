@@ -285,3 +285,43 @@ def test_identity_supplies_accessible_home_workspace_without_an_extra_public_api
     assert client.get('/api/v1/auth/identity', headers={'x-api-key': key}).json()['home_workspace_id'] == team['id']
     store.revoke_project_member(team['id'], user['id'])
     assert client.get('/api/v1/auth/identity', headers={'x-api-key': key}).json()['home_workspace_id'] is None
+
+
+def test_workspace_invite_lets_a_new_person_in_and_joins_the_workspace(setup):
+    client, store, _, profile = setup
+    owner, owner_key = store.create_user('Owner', 'owner@example.com')
+    pid = store.create_project('Team', owner['id'], project_id='team')['id']
+    headers = {'X-API-Key': owner_key, 'X-Project-Id': pid}
+    assert client.post(f'/api/v1/projects/{pid}/invites', json={'email': 'not-an-email'}, headers=headers).status_code == 422
+    invite = client.post(f'/api/v1/projects/{pid}/invites', json={'email': ' Teammate@Example.com ', 'role': 'reader'}, headers=headers)
+    assert invite.status_code == 201, invite.text
+    again = client.post(f'/api/v1/projects/{pid}/invites', json={'email': 'teammate@example.com', 'role': 'analyst'}, headers=headers)
+    assert again.json()['id'] == invite.json()['id'] and again.json()['role'] == 'analyst'
+    assert [i['email'] for i in client.get(f'/api/v1/projects/{pid}/invites', headers=headers).json()['items']] == ['teammate@example.com']
+
+    # Not on METRICGUARD_INVITE_EMAILS, but invited to a workspace: signs in and lands there.
+    profile.update(email='teammate@example.com')
+    _, state = begin(client, 'google')
+    response = callback(client, 'google', state)
+    assert response.headers['location'] == 'https://metricguard.example/w/team/investigations'
+    user = store.get_user_by_session(client.cookies.get('mg_session'))
+    assert store.get_project_member(pid, user['id'])['role'] == 'analyst'
+    assert client.get(f'/api/v1/projects/{pid}/invites', headers=headers).json()['items'] == []
+    member = client.post(f'/api/v1/projects/{pid}/invites', json={'email': 'teammate@example.com'}, headers=headers)
+    assert member.status_code == 409
+
+
+def test_only_owners_manage_invites_and_revoked_invites_do_not_admit(setup):
+    client, store, _, profile = setup
+    owner, owner_key = store.create_user('Owner', 'owner@example.com')
+    pid = store.create_project('Team', owner['id'], project_id='team')['id']
+    analyst, analyst_key = store.create_user('Analyst', 'analyst@example.com')
+    store.add_project_member(pid, analyst['id'], 'analyst')
+    assert client.post(f'/api/v1/projects/{pid}/invites', json={'email': 'x@example.com'},
+                       headers={'X-API-Key': analyst_key, 'X-Project-Id': pid}).status_code == 403
+    headers = {'X-API-Key': owner_key, 'X-Project-Id': pid}
+    invite = client.post(f'/api/v1/projects/{pid}/invites', json={'email': 'gone@example.com'}, headers=headers).json()
+    assert client.delete(f"/api/v1/projects/{pid}/invites/{invite['id']}", headers=headers).status_code == 200
+    profile.update(email='gone@example.com')
+    _, state = begin(client, 'google')
+    assert callback(client, 'google', state).headers['location'].endswith('error=waitlist')
