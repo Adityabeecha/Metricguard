@@ -18,7 +18,7 @@ export type RatioPart={aggregate:'sum'|'count';measure:string;minus?:string|null
 export type RatioBlock={policy:string;numerator:RatioPart;denominator:RatioPart;display_places:number;numerator_scale:number;denominator_scale:number;share_scale:number;baseline:RatioSide;target:RatioSide;numerator_change:string|null;denominator_change:string|null;status:'defined'|'components_only';sigma:string|null;scale_divisor:string|null;scaled_gap:string|null;gap_exact:string|null;effects:Array<{rule:'numerator_effect'|'denominator_effect';exact:string;display:string}>;corners:Record<string,string>|null;pooled_average:string|null;unit:'share'|'amount_per_record'|'records_per_amount'|'amount_per_amount'};
 export type DistinctSummary={policy:string;entity_column:string;gained:number;lost:number;kept:number;baseline_null_entity_rows:number;target_null_entity_rows:number};
 export type EntityRecords={entity:string;entity_column:string|null;items:Array<{record:string;current_included:boolean;proposed_included:boolean}>;total:number;offset?:number;next_offset?:number|null;truncated?:boolean};
-export type Run={evidence_state?:'expired';evidence_expired_at?:string;id:string;baseline_version_id:string;target_version_id:string;snapshot_id:string;target_snapshot_id?:string;context:Context;relationship:string;purpose?:string;state:string;created_at:string;result:Result|null;error:{code?:string;message?:string}|null;execution_mode:string};
+export type Run={evidence_state?:'expired';evidence_expired_at?:string;started_at?:string|null;completed_at?:string|null;investigation_id?:string;id:string;baseline_version_id:string;target_version_id:string;snapshot_id:string;target_snapshot_id?:string;context:Context;relationship:string;purpose?:string;state:string;created_at:string;result:Result|null;error:{code?:string;message?:string}|null;execution_mode:string};
 export type DatasetContract={id:string;version:2;version_number:number;name:string;currency:string;timezone:string;scope:string;grain:string;cutoff_at:string;null_policy:'blank_nullable'|'literal_NULL'|'native_null';row_key:'order_id';entity_key:'customer_id';decimal_scale:2;schema:Record<string,string>;contract_hash:string;created_at:string};
 export type ColumnMapping={id:string;contract_id:string;version_number:number;columns:Record<string,string>;contract_hash:string;mapping_hash:string;created_at:string};
 export type Investigation={id:string;title:string;decision:string;actor_label:string;run_id:string;snapshot_id:string;baseline_version_id:string;target_version_id:string;context:Context;relationship:string;review_status:string;created_at:string};
@@ -30,9 +30,10 @@ export type DatasetPreviewRecord={id:string;state:string;preview?:DatasetPreview
 export type DecimalColumn={name:string;precision:number;scale:number;unit_label:string};
 export type MeasureExpression={op:'sub';minuend:string;subtrahend:string};
 export type FlatContract={id:string;version:3|4|5|6|7|8;predicate_policy?:'flat-boolean-v1';measure_policy?:'flat-subtraction-v1'|'flat-case-v1'|'flat-multi-measure-v1';decimal_columns?:DecimalColumn[];measure_expression?:MeasureExpression;dimension_types?:Record<string,'string'|'boolean'|'date'|'timestamp'>;nullable_categories?:string[];version_number:number;name:string;row_key:string;measure:string;precision?:number;scale:number;categories:string[];measure_meaning:string;unit_label:string;values_comparable:boolean;scope:'entire_supplied_snapshot';null_policy:'blank_nullable'|'literal_NULL'|'native_null';contract_hash:string};
-export type EvidenceSummary={total:number;changed:number;blank_amount_rows:number;top_changes:Array<Evidence&{row_key?:string;fact_key?:string}>};
+export type ChangeCategory={key:'excluded'|'added'|'value_changed'|'removed'|'entered_filter'|'left_filter';records:number;change:string;effect?:string|null;effect_exact?:string|null};
+export type EvidenceSummary={total:number;changed:number;blank_amount_rows:number;top_changes:Array<Evidence&{row_key?:string;fact_key?:string}>;categories?:ChangeCategory[]};
 export type BreakdownGroup={value:string|boolean|null;no_match?:boolean;records:number;changed_records:number;current:string|null;proposed:string|null;change:string|null;change_exact?:string|null;current_numerator?:string;proposed_numerator?:string;current_denominator?:string;proposed_denominator?:string};
-export type EvidenceBreakdown={available:boolean;columns:string[];reason?:string;column?:string;total_change?:string|null;total_change_exact?:string|null;ratio?:boolean;groups?:BreakdownGroup[];other_groups?:number;other_change?:string|null;unavailable_columns?:Record<string,string>;coverage_note?:string;grouping?:'day'};
+export type EvidenceBreakdown={available:boolean;columns:string[];reason?:string;column?:string;total_change?:string|null;total_change_exact?:string|null;ratio?:boolean;groups?:BreakdownGroup[];other_groups?:number;other_change?:string|null;total_records?:number;other_records?:number;other_changed_records?:number;abs_change_total?:string|null;unavailable_columns?:Record<string,string>;coverage_note?:string;grouping?:'day'};
 export type FlatEvidence=Evidence&{row_key?:string;measure?:string|null;categories?:Record<string,string|null>;source_payment_ids?:string[]};
 /** One lookup table of a relational dataset (contract v2 lists 1–4; v1 has exactly one, as `dimension`). */
 export type RelationalLookup={role:string; table:string; key:string; grain:string; categories:string[]; fact_foreign_key:string};
@@ -749,12 +750,18 @@ export const api = {
       `/comparisons/${encodeURIComponent(id)}/evidence?offset=${offset}&limit=${limit}`
     ),
   evidenceSummary: (id: string) => request<EvidenceSummary>(`/comparisons/${encodeURIComponent(id)}/evidence-summary`),
-  evidenceBreakdown: (id: string, column?: string) =>
-    request<EvidenceBreakdown>(`/comparisons/${encodeURIComponent(id)}/evidence-breakdown${column ? `?column=${encodeURIComponent(column)}` : ''}`),
+  evidenceBreakdown: (id: string, column?: string, top?: number) => {
+    const params = new URLSearchParams();
+    if (column) params.set('column', column);
+    if (top) params.set('top', String(top));
+    const query = params.toString();
+    return request<EvidenceBreakdown>(`/comparisons/${encodeURIComponent(id)}/evidence-breakdown${query ? `?${query}` : ''}`);
+  },
   entityRecords: (id: string, entity: string, offset = 0, limit = 100) =>
     request<EntityRecords>(`/comparisons/${encodeURIComponent(id)}/entity-records?entity=${encodeURIComponent(entity)}&offset=${offset}&limit=${limit}`),
-  evidenceView: (id: string, view: { offset: number; limit: number; changedOnly?: boolean; q?: string; order?: 'file' | 'impact'; withContext?: boolean }) => {
+  evidenceView: (id: string, view: { offset: number; limit: number; changedOnly?: boolean; q?: string; order?: 'file' | 'impact'; withContext?: boolean; category?: string }) => {
     const params = new URLSearchParams({ offset: String(view.offset), limit: String(view.limit) });
+    if (view.category) params.set('category', view.category);
     if (view.withContext) params.set('with_context', 'true');
     if (view.changedOnly) params.set('changed_only', 'true');
     if (view.q?.trim()) params.set('q', view.q.trim());

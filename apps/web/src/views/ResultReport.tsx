@@ -3,6 +3,11 @@ import { api, type DistinctSummary, type EntityRecords, type EvidenceBreakdown, 
 import { resultUnit, fractionDisplay, groupDigits, percentOf, summarizeResult, type RecordDelta } from '../resultSummary';
 import { RelationalEvidencePanel } from './RelationalEvidencePanel';
 import { caseNumber } from '../investigationLibrary';
+import { decimalSum } from '../exactDecimal';
+import { Bridge } from './evidence/Bridge';
+import { Ledger } from './evidence/Ledger';
+import { categoryLabel, type CategoryKey } from './evidence/categories';
+import { HashPrint } from './evidence/HashPrint';
 
 const PAGE = 100;
 
@@ -172,10 +177,11 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads }: 
   const [data, setData] = useState<EvidenceBreakdown | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
+  const [all, setAll] = useState(false);
   useEffect(() => {
     let active = true;
     setBusy(true); setProblem('');
-    api.evidenceBreakdown(runId, column || undefined)
+    api.evidenceBreakdown(runId, column || undefined, all ? 200 : 10)
       .then(d => {
         if (!active) return;
         onColumns(d.columns || []);
@@ -189,7 +195,7 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads }: 
       .catch(e => { if (active) setProblem(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
-  }, [runId, column]);
+  }, [runId, column, all]);
   if (problem) return <p className="disabled-reason">The breakdown could not be loaded: {problem}</p>;
   if (!data) return busy ? <p role="status">Working out where the difference comes from…</p> : null;
   const unavailable = Object.entries(data.unavailable_columns || {});
@@ -197,53 +203,80 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads }: 
     <small style={{ display: 'block' }}>Not available for an exact split: {unavailable.map(([c, why]) => `${columnLabel(c)} — ${why}`).join(' ')}</small>
   );
   if (!data.available) return <div><p className="example">{data.reason}</p>{unavailableNote}</div>;
-  const total = Number(data.total_change || 0);
   // Changed-only listings carry no per-group totals; leave those columns out instead of a column of dashes.
   const sideTotals = (data.groups || []).some(g => g.current != null || g.proposed != null);
   const [cur, pro] = loads ? ['Earlier load', 'Later load'] : ['Current', 'Proposed'];
   const groupLabel = (g: { value: unknown; no_match?: boolean }) =>
     g.no_match ? `No matching ${data.column?.split('.')[0] === 'dimension' ? 'lookup' : data.column?.split('.')[0]} row` : showValue(g.value);
   const shown = (v: string | null | undefined) => v == null ? '—' : percent ? groupDigits(percentOf(v)) : groupDigits(v);
-  const changeShown = (v: string | null | undefined) => v == null ? '—' : percent ? `${groupDigits(percentOf(v))} pts` : `${groupDigits(v)}${unit ? ` ${unit}` : ''}`;
+  const changeShown = (v: string | null | undefined) => v == null ? '—' : minus(percent ? `${groupDigits(percentOf(v))} pts` : `${groupDigits(v)}${unit ? ` ${unit}` : ''}`);
+  const absTotal = Math.abs(Number(data.abs_change_total ?? 0));
+  const recordTotal = data.total_records || 0;
+  const groups = [...(data.groups || [])];
+  const moved = groups.filter(g => g.change != null && /[1-9]/.test(g.change));
+  const still = groups.filter(g => !(g.change != null && /[1-9]/.test(g.change)));
+  type Line = { key: string; label: string; change: string | null | undefined; exact?: string | null; records: number; changed: number;
+    current?: string | null; proposed?: string | null; other?: boolean };
+  const lines: Line[] = [...moved, ...still].map(g => ({ key: `${g.no_match ? 'no-match' : ''}${showValue(g.value)}`, label: groupLabel(g),
+    change: g.change, exact: g.change_exact, records: g.records, changed: g.changed_records, current: g.current, proposed: g.proposed }));
+  if ((data.other_groups || 0) > 0) {
+    lines.push({ key: '__other', label: `Other (${groupDigits(String(data.other_groups))} values)`, change: data.other_change,
+      records: data.other_records ?? 0, changed: data.other_changed_records ?? 0, other: true });
+  }
   return (
-    <div>
-      <h3 style={{ fontSize: 14, margin: '0 0 6px' }}>Where the difference comes from</h3>
-      <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6 }}>Split by
-        <select value={data.column || ''} onChange={e => setColumn(e.target.value)}>
-          {data.columns.map(c => <option key={c} value={c}>{columnLabel(c)}</option>)}
-        </select>
-      </label>
-      <div className="table-scroll" aria-busy={busy}>
-        <table>
-          <thead><tr><th>{columnLabel(data.column || '')}{data.grouping === 'day' ? ' (by day)' : ''}</th><th>Records changed</th>
-            {sideTotals && <><th>{data.ratio ? `${cur} ratio in group${percent ? ' (%)' : ''}` : cur}</th><th>{data.ratio ? `${pro} ratio in group${percent ? ' (%)' : ''}` : pro}</th></>}
-            <th>{data.ratio ? 'Effect on the overall ratio' : 'Change'}</th><th>Share of change</th></tr></thead>
-          <tbody>
-            {(data.groups || []).map(g => {
-              const share = total ? Number(g.change) / total : 0;
-              return (
-                <tr key={`${g.no_match ? 'no-match' : ''}${showValue(g.value)}`}>
-                  <td>{groupLabel(g)}</td>
-                  <td>{groupDigits(String(g.changed_records))} of {groupDigits(String(g.records))}</td>
-                  {sideTotals && <>
-                    <td>{data.ratio ? shown(g.current) : groupDigits(g.current ?? '—')}</td>
-                    <td>{data.ratio ? shown(g.proposed) : groupDigits(g.proposed ?? '—')}</td>
-                  </>}
-                  <td className={signedClass(g.change)} title={g.change_exact ? `Exact: ${g.change_exact}` : undefined}>{data.ratio ? changeShown(g.change) : <>{minus(groupDigits(g.change ?? '—'))}{unit ? ` ${unit}` : ''}</>}</td>
-                  <td>
-                    <span className="share-bar" aria-hidden="true"><span style={{ width: `${Math.min(100, Math.abs(share) * 100)}%` }} /></span>
-                    {' '}{total ? `${(share * 100).toFixed(1)}%` : '—'}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+    <div className="where-it-sits">
+      <div className="where-head">
+        <h3><span className="exhibit">B</span> Where the difference sits</h3>
+        <label>by
+          <select value={data.column || ''} onChange={e => { setColumn(e.target.value); setAll(false); }}>
+            {data.columns.map(c => <option key={c} value={c}>{columnLabel(c)}</option>)}
+          </select>
+        </label>
       </div>
-      {(data.other_groups || 0) > 0 && <small>{data.other_groups} more values together account for {data.ratio ? changeShown(data.other_change) : <>{groupDigits(data.other_change || '0')}{unit ? ` ${unit}` : ''}</>}.</small>}
+      <p className="where-legend">
+        <span className="legend-bar" aria-hidden="true" /> Share of the difference
+        <span className="legend-tick" aria-hidden="true" /> Share of all records.
+        A value that takes far more of the difference than of the records is where the change sits.
+      </p>
+      <table className="ledger-table where-table" aria-busy={busy}>
+        <thead><tr>
+          <th scope="col">{columnLabel(data.column || '')}{data.grouping === 'day' ? ' (by day)' : ''}</th>
+          <th scope="col" className="num">{data.ratio ? 'Effect on the ratio' : 'Change'}</th>
+          <th scope="col">Share of the difference</th>
+          <th scope="col" className="num">Changed records</th>
+          {sideTotals && <><th scope="col" className="num">{data.ratio ? `${cur} ratio` : cur}</th><th scope="col" className="num">{data.ratio ? `${pro} ratio` : pro}</th></>}
+        </tr></thead>
+        <tbody>
+          {lines.map(line => {
+            const diffShare = absTotal ? Math.abs(Number(line.change || 0)) / absTotal : 0;
+            const recordShare = recordTotal ? line.records / recordTotal : 0;
+            const concentrated = !line.other && diffShare >= 0.1 && diffShare >= 2 * recordShare;
+            const zero = !(line.change != null && /[1-9]/.test(line.change));
+            return (
+              <tr key={line.key} className={zero ? 'muted' : line.other ? 'other' : undefined}>
+                <th scope="row" data-label={columnLabel(data.column || '')}>{line.label}{concentrated && <span className="concentrated">Concentrated</span>}</th>
+                <td className="num change" data-label="Change" title={line.exact ? `Exact: ${line.exact}` : undefined}>{changeShown(line.change)}</td>
+                <td className="shares" data-label="Share">
+                  <span className="share-track" aria-hidden="true">
+                    <span className="share-diff" style={{ width: `${Math.min(100, diffShare * 100)}%` }} />
+                    <span className="share-records" style={{ left: `${Math.min(100, recordShare * 100)}%` }} />
+                  </span>
+                  <span className="share-text">{(diffShare * 100).toFixed(diffShare > 0 && diffShare < 0.001 ? 2 : 1)}% <small>of the difference · {(recordShare * 100).toFixed(1)}% of records</small></span>
+                </td>
+                <td className="num" data-label="Changed records">{groupDigits(String(line.changed))} <small>of {groupDigits(String(line.records))}</small></td>
+                {sideTotals && <>
+                  <td className="num" data-label={cur}>{line.other ? '' : data.ratio ? shown(line.current) : minus(groupDigits(line.current ?? '—'))}</td>
+                  <td className="num" data-label={pro}>{line.other ? '' : data.ratio ? shown(line.proposed) : minus(groupDigits(line.proposed ?? '—'))}</td>
+                </>}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {(data.other_groups || 0) > 0 && !all && <button type="button" className="link-button" onClick={() => setAll(true)}>Show every value</button>}
       <small style={{ display: 'block' }}>{data.ratio
         ? 'Each group’s effect is the exact sum of its records’ effects, and the groups add up exactly to the change in the overall ratio. Shown values are rounded; hover an effect for its exact fraction.'
-        : 'Exact sums over every record. Shares are rounded for display; a value can move the total in either direction.'}</small>
+        : 'Exact sums over every record; the groups, with Other, add up exactly to the total change. Shares are rounded for display.'}</small>
       {data.coverage_note && <small style={{ display: 'block' }}>{sideTotals ? data.coverage_note : 'Only records whose inclusion changed are listed for this large dataset, so each value’s change is exact; its totals on each side are not shown.'}</small>}
       {data.grouping === 'day' && <small style={{ display: 'block' }}>Timestamps are grouped by calendar day.</small>}
       {unavailableNote}
@@ -269,6 +302,8 @@ type Props = {
   sealStatus?: 'verifying' | 'intact' | 'broken' | null;
   /** Shown under the answer, beside the seal (a saved case's written conclusion). */
   note?: ReactNode;
+  /** Opens the custody log (saved cases). */
+  onCustody?: () => void;
 };
 
 type Tab = 'records' | 'breakdown' | 'definitions' | 'notes';
@@ -298,7 +333,7 @@ function inclusion(row: AnyEvidence, side: 'baseline' | 'target') {
   return nullTerm ? 'Included · blank amount (ignored)' : 'Included';
 }
 
-export function ResultReport({ run, unit: declaredUnit, relational, baselineLabel, targetLabel, baselineSql, targetSql, baselineDescription, targetDescription, snapshot, versions, breakdownColumns, sealStatus, note }: Props) {
+export function ResultReport({ run, unit: declaredUnit, relational, baselineLabel, targetLabel, baselineSql, targetSql, baselineDescription, targetDescription, snapshot, versions, breakdownColumns, sealStatus, note, onCustody }: Props) {
   const [tab, setTab] = useState<Tab>('records');
   const result = run.result as Result;
   const expired = run.evidence_state === 'expired';
@@ -336,6 +371,8 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   const [columns, setColumns] = useState<string[]>([]);
   const [shown, setShown] = useState<string[]>([]);
   const [csvProblem, setCsvProblem] = useState('');
+  const [ledgerCategory, setLedgerCategory] = useState<CategoryKey | ''>('');
+  const [registerOpen, setRegisterOpen] = useState(false);
   const records = useRecordPage(run.result && !expired ? run.id : '', { offset, changedOnly, q, order, withContext: shown.length > 0 });
   const pages = Math.max(1, Math.ceil(records.total / PAGE));
   const pageNo = Math.floor(offset / PAGE) + 1;
@@ -384,6 +421,35 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
       .catch(e => setCsvProblem(e instanceof Error ? e.message : String(e)));
   };
 
+  // ---- Reconciliation (docs/design/evidence-ui-spec.md §2–3)
+  const categories = evidence.summary?.categories ?? null;
+  const labels = { loads, distinct: kind === 'count_distinct' };
+  const fmt = (v: string | null | undefined) => v == null ? '—'
+    : minus(percent ? `${groupDigits(percentOf(v))} pts` : `${groupDigits(v)}${unit ? ` ${unit}` : ''}`);
+  const stepValue = (c: { change: string; effect?: string | null }) => (ratio ? (c.effect ?? '0') : c.change);
+  const residual = ratio ? '0' : (result.residual ?? '0');
+  const balanced = !/[1-9]/.test(residual);
+  const listedChange = categories && !ratio ? decimalSum(categories.map(c => c.change)) : null;
+  const bridge = categories && categories.length > 0 && result.baseline_value != null && result.target_value != null ? {
+    start: { label: cur, value: Number(percent ? percentOf(result.baseline_value) : result.baseline_value), text: show(result.baseline_value) },
+    end: { label: pro, value: Number(percent ? percentOf(result.target_value) : result.target_value), text: show(result.target_value) },
+    steps: categories.map(c => ({ key: c.key, label: categoryLabel(c.key, labels), records: c.records,
+      value: Number(percent ? percentOf(stepValue(c)) : stepValue(c)), text: fmt(stepValue(c)) })),
+    residualText: fmt(residual),
+    balanced,
+    description: `${cur} ${show(result.baseline_value)}, ${categories.map(c => `${categoryLabel(c.key, labels).toLowerCase()} ${fmt(stepValue(c))} (${c.records} records)`).join(', ')}, unexplained ${fmt(residual)}, equals ${pro.toLowerCase()} ${show(result.target_value)}${balanced ? '; balanced' : ''}.`,
+  } : null;
+  const ledgerTotal = ledgerCategory
+    ? fmt(stepValue(categories?.find(c => c.key === ledgerCategory) ?? { change: '0' }))
+    : ratio ? fmt(result.delta_target_minus_baseline) : fmt(listedChange);
+  const unchanged = result.evidence_coverage
+    ? result.evidence_coverage.total_records - result.evidence_coverage.listed_records
+    : evidence.summary ? evidence.summary.total - evidence.summary.changed : null;
+  const balanceText = ratio
+    ? <>Record effects add up exactly to the change in the ratio ({fmt(result.delta_target_minus_baseline)}){balanced ? <> · <b>Balanced ✓</b></> : null}</>
+    : <>Listed changes {fmt(listedChange)} + unexplained {fmt(residual)} = {fmt(result.delta_target_minus_baseline)}{balanced ? <> · <b>Balanced ✓</b></> : null}</>;
+  const pickCategory = (key: string) => { setLedgerCategory(key as CategoryKey); setTab('records'); };
+
   return (
     <div className="result-summary">
       <div className="case-header">
@@ -404,13 +470,15 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
           </div>
           {note}
         </section>
-        <SealCard run={run} snapshot={snapshot} status={sealStatus} />
+        <SealCard run={run} snapshot={snapshot} status={sealStatus} onCustody={onCustody} />
       </div>
 
+      {bridge && !expired && <Bridge {...bridge} onPick={pickCategory} />}
+
       <div className="tabs-wrap"><div className="tabs result-tabs" role="tablist" aria-label="Result details">
-        {([['records', kind === 'count_distinct' ? `${keyHeader} values` : 'Records'], ['breakdown', 'Breakdown'], ['definitions', 'Definitions'], ['notes', 'What is uncertain']] as Array<[Tab, string]>).map(([id, label]) => (
+        {([['records', 'A', kind === 'count_distinct' ? `${keyHeader} values` : 'Records'], ['breakdown', 'B', 'Where it sits'], ['definitions', 'C', 'Definitions'], ['notes', 'D', 'Limits']] as Array<[Tab, string, string]>).map(([id, letter, label]) => (
           <button key={id} type="button" role="tab" aria-selected={tab === id} className={`tab ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
-            {label}{id === 'records' && evidence.summary ? <span className="tab-count">{groupDigits(String(evidence.summary.changed))}</span> : null}
+            <span className="exhibit" aria-hidden="true">{letter}</span>{label}{id === 'records' && evidence.summary ? <span className="tab-count">{groupDigits(String(evidence.summary.changed))}</span> : null}
           </button>
         ))}
       </div></div>
@@ -454,7 +522,15 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
         </div>
       )}
 
-      {tab === 'records' && top.length > 0 && (
+      {tab === 'records' && categories && categories.length > 0 && !expired && (
+        <Ledger runId={run.id} categories={categories} category={ledgerCategory} onCategory={setLedgerCategory} labels={labels}
+          keyHeader={keyHeader} side={sideCell} change={changeText} additive={!ratio} totalText={ledgerTotal}
+          balanceText={balanceText} balanced={balanced} unchanged={unchanged}
+          unchangedNoun={kind === 'count_distinct' ? `${keyHeader} values` : 'records'}
+          onShowRegister={() => { setRegisterOpen(true); setTimeout(() => document.getElementById('full-register')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); }} />
+      )}
+
+      {tab === 'records' && !categories && top.length > 0 && (
         <div>
           <h3 style={{ fontSize: 14, margin: '0 0 6px' }}>{kind === 'count_distinct' ? `${keyHeader} values` : 'Records'} that explain the difference{top.length > 1 ? ' (largest first)' : ''}</h3>
           <div className="table-scroll">
@@ -484,8 +560,9 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
       )}
 
       <div className="detail-stack">
-        <details hidden={expired || tab !== 'records'} open={top.length === 0 && !summaryLoading}>
-          <summary>{listLabel} ({listedTotal == null ? '…' : groupDigits(String(listedTotal))})</summary>
+        <details id="full-register" hidden={expired || tab !== 'records'} open={registerOpen || (top.length === 0 && !summaryLoading && !categories)}
+          onToggle={e => setRegisterOpen((e.currentTarget as HTMLDetailsElement).open)}>
+          <summary>Full register · {listLabel} ({listedTotal == null ? '…' : groupDigits(String(listedTotal))})</summary>
           <div>
             {result.evidence_coverage
               ? <p>This dataset has {groupDigits(String(result.evidence_coverage.total_records))} records. Listed here are the {groupDigits(String(result.evidence_coverage.listed_records))} whose inclusion{kind === 'ratio' ? ' or contribution' : ''} changed; the other {groupDigits(String(result.evidence_coverage.total_records - result.evidence_coverage.listed_records))} are included by both calculations ({groupDigits(String(result.evidence_coverage.unchanged_included_in_both))}) or by neither ({groupDigits(String(result.evidence_coverage.unchanged_included_in_neither))}), so each contributes the same to both totals and nothing to the change. Change = proposed contribution − current contribution.</p>
@@ -634,10 +711,9 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
 
 /** The evidence seal: case number, frozen data and evidence hashes, and the replay outcome.
  *  The case number is the sealed run's, so it is the same during review and after saving. */
-function SealCard({ run, snapshot, status }: { run: Run | RelationalRun; snapshot?: Snapshot | null; status?: 'verifying' | 'intact' | 'broken' | null }) {
+function SealCard({ run, snapshot, status, onCustody }: { run: Run | RelationalRun; snapshot?: Snapshot | null; status?: 'verifying' | 'intact' | 'broken' | null; onCustody?: () => void }) {
   const result = run.result as Result & { evidence_artifact?: { sha256?: string; row_count?: number } };
   const provenance = (result?.provenance || {}) as { database_hash?: string; snapshot_manifest_hash?: string };
-  const short = (hash?: string) => (hash ? `${hash.slice(0, 4)}…${hash.slice(-4)}` : '—');
   const sealed = (run as { completed_at?: string }).completed_at || run.created_at;
   return (
     <aside className={`seal-card ${status ?? ''}`} aria-label="Evidence seal">
@@ -646,8 +722,8 @@ function SealCard({ run, snapshot, status }: { run: Run | RelationalRun; snapsho
         <span className="seal-no">{caseNumber(run.id)}</span>
       </div>
       <dl>
-        <dt>Dataset</dt><dd title={provenance.database_hash}>{snapshot?.name && <span className="seal-name">{snapshot.name}</span>}{short(provenance.database_hash)}</dd>
-        <dt>Evidence</dt><dd title={result?.evidence_artifact?.sha256}>{short(result?.evidence_artifact?.sha256)}</dd>
+        <dt>Dataset</dt><dd title={provenance.database_hash}>{snapshot?.name && <span className="seal-name">{snapshot.name}</span>}<HashPrint hash={provenance.database_hash} size={18} /></dd>
+        <dt>Evidence</dt><dd title={result?.evidence_artifact?.sha256}><HashPrint hash={result?.evidence_artifact?.sha256} size={18} /></dd>
         <dt>Sealed</dt><dd>{sealed ? new Date(sealed).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</dd>
         <dt>Engine</dt><dd>{run.execution_mode === 'isolated' ? 'Isolated runner · no network' : run.execution_mode}</dd>
       </dl>
@@ -657,6 +733,7 @@ function SealCard({ run, snapshot, status }: { run: Run | RelationalRun; snapsho
             : status === 'verifying' ? 'Replaying on the same frozen data…'
               : 'Verified on publication · replay to re-check'}
       </div>
+      {onCustody && <button type="button" className="link-button seal-custody" onClick={onCustody}>Custody log ›</button>}
     </aside>
   );
 }

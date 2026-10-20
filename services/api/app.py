@@ -1472,7 +1472,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 raise DomainError('REPLAY_PIN_MISMATCH', 'Saved relational definitions or snapshot identity changed; replay is unavailable.')
             if execution_mode != 'isolated':
                 raise DomainError('ISOLATION_REQUIRED', 'Relational replay requires local isolated execution.')
-            payload.update(purpose='investigation_replay', execution_policy='relational_snapshot_v1')
+            payload.update(purpose='investigation_replay', investigation_id=ident, execution_policy='relational_snapshot_v1')
             return store.queue(payload, idempotency_key, execution_mode, project_id=pid)
         if item['context'].get('comparison') == 'snapshot_change':
             context = {k: v for k, v in item['context'].items()
@@ -1485,7 +1485,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 raise DomainError('REPLAY_PIN_MISMATCH', 'A saved snapshot changed; replay is unavailable.')
             if execution_mode != 'isolated':
                 raise DomainError('ISOLATION_REQUIRED', 'Replay requires the local isolated runner.')
-            payload.update(purpose='investigation_replay', execution_policy='flat_snapshot_v1')
+            payload.update(purpose='investigation_replay', investigation_id=ident, execution_policy='flat_snapshot_v1')
             return store.queue(payload, idempotency_key, execution_mode, project_id=pid)
         if item['context'].get('mode') == 'flat_snapshot':
             body = FlatComparisonInput.model_validate({
@@ -1497,6 +1497,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             if execution_mode != 'isolated':
                 raise DomainError('ISOLATION_REQUIRED', 'Flat replay requires the local isolated runner.')
             payload['purpose'] = 'investigation_replay'
+            payload['investigation_id'] = ident  # lets the case list its replays
             payload['execution_policy'] = 'flat_snapshot_v1'
             return store.queue(payload, idempotency_key, execution_mode, project_id=pid)
         body = ComparisonInput.model_validate({
@@ -1506,6 +1507,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             'relationship': item['relationship']})
         payload, a, b, snapshot = validated(body, auth=auth, pid=pid)
         payload['purpose'] = 'investigation_replay'
+        payload['investigation_id'] = ident  # lets the case list its replays
         result = demo_result(a, b, snapshot, payload['context']) if execution_mode == 'demo' else None
         run = store.queue(payload, idempotency_key, execution_mode, project_id=pid)
         if result is not None and run['state'] == 'queued':
@@ -1523,12 +1525,12 @@ def create_app(database_url=None, data_dir=None, mode=None):
     @app.get('/api/v1/comparisons/{ident}/evidence')
     def evidence(ident: str, request: Request, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100),
                  changed_only: bool = Query(False), q: str = Query('', max_length=256), order: str = Query('file', pattern='^(file|impact)$'),
-                 with_context: bool = Query(False)):
+                 with_context: bool = Query(False), category: str = Query('', pattern='^(|excluded|added|value_changed|removed|entered_filter|left_filter)$')):
         auth = get_auth_context(request, store)
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
-        page = evidence_page(run, offset, limit, changed_only=changed_only, query=q, order=order)
+        page = evidence_page(run, offset, limit, changed_only=changed_only, query=q, order=order, category=category)
         page['items'] = evidence_cache.annotate_ratio(page['items'], (run.get('result') or {}).get('ratio'))
         if with_context:
             context, _ = run_context(run)
@@ -1576,7 +1578,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
         return (contract.get('dimension_types') or {}).get(column, 'string')
 
     @app.get('/api/v1/comparisons/{ident}/evidence-breakdown')
-    def evidence_breakdown(ident: str, request: Request, column: str = Query('', max_length=200)):
+    def evidence_breakdown(ident: str, request: Request, column: str = Query('', max_length=200),
+                           top: int = Query(50, ge=1, le=200)):
         """Exact split of the change by one filter column (largest first), or the columns available."""
         auth = get_auth_context(request, store)
         run = store.get_run(ident)
@@ -1614,7 +1617,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         path, key, verify_all = evidence_access(run)
         bucket = 'day' if column_type(run, chosen) == 'timestamp' else None
         try:
-            split = evidence_cache.breakdown(path, key, verify_all, chosen, context, ratio=result.get('ratio'), bucket=bucket)
+            split = evidence_cache.breakdown(path, key, verify_all, chosen, context, limit=top, ratio=result.get('ratio'), bucket=bucket)
             if bucket:
                 split = {**split, 'grouping': bucket}
             if result.get('evidence_coverage'):
@@ -1681,13 +1684,23 @@ def create_app(database_url=None, data_dir=None, mode=None):
             rows = result.get('evidence', [])
             changed = [r for r in rows if r.get('delta') not in (None,) and any(ch in '123456789' for ch in str(r.get('delta')))]
             changed.sort(key=lambda r: -abs(Decimal(str(r['delta']))))
+            totals = evidence_cache.CategoryTotals()
+            for row in rows:
+                totals.add(evidence_cache.category_of(row), row.get('delta'))
             return {'total': len(rows), 'changed': len(changed), 'top_changes': changed[:20],
-                    'blank_amount_rows': sum(1 for r in rows if r.get('baseline_null_term') or r.get('target_null_term'))}
+                    'blank_amount_rows': sum(1 for r in rows if r.get('baseline_null_term') or r.get('target_null_term')),
+                    'categories': totals.public()}
         path, key, verify_all = evidence_access(run)
         try:
             summary = evidence_cache.summary(path, key, verify_all)
             if result.get('ratio'):
-                summary = {**summary, 'top_changes': evidence_cache.annotate_ratio(summary['top_changes'], result['ratio'])}
+                # Ratio evidence carries scaled shares; each category's effect on the ratio is exact.
+                categories = []
+                for item in summary.get('categories', []):
+                    exact, rounded = evidence_cache.ratio_effect(item['change'], result['ratio'])
+                    categories.append({**item, 'effect': rounded, 'effect_exact': exact})
+                summary = {**summary, 'categories': categories,
+                           'top_changes': evidence_cache.annotate_ratio(summary['top_changes'], result['ratio'])}
             return summary
         except (ValueError, KeyError, TypeError, OSError) as error:
             raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
@@ -1771,7 +1784,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
 
         return artifact, (str(artifact), run['id'], run['attempt'], manifest.get('sha256')), verify_all
 
-    def evidence_page(run, offset, limit, *, include_join_evidence=False, changed_only=False, query='', order='file'):
+    def evidence_page(run, offset, limit, *, include_join_evidence=False, changed_only=False, query='', order='file', category=''):
         if expired_details(run):
             return expired_details(run)
         result = run.get('result') or {}
@@ -1784,6 +1797,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 rows = [r for r in rows if evidence_cache._magnitude(r.get('delta'))]
             if query.strip():
                 rows = [r for r in rows if query.strip().lower() in evidence_cache.record_key(r).lower()]
+            if category:
+                rows = [r for r in rows if evidence_cache.category_of(r) == category]
             if order == 'impact':
                 rows.sort(key=lambda r: -evidence_cache._magnitude(r.get('delta')))
             return {'items': rows[offset:offset + limit], 'total': len(rows)}
@@ -1792,7 +1807,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         if not include_join_evidence:
             path, key, verify_all = evidence_access(run)
             try:
-                items, total = evidence_cache.page(path, key, verify_all, offset, limit, changed_only, query, order)
+                items, total = evidence_cache.page(path, key, verify_all, offset, limit, changed_only, query, order, category)
             except (ValueError, KeyError, TypeError, OSError) as error:
                 raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
             return {'items': items, 'total': total}

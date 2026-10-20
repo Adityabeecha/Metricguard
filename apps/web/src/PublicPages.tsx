@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, Check, Clock, Database, FileQuestion, Fingerprint, GitCompareArrows, LockKeyhole, Repeat2, Sigma } from 'lucide-react';
+import { ArrowRight, Database, Fingerprint, LockKeyhole } from 'lucide-react';
 import { api } from './api';
 import { Logo } from './Logo';
 import { ThemeSwitch } from './ThemeSwitch';
 import { readThemeChoice } from './themeChoice';
+import { Bridge } from './views/evidence/Bridge';
+import { HashPrint } from './views/evidence/HashPrint';
+import { Stamp } from './views/evidence/Stamp';
 import { homeRedirect, type SitePage } from './router';
 import './public.css';
 
@@ -79,14 +82,14 @@ function Homepage() {
   const darkMedia = choice === 'system' ? '(prefers-color-scheme: dark)' : choice === 'dark' ? 'all' : 'not all';
   const mobileDarkMedia = choice === 'system' ? '(max-width: 759px) and (prefers-color-scheme: dark)' : choice === 'dark' ? '(max-width: 759px)' : 'not all';
   return <div className="homepage" ref={root}>
-    <section className="home-hero home-perforation" aria-labelledby="home-title"><div className="public-width hero-grid">
+    <section className="home-hero home-perforation" aria-labelledby="home-title"><div className="public-width hero-stack">
       <div className="hero-copy" data-reveal>
         <h1 id="home-title">Your metric changed. See exactly which records changed it.</h1>
         <p className="public-lead">Compare two calculations, follow the record-level difference, and hand over sealed evidence anyone with access can replay.</p>
         <div className="hero-actions"><a className="button primary public-cta" href="/signup">Sign up — free beta <ArrowRight size={18} aria-hidden="true" /></a><a className="home-how-link" href="#how">See how it works <ArrowRight size={16} aria-hidden="true" /></a></div>
         <p className="public-beta">Beta · by invitation</p>
       </div>
-      <div className="hero-demo"><ReconciliationCard /><p className="demo-caption">Synthetic demo orders. The records add up exactly.</p></div>
+      <HeroReconciliation />
     </div></section>
 
     <section className="home-section home-panel" id="problem" aria-labelledby="problem-title"><div className="public-width" data-reveal>
@@ -97,7 +100,7 @@ function Homepage() {
         <div className="dashboard-tile"><span>Product</span><div>Revenue<strong>2.47B</strong></div><div className="tile-lines alternate" aria-hidden="true"><i /><i /><i /><i /><i /></div></div>
       </div>
       <p className="illustration-note">Illustrative totals, not customer data.</p>
-      <div className="home-pains"><p><GitCompareArrows aria-hidden="true" />Same metric. Different answers.</p><p><Clock aria-hidden="true" />Hours spent reconciling records.</p><p><FileQuestion aria-hidden="true" />No evidence to hand over.</p></div>
+      <p className="home-problem-line">Two teams, one metric, two numbers, and hours of SQL and spreadsheets to find the records that disagree, with nothing to hand over at the end.</p>
     </div></section>
 
     <section className="home-section" id="how" aria-labelledby="how-title"><div className="public-width">
@@ -118,43 +121,64 @@ function Homepage() {
             <source media={mobileDarkMedia} srcSet="/images/case-mobile-dark.webp" width="358" height="570" />
             <source media="(max-width: 759px)" srcSet="/images/case-mobile-light.webp" width="358" height="570" />
             <source media={darkMedia} srcSet="/images/case-dark.webp" />
-            <img src="/images/case-light.webp" width="1366" height="1000" loading="lazy" decoding="async" alt="Real MetricGuard demo case: current 750.75 INR, proposed 410.75 INR. R003, R007 and R004 explain the 340.00 INR difference, next to the evidence seal." />
+            <img src="/images/case-light.webp" width="1366" height="1000" loading="lazy" decoding="async" alt="Real MetricGuard demo case: the answer, −340.00 INR; the reconciliation bridge from current 750.75 INR to proposed 410.75 INR, balanced; and the evidence seal MG-F3A3 with its hash fingerprints." />
           </picture><span className="shot-pin pin-answer" aria-hidden="true">1</span><span className="shot-pin pin-records" aria-hidden="true">2</span><span className="shot-pin pin-seal" aria-hidden="true">3</span></div>
         </div>
-        <figcaption><span><b>1</b>The answer</span><span><b>2</b>The records that explain it</span><span><b>3</b>The evidence seal</span><small className="mobile-crop-note">Mobile detail: the answer and seal. Records are below this crop in the full case.</small></figcaption>
+        <figcaption><span><b>1</b>The answer</span><span><b>2</b>The reconciliation bridge</span><span><b>3</b>The evidence seal</span><small className="mobile-crop-note">Mobile detail: the answer and seal. The bridge and records follow below in the full case.</small></figcaption>
       </figure>
     </div></section>
 
     <section className="home-section" aria-labelledby="support-title"><div className="public-width" data-reveal>
       <h2 id="support-title">Works with your data.</h2>
-      <div className="home-chip-row" aria-label="Supported sources">{['CSV', 'Parquet', 'Excel', 'Two connected tables', 'PostgreSQL', 'Snowflake', 'BigQuery'].map(text => <span key={text}>{text}</span>)}</div>
-      <div className="home-chip-row calculations" aria-label="Supported calculations">{['SUM', 'COUNT', 'COUNT DISTINCT', 'AVG', 'Ratios', 'Rates', 'Shares', 'Margins'].map(text => <span key={text}>{text}</span>)}</div>
+      <div className="home-register">
+        <dl><dt>Sources</dt>{['CSV', 'Parquet', 'Excel', 'Two connected tables', 'PostgreSQL', 'Snowflake', 'BigQuery'].map(text => <dd key={text}>{text}</dd>)}</dl>
+        <dl><dt>Calculations</dt>{['SUM', 'COUNT', 'COUNT DISTINCT', 'AVG', 'Ratios', 'Rates', 'Shares', 'Margins'].map(text => <dd key={text}>{text}</dd>)}</dl>
+      </div>
       <p className="home-limit">Snowflake and BigQuery: stand-in servers verified; live-service checks pending. Supported SQL only.</p>
     </div></section>
 
     <section className="home-section home-panel" id="security" aria-labelledby="security-title"><div className="public-width">
-      <h2 id="security-title" data-reveal>Security &amp; trust.</h2>
-      <div className="home-trust-grid">
-        <article data-reveal><LockKeyhole aria-hidden="true" /><div><h3>Frozen inputs</h3><p>Both calculations use the same fixed data.</p></div></article>
-        <article data-reveal><Sigma aria-hidden="true" /><div><h3>Exact arithmetic</h3><p>Decimal values and exact fractions keep every contribution precise.</p></div></article>
-        <article data-reveal><Fingerprint aria-hidden="true" /><div><h3>Tamper-evident hashes</h3><p>Hashes make changed inputs or evidence detectable.</p><code>sha256 761d…90a7</code></div></article>
-        <article data-reveal><Repeat2 aria-hidden="true" /><div><h3>Byte-for-byte replay</h3><p>Re-run the saved inputs and check the evidence matches.</p></div></article>
+      <div className="custody-heading" data-reveal>
+        <h2 id="security-title">Every case keeps its custody log.</h2>
+        <p>Frozen inputs, exact arithmetic and a hash at every step. Replay re-runs the saved inputs; matching evidence draws the same fingerprint.</p>
       </div>
+      <ol className="custody-log home-custody" data-reveal aria-label="Custody log of demo case MG-F3A3">
+        <li className="done"><div><div className="what">Dataset frozen</div><div className="when">17 Oct 2026, 21:15</div><div className="detail">Demo sales orders · 8 rows <HashPrint hash={DEMO.dataset} /></div></div></li>
+        <li className="done"><div><div className="what">Calculations pinned</div><div className="detail">Current <HashPrint hash={DEMO.current} /> Proposed <HashPrint hash={DEMO.proposed} /></div></div></li>
+        <li className="done"><div><div className="what">Compared on the isolated engine</div><div className="when">17 Oct 2026, 21:15 · no network</div><div className="detail">Evidence <HashPrint hash={DEMO.evidence} /></div></div></li>
+        <li className="done"><div><div className="what">Sealed as case MG-F3A3</div><div className="when">17 Oct 2026, 21:15</div></div></li>
+        <li className="ok"><div><div className="what">Replayed: identical</div><div className="when">20 Oct 2026, 15:57</div><div className="detail">Evidence <HashPrint hash={DEMO.evidence} /> <Stamp kind="replayed" /></div></div></li>
+      </ol>
     </div></section>
 
     <section className="home-closing" aria-labelledby="closing-title"><div className="public-width" data-reveal><h2 id="closing-title">Stop guessing why the number moved.</h2><div><a className="button primary public-cta" href="/signup">Sign up — free beta <ArrowRight size={18} aria-hidden="true" /></a><a href="/signin">Sign in</a></div></div></section>
   </div>;
 }
 
-function ReconciliationCard() {
-  return <div className="reconciliation seal-card" data-reveal role="img" aria-label="Synthetic demo reconciliation: current revenue 750.75 INR, proposed 410.75 INR, a difference of minus 340 INR. R003 contributes minus 200, R007 minus 90, R004 minus 50. Evidence case MG-F3A3.">
-    <div aria-hidden="true"><div className="seal-strip recon-seal"><span>Sealed</span><span className="seal-no">MG-F3A3</span></div>
-      <div className="recon-metrics"><div><span>Current · Revenue</span><strong>750.75 <small>INR</small></strong></div><div><span>Proposed</span><strong>410.75 <small>INR</small></strong></div></div>
-      <div className="recon-connector" /><div className="recon-answer">−340.00 <span>INR</span></div>
-      <div className="recon-records"><div className="recon-record-header"><span>Record</span><span>Change · INR</span></div>{[['R003', '−200.00'], ['R007', '−90.00'], ['R004', '−50.00']].map(([key, value]) => <div data-record key={key}><span>{key}</span><span>{value}</span></div>)}</div>
-      <p className="recon-match"><Check size={16} />Replay matched byte for byte</p>
-    </div>
-  </div>;
+// The demo case shown on the homepage: real values and hashes from the seeded demo workspace.
+const DEMO = {
+  dataset: '442bd3d056832e6ea3a24bc62635fcffc72c957f4deef1d7e50d28c5990af648',
+  current: '6b999209d489aebcf4fb97d3b256bacdf59861d822dea0a4a908135cb5ee64c2',
+  proposed: '41f98de6826f493fadbf63d56d07bf74b097be7ab1467224126809c92378afa8',
+  evidence: '761d2b86d3f47de44f00929f5ab7053a31fd41143cf6214f4b5fdaf20ae790a7',
+};
+
+/** The product's own picture: the demo case's reconciliation bridge, drawn by the same component as the app. */
+function HeroReconciliation() {
+  return <figure className="hero-reconciliation" data-reveal>
+    <figcaption className="hero-case-line">
+      <span className="case-no">MG-F3A3</span>
+      <span>Demo · Revenue, completed orders only</span>
+      <Stamp kind="sealed" />
+    </figcaption>
+    <Bridge
+      start={{ label: 'Current', value: 750.75, text: '750.75 INR' }}
+      end={{ label: 'Proposed', value: 410.75, text: '410.75 INR' }}
+      steps={[{ key: 'excluded', label: 'Excluded by proposed', value: -340, text: '\u2212340.00 INR', records: 3 }]}
+      residualText="0.00 INR" balanced
+      description="Demo reconciliation: current revenue 750.75 INR, minus 340.00 INR from 3 records excluded by the proposed calculation, unexplained 0.00, equals proposed 410.75 INR. Balanced." />
+    <p className="demo-caption">Synthetic demo orders: R003 −200.00, R007 −90.00 and R004 −50.00 explain the difference exactly.</p>
+  </figure>;
 }
 
 // Draft — review before launch. Replace [region] and [contact email] before publishing.

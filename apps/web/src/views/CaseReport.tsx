@@ -1,9 +1,20 @@
 import { resultUnit } from '../resultSummary';
-import { useEffect, useState } from 'react';
-import { ArrowLeft, Download, Pencil, RefreshCw } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowLeft, Copy, Download, Link2, Pencil, RefreshCw } from 'lucide-react';
 import { api, ApiError, versionName, type Bootstrap, type InvestigationDetail, type Run } from '../api';
 import { caseNumber, KIND_LABEL } from '../investigationLibrary';
 import { ResultReport } from './ResultReport';
+import { CustodyLog, replayMatches } from './evidence/CustodyLog';
+import { caseSummaryMarkdown } from './evidence/copySummary';
+
+/** Copy text to the clipboard, with a fallback for browsers without the async clipboard API. */
+async function copyText(text: string) {
+  try { await navigator.clipboard.writeText(text); return; } catch { /* fall back below */ }
+  const area = document.createElement('textarea');
+  area.value = text; area.setAttribute('readonly', ''); area.style.position = 'fixed'; area.style.opacity = '0';
+  document.body.appendChild(area); area.select();
+  try { document.execCommand('copy'); } finally { area.remove(); }
+}
 
 const pending = (state?: string) => state === 'queued' || state === 'running' || state === 'pending';
 
@@ -24,6 +35,27 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
   const [replay, setReplay] = useState<Run | null>(null);
   const [replayProblem, setReplayProblem] = useState('');
   const [replaying, setReplaying] = useState(false);
+  const [custodyOpen, setCustodyOpen] = useState(false);
+  const [copied, setCopied] = useState<'' | 'summary' | 'link'>('');
+  const copyRef = useRef<() => void>(() => undefined);
+
+  // "C" copies the case summary (ignored while typing or with a modifier key).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (e.key.toLowerCase() !== 'c' || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (target && (target.closest('input, textarea, select, [contenteditable="true"]'))) return;
+      e.preventDefault();
+      copyRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(''), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
 
   useEffect(() => {
     let active = true;
@@ -85,6 +117,24 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
   const replayBlocker = !detail.replay_available ? 'The frozen dataset is no longer available, so this case cannot be replayed. The saved result stays readable.'
     : data.mode !== 'isolated' ? 'Replay needs the isolated engine (scripts\\mg.ps1 start).' : '';
 
+  const link = `${window.location.origin}/w/${encodeURIComponent(data.project.id)}/investigations/${encodeURIComponent(detail.id)}`;
+  // Replays of this case recorded on the server, plus the one running now.
+  const replays = [...(data.runs || []).filter(r => r.investigation_id === detail.id && r.id !== replay?.id), ...(replay ? [replay] : [])]
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const verified = [...replays].reverse().find(r => r.result && replayMatches(detail.run, r));
+  const copySummary = async () => {
+    try {
+      const [summary, breakdown] = await Promise.all([
+        api.evidenceSummary(detail.run.id).catch(() => null),
+        api.evidenceBreakdown(detail.run.id, undefined, 3).catch(() => null),
+      ]);
+      await copyText(caseSummaryMarkdown({ detail, unit, summary, breakdown, link,
+        replayVerifiedAt: verified?.completed_at || verified?.created_at || null }));
+      setCopied('summary');
+    } catch (e) { setReplayProblem(`The summary could not be copied: ${e instanceof Error ? e.message : String(e)}`); }
+  };
+  copyRef.current = () => { void copySummary(); };
+
   const startReplay = async () => {
     setReplaying(true); setReplayProblem('');
     try { setReplay(await api.replayInvestigation(detail.id)); }
@@ -100,8 +150,13 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
           <p><span className="case-no">{caseNumber(detail.run.id)}</span> · {KIND_LABEL[kind]}{(detail.run as { target_snapshot_id?: string }).target_snapshot_id ? ' · two loads' : ''} · recorded by {detail.actor_label}, {new Date(detail.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}{unit && ` · ${unit}`}</p>
         </div>
         <div className="heading-actions">
-          <button className="button secondary" onClick={onBack}><ArrowLeft size={15} /> Cases</button>
-          <button className="button secondary" onClick={() => onEdit(relational)}><Pencil size={15} /> Edit comparison</button>
+          <button className="button secondary small" onClick={onBack}><ArrowLeft size={15} /> Cases</button>
+          <button className="button secondary small" onClick={() => void copySummary()} title="Copy a summary for Slack, Jira or a pull request (shortcut: C)">
+            <Copy size={15} /> Copy summary
+          </button>
+          <button className="button secondary small" onClick={() => void copyText(link).then(() => setCopied('link'))}><Link2 size={15} /> Copy link</button>
+          <button className="button secondary small" onClick={() => onEdit(relational)}><Pencil size={15} /> Edit comparison</button>
+          {copied && <span className="copied-note" role="status">{copied === 'summary' ? 'Summary copied' : 'Link copied'}</span>}
         </div>
       </div>
 
@@ -112,6 +167,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
             baselineSql={detail.baseline_version.raw_sql} targetSql={detail.target_version.raw_sql}
             snapshot={detail.snapshot} versions={defs.flatMap(d => d.versions)}
             sealStatus={pending(replay?.state) || replaying ? 'verifying' : replay?.result ? (same ? 'intact' : 'broken') : null}
+            onCustody={() => setCustodyOpen(true)}
             note={<div className="case-conclusion"><h2>Conclusion</h2><p style={{ whiteSpace: 'pre-wrap' }}>{detail.decision}</p></div>} />
         ) : (
           <>
@@ -130,7 +186,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
       </section>
 
       <section className="guided-card" aria-labelledby="replay-title">
-        <h2 id="replay-title">Replay</h2>
+        <h2 id="replay-title">Replay &amp; verify</h2>
         <p className="lead">Re-runs the saved calculations on the same frozen dataset to confirm the result reproduces exactly. The saved case is not changed.</p>
         <div className="report-actions">
           <button className="button primary" disabled={replaying || pending(replay?.state) || Boolean(replayBlocker)} onClick={() => void startReplay()} aria-describedby={replayBlocker ? 'replay-blocker' : undefined}>
@@ -147,6 +203,10 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
           </p>
         )}
       </section>
+      {custodyOpen && (
+        <CustodyLog detail={detail} replays={replays} live={replay} replaying={replaying} blocker={replayBlocker}
+          onReplay={() => void startReplay()} onClose={() => setCustodyOpen(false)} />
+      )}
     </div>
   );
 }

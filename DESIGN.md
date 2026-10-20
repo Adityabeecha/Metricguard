@@ -361,3 +361,17 @@ Light, Dark and System (the default, which follows the operating system). The ch
 Dark keeps the same world: a near-black ground (#131619), graphite panels (#1B1F23, #22272C), warm-neutral ink (#E7E9EB), a darker charcoal rail (#0E1012), seal blue #3466E0 (white text stays above 4.5:1), kraft #C9A574, link #8FADF5, and lifted state colours (ok #5DBE88, warn #E0A64C, danger #EE857B) on dark tints. Every component colour comes from tokens, so no component carries its own light or dark value; inverted chips and step numbers use `--panel` for their text so they flip correctly.
 
 **The Token Only Rule.** Components never use raw hex. White surfaces are `var(--panel)`, text on the seal or primary button is `var(--on-accent)`, and the selection highlight is `var(--selection)`. A raw colour in a component breaks dark mode.
+
+## The reconciliation file (2026-10-20)
+
+Full specification: [docs/design/evidence-ui-spec.md](docs/design/evidence-ui-spec.md). These components carry the product's own look and replace generic SaaS patterns.
+
+- **Reconciliation bridge** (`views/evidence/Bridge.tsx`): current total, one step per change category, unexplained, proposed total. Totals solid `--ink`, decreases hatched `--text-2`, increases solid `--text-2`, dashed `--line-strong` connectors, the unexplained line in `--ok` with a BALANCED stamp. A shortened axis (torn base) keeps small steps readable. Phones get a ruled list instead of the drawing. Every figure is the server's exact string.
+- **Ledger tables** (`views/evidence/Ledger.tsx`, Exhibit B in `ResultReport`): no card; a 2px `--ink` top rule, 1px `--line` rows, Archivo Narrow caps headers, mono right-aligned figures, an exact running total, and an accountant's double rule under the total. Inline "current → proposed" with the leaving state struck through.
+- **Share bars** (Exhibit B): a solid ink bar for the share of the difference and a `--line-strong` tick for the share of records; "Concentrated" in kraft when the difference share is at least twice the record share.
+- **Hash prints** (`views/evidence/HashPrint.tsx`): a 6×6 mirror-symmetric glyph from the SHA-256, ink on `--tint-strong`, beside the short hash. The same hash always draws the same glyph.
+- **Custody log** (`views/evidence/CustodyLog.tsx`): a ruled timeline (frozen, pinned, compared, sealed, replays) with hash prints; it opens from the seal card as a right-side drawer.
+- **Stamps** (`views/evidence/Stamp.tsx`): only SEALED (seal blue), BALANCED and REPLAYED ✓ (ok), DIFFERS (ink on danger tint). Archivo Narrow caps, 2px border, rotated −2°, one ink-down animation; at most one per screen region.
+- **Exhibits**: result tabs read A Records, B Where it sits, C Definitions, D Limits, with the letter in kraft mono.
+
+**The No Generic Card Rule.** Don't add icon-title-sentence card grids, pill rows or identical rounded panels. Use ruled ledgers, exhibits, real data and the product's own pictures (bridge, custody log).

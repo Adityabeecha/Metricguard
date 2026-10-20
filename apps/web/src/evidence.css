@@ -1,0 +1,159 @@
+/* The reconciliation file: bridge, records ledger, where-it-sits shares, stamps, hash prints and the
+   custody log. See docs/design/evidence-ui-spec.md. Tokens only; works in light and dark. */
+
+/* ---------------------------------------------------------------- exhibit letters */
+.exhibit { font: 600 12px var(--font-mono); color: var(--kraft); margin-right: 8px; letter-spacing: 0; }
+.result-tabs .tab .exhibit { margin-right: 6px; }
+
+/* ---------------------------------------------------------------- stamps */
+.mg-stamp {
+  display: inline-block; font: 700 11px var(--font-label); letter-spacing: 0.14em; text-transform: uppercase;
+  padding: 2px 8px; border: 2px solid currentColor; border-radius: 3px; transform: rotate(-2deg);
+  animation: mg-stamp-in 180ms var(--ease-out) both; white-space: nowrap;
+}
+.mg-stamp.sealed { color: var(--seal); }
+.mg-stamp.balanced, .mg-stamp.replayed { color: var(--ok); }
+.mg-stamp.differs { color: var(--ink); background: var(--danger-tint); }
+@keyframes mg-stamp-in { from { transform: rotate(-2deg) scale(1.15); opacity: 0; } to { transform: rotate(-2deg) scale(1); opacity: 1; } }
+
+/* ---------------------------------------------------------------- hash prints */
+.hash-print { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; }
+.hash-print svg { flex: none; display: block; }
+.hash-print code { font: 500 12px var(--font-mono); color: var(--text-2); }
+.hash-print-ground { fill: var(--tint-strong); }
+.hash-print-cell { fill: var(--ink); }
+
+/* ---------------------------------------------------------------- bridge */
+.bridge { margin: 4px 0 6px; padding: 18px 0 10px; border-top: 2px solid var(--ink); border-bottom: 1px solid var(--line); }
+.bridge-svg { width: 100%; height: auto; display: block; overflow: visible; }
+.bridge-axis { stroke: var(--line-strong); stroke-width: 1; }
+.bridge-total { fill: var(--ink); }
+.bridge-break { fill: var(--ground); }
+.bridge-down { fill: url(#bridge-hatch); stroke: var(--text-2); stroke-width: 1; }
+.bridge-up { fill: var(--text-2); }
+.bridge-hatch-ground { fill: var(--panel); }
+.bridge-hatch-line { stroke: var(--text-2); stroke-width: 2; }
+.bridge-connector { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 4 3; }
+.bridge-residual { stroke: var(--ok); stroke-width: 3; }
+.bridge-figure { font: 600 15px var(--font-mono); fill: var(--ink); }
+.bridge-label { font: 600 12px var(--font-label); letter-spacing: 0.06em; text-transform: uppercase; fill: var(--text-2); }
+.bridge-records { font: 500 11px var(--font-mono); fill: var(--muted); }
+.bridge-step.pickable { cursor: pointer; }
+.bridge-step.pickable:hover .bridge-down, .bridge-step.pickable:hover .bridge-up { stroke: var(--seal); stroke-width: 2; }
+.bridge-step:focus-visible { outline: none; }
+.bridge-step:focus-visible rect { stroke: var(--link); stroke-width: 3; }
+.bridge-caption { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.bridge-list { display: none; list-style: none; margin: 0; padding: 0; }
+.bridge-list li { border-bottom: 1px solid var(--line); }
+.bridge-list li > span, .bridge-list button { display: flex; justify-content: space-between; gap: 12px; width: 100%; padding: 8px 0; background: none; border: 0; color: var(--ink); font: 500 14px var(--font-ui); text-align: left; }
+.bridge-list button:not(:disabled) { cursor: pointer; }
+.bridge-list b { font: 600 14px var(--font-mono); white-space: nowrap; }
+.bridge-list small { display: block; font: 500 11px var(--font-mono); color: var(--muted); }
+.bridge-list li.total > span { font-weight: 700; }
+@media (max-width: 640px) {
+  .bridge-svg { display: none; }
+  .bridge-list { display: block; }
+}
+
+/* ---------------------------------------------------------------- ledger tables (Exhibit A and B) */
+.ledger, .where-it-sits { margin-top: 4px; }
+.ledger-head, .where-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; margin-bottom: 8px; }
+.ledger-head h3, .where-head h3 { font: 700 16px var(--font-ui); margin: 0; }
+.where-head label { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+.ledger-tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--line); }
+.ledger-tabs button { background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 6px 10px; font: 600 13px var(--font-ui); color: var(--muted); cursor: pointer; }
+.ledger-tabs button:hover { color: var(--ink); }
+.ledger-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--seal); }
+.ledger-tabs .n { font: 500 12px var(--font-mono); margin-left: 4px; color: var(--text-2); }
+
+.ledger-table { width: 100%; border-collapse: collapse; border-top: 2px solid var(--ink); background: none; }
+.ledger-table th, .ledger-table td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: baseline; background: none; }
+.ledger-table thead th { font: 600 11px var(--font-label); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.ledger-table tbody th { font-weight: 600; }
+.ledger-table .num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ledger-table .key { font: 500 13px var(--font-mono); }
+.ledger-table .change { color: var(--ink); font-weight: 600; }
+.ledger-table .running { color: var(--muted); }
+.ledger-table .move { font-size: 13px; }
+.ledger-table .move .was { color: var(--muted); }
+.ledger-table .move .was.left { text-decoration: line-through; text-decoration-color: var(--line-strong); }
+.ledger-table .move .arrow { margin: 0 8px; color: var(--faint); }
+.ledger-table .move .now { color: var(--ink); }
+.ledger-table .move .n { font-family: var(--font-mono); }
+.ledger-table tfoot th { font: 600 11px var(--font-label); letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-2); border-bottom: 0; }
+.ledger-table tfoot td { border-bottom: 0; font-weight: 700; }
+.double-rule { display: inline-block; padding-bottom: 2px; border-bottom: 3px double var(--ink); }
+.ledger-foot { margin-top: 8px; font-size: 13px; color: var(--text-2); }
+.ledger-foot p { margin: 4px 0; }
+.ledger-balance { font-family: var(--font-mono); font-size: 12.5px; }
+.ledger-balance.ok b { color: var(--ok); }
+.ledger-unchanged { color: var(--muted); }
+
+/* Exhibit B: share of the difference vs share of records */
+.where-legend { font-size: 12px; color: var(--muted); margin: 0 0 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.legend-bar { display: inline-block; width: 18px; height: 8px; background: var(--ink); }
+.legend-tick { display: inline-block; width: 2px; height: 12px; background: var(--line-strong); margin-left: 10px; }
+.where-table tr.muted th, .where-table tr.muted td { color: var(--muted); }
+.where-table tr.other th { font-style: italic; font-weight: 500; }
+.shares { min-width: 220px; }
+.share-track { position: relative; display: block; height: 8px; background: var(--tint); margin: 4px 0 4px; }
+.share-diff { position: absolute; left: 0; top: 0; bottom: 0; background: var(--ink); }
+.share-records { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--line-strong); }
+.share-text { font: 600 12px var(--font-mono); }
+.share-text small { font-weight: 500; color: var(--muted); }
+.concentrated { margin-left: 8px; font: 600 11px var(--font-label); letter-spacing: 0.06em; text-transform: uppercase; color: var(--kraft); }
+
+@media (max-width: 760px) {
+  .ledger-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .ledger-table, .ledger-table tbody, .ledger-table tfoot, .ledger-table tr { display: block; width: 100%; }
+  .ledger-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .ledger-table th, .ledger-table td { display: block; border: 0; padding: 0; text-align: left; }
+  .ledger-table .num { text-align: right; }
+  .ledger-table .key, .ledger-table tbody th { grid-column: 1; }
+  .ledger-table .change { grid-column: 2; grid-row: 1; }
+  .ledger-table .move, .ledger-table .shares { grid-column: 1 / -1; }
+  .ledger-table .running { grid-column: 1 / -1; text-align: left; }
+  .ledger-table .running::before, .ledger-table .shares::before { content: attr(data-label) ' '; font: 600 10px var(--font-label); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .where-table td[data-label]:not(.change):not(.shares) { grid-column: 1 / -1; text-align: left; }
+  .ledger-table tfoot tr { display: flex; justify-content: space-between; padding-top: 10px; }
+  .shares { min-width: 0; }
+}
+
+/* ---------------------------------------------------------------- custody log drawer */
+.custody-backdrop { position: fixed; inset: 0; background: color-mix(in srgb, var(--rail) 40%, transparent); z-index: 60; }
+.custody-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); z-index: 61; overflow-y: auto;
+  background: var(--panel); border-left: 1px solid var(--line-strong); box-shadow: var(--shadow-2); padding: 20px 22px 32px;
+}
+.custody-drawer header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; border-bottom: 2px solid var(--ink); padding-bottom: 10px; margin-bottom: 6px; }
+.custody-drawer h2 { font: 700 18px var(--font-ui); margin: 0; }
+.custody-log { list-style: none; margin: 0; padding: 0; }
+.custody-log li { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 0 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.custody-log li::before { content: ''; width: 9px; height: 9px; margin-top: 5px; border: 2px solid var(--ink); border-radius: 50%; background: var(--panel); }
+.custody-log li.done::before { background: var(--ink); }
+.custody-log li.ok::before { border-color: var(--ok); background: var(--ok); }
+.custody-log li.bad::before { border-color: var(--danger); background: var(--danger); }
+.custody-log .what { font-weight: 600; }
+.custody-log .when { font: 500 12px var(--font-mono); color: var(--muted); }
+.custody-log .detail { font-size: 13px; color: var(--text-2); margin-top: 2px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.custody-verify { margin-top: 16px; }
+.custody-steps { list-style: none; margin: 10px 0 0; padding: 0; font-size: 13px; }
+.custody-steps li { padding: 3px 0; color: var(--muted); }
+.custody-steps li.done { color: var(--ink); }
+.custody-steps li.done::before { content: '✓ '; color: var(--ok); }
+
+.copied-note { font-size: 12px; color: var(--ok); margin-left: 8px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mg-stamp { animation: none; }
+}
+
+.seal-custody { display: inline-block; margin-top: 10px; }
+
+.where-it-sits > small { margin-top: 8px; color: var(--muted); }
+
+/* Phone fixes: total rows sit on one line; the caption wraps instead of overflowing. */
+.bridge-list li:not(:has(button)) { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; font: 500 14px var(--font-ui); }
+.bridge-list li:not(:has(button)) > span { display: inline; padding: 0; width: auto; }
+.bridge-caption { flex-wrap: wrap; }
+.bridge-caption .mg-stamp { margin-right: 4px; }

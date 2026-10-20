@@ -7,6 +7,7 @@ import './style.css';
 import './closeout.css';
 import './theme.css';
 import './seal.css';
+import './evidence.css';
 
 applyTheme(readThemeChoice());
 watchSystemTheme(readThemeChoice);

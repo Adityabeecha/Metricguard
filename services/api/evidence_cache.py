@@ -29,13 +29,54 @@ DISK_INDEX_BYTES = 32 * 1024 * 1024
 
 
 class _Entry:
-    __slots__ = ('size', 'mtime_ns', 'offsets', 'line_hashes', 'summary', 'keys', 'magnitudes', 'views', 'disk')
+    __slots__ = ('size', 'mtime_ns', 'offsets', 'line_hashes', 'summary', 'keys', 'magnitudes', 'categories', 'views', 'disk')
 
-    def __init__(self, size, mtime_ns, offsets, line_hashes, summary, keys, magnitudes):
+    def __init__(self, size, mtime_ns, offsets, line_hashes, summary, keys, magnitudes, categories=None):
         self.size, self.mtime_ns, self.offsets, self.line_hashes, self.summary = size, mtime_ns, offsets, line_hashes, summary
         self.keys, self.magnitudes = keys, magnitudes
+        self.categories = categories or []
         self.views: dict[tuple, list[int]] = {}
         self.disk = None
+
+
+# How a record moved between the two calculations. Two-load runs carry their own label; every other
+# run is classified from its inclusion flags. Unchanged records have no category.
+CATEGORY_ORDER = ('excluded', 'added', 'value_changed', 'removed', 'entered_filter', 'left_filter')
+TWO_LOAD_CATEGORIES = {'added', 'removed', 'value_changed', 'entered_filter', 'left_filter'}
+
+
+def category_of(row: dict) -> str | None:
+    if _magnitude(row.get('delta')) == 0:
+        return None
+    label = row.get('change')
+    if label is not None:
+        return label if label in TWO_LOAD_CATEGORIES else None
+    current, proposed = bool(row.get('baseline_included')), bool(row.get('target_included'))
+    if current and not proposed:
+        return 'excluded'
+    if proposed and not current:
+        return 'added'
+    return 'value_changed'
+
+
+class CategoryTotals:
+    """Exact record counts and summed changes per category, built while the evidence is indexed."""
+
+    def __init__(self):
+        self.records: dict[str, int] = {}
+        self.change: dict[str, Decimal] = {}
+
+    def add(self, category, delta) -> None:
+        if category is None:
+            return
+        self.records[category] = self.records.get(category, 0) + 1
+        with localcontext() as exact:
+            exact.prec = 100
+            self.change[category] = self.change.get(category, Decimal(0)) + _dec(delta)
+
+    def public(self) -> list[dict]:
+        return [{'key': key, 'records': self.records[key], 'change': str(self.change[key])}
+                for key in CATEGORY_ORDER if key in self.records]
 
 
 _cache: 'OrderedDict[tuple, _Entry]' = OrderedDict()
@@ -61,6 +102,8 @@ def _index(path: Path):
     hashes: list[str] = []
     keys: list[str] = []
     magnitudes: list[Decimal] = []
+    categories: list = []
+    totals = CategoryTotals()
     changed = blank = 0
     top: list[tuple[Decimal, int, dict]] = []
     content_hash = hashlib.sha256()
@@ -77,6 +120,9 @@ def _index(path: Path):
             magnitude = _magnitude(row.get('delta'))
             keys.append(record_key(row))
             magnitudes.append(magnitude)
+            category = category_of(row)
+            categories.append(category)
+            totals.add(category, row.get('delta'))
             if magnitude:
                 changed += 1
                 top.append((magnitude, number, row))
@@ -85,8 +131,8 @@ def _index(path: Path):
                     del top[TOP_CHANGES:]
     top.sort(key=lambda t: (-t[0], t[1]))
     summary = {'total': len(offsets), 'changed': changed, 'blank_amount_rows': blank,
-               'top_changes': [row for _, _, row in top[:TOP_CHANGES]]}
-    return offsets, hashes, summary, keys, magnitudes, content_hash.hexdigest()
+               'top_changes': [row for _, _, row in top[:TOP_CHANGES]], 'categories': totals.public()}
+    return offsets, hashes, summary, keys, magnitudes, categories, content_hash.hexdigest()
 
 
 _building: dict[tuple, threading.Lock] = {}
@@ -127,16 +173,16 @@ def _fresh(path: Path, key: tuple, verify_all: Callable[[], Any]) -> _Entry:
         if stat.st_size > DISK_INDEX_BYTES:
             from .evidence_disk_index import DiskIndex
             disk = DiskIndex(path, record_key)
-            offsets, hashes, summary, keys, magnitudes, indexed_hash = disk, [], disk.summary, [], [], disk.digest
+            offsets, hashes, summary, keys, magnitudes, categories, indexed_hash = disk, [], disk.summary, [], [], [], disk.digest
         else:
-            offsets, hashes, summary, keys, magnitudes, indexed_hash = _index(path)
+            offsets, hashes, summary, keys, magnitudes, categories, indexed_hash = _index(path)
         after = path.stat()
         # The index must describe the bytes whose digest was frozen by the
         # supervisor, including when the file changes between verification/indexing.
         if (indexed_hash != key[-1] or stat.st_size != after.st_size or
                 stat.st_mtime_ns != after.st_mtime_ns):
             raise ValueError('EVIDENCE_INVALID')
-        entry = _Entry(stat.st_size, stat.st_mtime_ns, offsets, hashes, summary, keys, magnitudes)
+        entry = _Entry(stat.st_size, stat.st_mtime_ns, offsets, hashes, summary, keys, magnitudes, categories)
         entry.disk = disk
         with _lock:
             _cache[key] = entry
@@ -155,15 +201,16 @@ def _drop(key: tuple) -> None:
         _cache.pop(key, None)
 
 
-def _view(entry: _Entry, changed_only: bool, query: str, order: str) -> list[int] | None:
+def _view(entry: _Entry, changed_only: bool, query: str, order: str, category: str = '') -> list[int] | None:
     """Row numbers for a filtered/sorted view, or None for the plain file order."""
     query = query.strip().lower()
-    if not changed_only and not query and order != 'impact':
+    if not changed_only and not query and order != 'impact' and not category:
         return None
-    view_key = (changed_only, query, order)
+    view_key = (changed_only, query, order, category)
     if view_key not in entry.views:
         rows = [i for i in range(len(entry.offsets))
-                if (not changed_only or entry.magnitudes[i]) and (not query or query in entry.keys[i].lower())]
+                if (not changed_only or entry.magnitudes[i]) and (not query or query in entry.keys[i].lower())
+                and (not category or entry.categories[i] == category)]
         if order == 'impact':
             rows.sort(key=lambda i: (-entry.magnitudes[i], i))
         if len(entry.views) > 8:
@@ -173,12 +220,12 @@ def _view(entry: _Entry, changed_only: bool, query: str, order: str) -> list[int
 
 
 def page(path: Path, key: tuple, verify_all: Callable[[], Any], offset: int, limit: int,
-         changed_only: bool = False, query: str = '', order: str = 'file') -> tuple[list[dict], int]:
+         changed_only: bool = False, query: str = '', order: str = 'file', category: str = '') -> tuple[list[dict], int]:
     """Rows of a (optionally filtered/sorted) view and its total, served only from verified bytes."""
     path = Path(path)
     entry = _fresh(path, key, verify_all)
     if entry.disk is not None:
-        positions, count = entry.disk.select(offset, limit, changed_only, query, order)
+        positions, count = entry.disk.select(offset, limit, changed_only, query, order, category)
         rows = []
         with path.open('rb') as source:
             for position, expected in positions:
@@ -189,7 +236,7 @@ def page(path: Path, key: tuple, verify_all: Callable[[], Any], offset: int, lim
                     raise ValueError('EVIDENCE_INVALID')
                 rows.append(json.loads(line))
         return rows, count
-    view = _view(entry, changed_only, query, order)
+    view = _view(entry, changed_only, query, order, category)
     count = len(entry.offsets) if view is None else len(view)
     numbers = range(offset, min(offset + limit, count))
     wanted = numbers if view is None else [view[i] for i in numbers]
@@ -418,7 +465,11 @@ def _ratio_breakdown(path, key, verify_all, column, context, ratio, limit, bucke
     ordered = sorted(groups.values(), key=lambda g: (-abs(g['share']), str(g['value'])))
     rest = ordered[limit:]
     rest_share = sum((g['share'] for g in rest), Fraction(0))
+    absolute = sum((abs(g['share']) for g in ordered), Fraction(0))
     return {'column': column, 'ratio': True,
+            'total_records': sum(g['records'] for g in ordered), 'other_records': sum(g['records'] for g in rest),
+            'other_changed_records': sum(g['changed_records'] for g in rest),
+            'abs_change_total': flat_ratio.fraction_text(absolute / divisor) if divisor else None,
             'total_change': flat_ratio.display(total / divisor, places) if divisor else None,
             'total_change_exact': flat_ratio.fraction_text(total / divisor) if divisor else None,
             'groups': [_public_group(shown(g)) for g in ordered[:limit]], 'other_groups': len(rest),
@@ -434,7 +485,7 @@ def breakdown(path: Path, key: tuple, verify_all: Callable[[], Any], column: str
     of per distinct timestamp.
     """
     entry = _fresh(Path(path), key, verify_all)
-    cache_key = ('breakdown', column, id(context), bucket)
+    cache_key = ('breakdown', column, id(context), bucket, limit)
     if cache_key in entry.views:
         return entry.views[cache_key]  # type: ignore[return-value]
     if ratio:
@@ -461,6 +512,10 @@ def breakdown(path: Path, key: tuple, verify_all: Callable[[], Any], column: str
         result = {
             'column': column,
             'total_change': str(total_change),
+            'total_records': sum(g['records'] for g in ordered),
+            'other_records': sum(g['records'] for g in rest),
+            'other_changed_records': sum(g['changed_records'] for g in rest),
+            'abs_change_total': str(sum((abs(g['change']) for g in ordered), Decimal(0))),
             'groups': [_public_group({**g, 'current': str(g['current']), 'proposed': str(g['proposed']), 'change': str(g['change'])})
                        for g in ordered[:limit]],
             'other_groups': len(rest),
