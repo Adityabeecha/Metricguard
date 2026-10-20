@@ -18,13 +18,16 @@ export function parseRoute(pathname: string, search: string = '', defaultWorkspa
   const clean = pathname.replace(/\/+$/, '') || '/';
   
   // Format: /w/:workspaceId/:page(/:subId)
-  const match = clean.match(/^\/w\/([a-zA-Z0-9_-]+)(?:\/([a-zA-Z0-9_-]+))?(?:\/([a-zA-Z0-9_.-]+))?/);
+  const match = clean.match(/^\/w\/([a-zA-Z0-9_-]+)(?:\/([a-zA-Z0-9_-]+))?(?:\/([a-zA-Z0-9_.-]+))?$/);
   if (match) {
     const workspaceId = match[1] || defaultWorkspaceId;
     const rawPage = match[2] || 'dashboard';
     const subId = match[3];
     let page: Page = 'dashboard';
     let tab = query.tab;
+    if (subId && !['metrics', 'changes', 'investigations'].includes(rawPage)) {
+      return { workspaceId, page, query, rawPath: clean, notFound: true };
+    }
 
     if (rawPage === 'metrics' && subId && !query.metricId) {
       query.metricId = subId;
@@ -96,6 +99,9 @@ export function parseRoute(pathname: string, search: string = '', defaultWorkspa
   let page: Page = 'dashboard';
   let tab = query.tab;
   const legacySeg = clean.slice(1).split('/')[0];
+  if (clean.slice(1).includes('/')) {
+    return { workspaceId: defaultWorkspaceId, page, query, rawPath: clean, notFound: true };
+  }
 
   switch (legacySeg) {
     case 'compare':
@@ -147,6 +153,24 @@ export function parseRoute(pathname: string, search: string = '', defaultWorkspa
   }
 
   return { workspaceId: defaultWorkspaceId, page, tab, query, rawPath: clean };
+}
+
+export type SitePage = 'home' | 'signin' | 'signup' | 'privacy' | 'terms' | 'workspace' | 'not-found';
+
+/** Public routes never mount workspace components or fetch their data. */
+export function sitePage(pathname: string): SitePage {
+  const clean = pathname.replace(/\/+$/, '') || '/';
+  if (clean === '/') return 'home';
+  if (clean === '/signin' || clean === '/signup' || clean === '/privacy' || clean === '/terms') {
+    return clean.slice(1) as SitePage;
+  }
+  return parseRoute(pathname).notFound ? 'not-found' : 'workspace';
+}
+
+export function homeRedirect(identity: { verified?: boolean; home_workspace_id?: string | null } | null): string | null {
+  const id = identity?.home_workspace_id;
+  return identity?.verified === true && typeof id === 'string' && /^[a-zA-Z0-9_-]+$/.test(id)
+    ? buildRouteUrl(id, 'investigations') : null;
 }
 
 export function buildRouteUrl(workspaceId: string, page: Page, tab?: string, query?: Record<string, string>): string {

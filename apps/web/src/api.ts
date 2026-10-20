@@ -505,6 +505,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type ConnectedIdentity = {
   verified: boolean;
+  home_workspace_id?: string | null;
   session?: boolean;
   user: { id: string; name: string | null; email: string | null } | null;
   project_id: string | null;

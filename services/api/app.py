@@ -16,6 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .models import (BaselineInput, ColumnMappingInput, ComparisonInput,
                      DatasetContractInput, DefinitionInput, DependencyInput,
@@ -1904,6 +1905,9 @@ def create_app(database_url=None, data_dir=None, mode=None):
         if auth.get('is_unverified'):
             return {'verified': False, 'user': None, 'project_id': project_id, 'role': None}
         user = auth['user']
+        accessible = store.list_projects_for_user(user['id'])
+        home = next((p for p in accessible if p['id'] == 'personal-' + user['id']),
+                    accessible[0] if accessible else None)
         role = None
         if project_id:
             member = verify_project_access(store, project_id, auth)  # non/revoked member -> 403
@@ -1911,6 +1915,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         return {
             'verified': True,
             'session': bool(auth.get('via_session')),
+            'home_workspace_id': home['id'] if home else None,
             'user': {'id': user.get('id'), 'name': user.get('name'), 'email': user.get('email')},
             'project_id': project_id,
             'role': role,
@@ -2233,6 +2238,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
 
         @app.get('/signin')
         @app.get('/signup')
+        @app.get('/privacy')
+        @app.get('/terms')
         def auth_spa_fallback():
             return FileResponse(index_file)
 
@@ -2240,7 +2247,19 @@ def create_app(database_url=None, data_dir=None, mode=None):
         def spa_fallback(path: str):
             return FileResponse(index_file)
 
-        app.mount('/', StaticFiles(directory=web_dist, html=True), name='web')
+        web_files = StaticFiles(directory=web_dist, html=True)
+
+        @app.api_route('/{path:path}', methods=['GET', 'HEAD'], include_in_schema=False)
+        async def public_or_static(path: str, request: Request):
+            # Never turn an unknown API endpoint or missing asset into app HTML.
+            if path == 'api' or path.startswith('api/'):
+                raise StarletteHTTPException(404)
+            try:
+                return await web_files.get_response(path, request.scope)
+            except StarletteHTTPException as error:
+                if error.status_code == 404 and 'text/html' in request.headers.get('accept', ''):
+                    return FileResponse(index_file, status_code=404)
+                raise
     return app
 
 

@@ -4,6 +4,10 @@ This is the compact entry point for future work. The [generated Graphify graph](
 
 ## Scope and source map
 
+- **Public website (2026-10-20):** `apps/web/src/PublicPages.tsx` and `public.css` render homepage, beta privacy/terms and 404 pages outside workspace loaders. `router.sitePage` classifies public routes and rejects extra path segments; `homeRedirect` consumes the existing identity endpoint's authorised `home_workspace_id`. `App` mounts workspace code only for known workspace routes. Actual synthetic demo captures are in `apps/web/public/images/`; `apps/web/vercel.json` keeps the documented backend placeholder and server-side origin-secret transform. Local page fallback and setup/verification limits: [deployment plan, step 5](deployment-plan.md). No Graphify refresh requested.
+
+  Homepage redesign adds sticky anchors, IntersectionObserver reveals, reduced-motion final states, an animated verified demo reconciliation and viewport/theme-aware evidence captures. `data/evaluation/homepage-v2/` contains browser/replay receipts. The Docker runner image now includes `services/durable.py`, required by its worker import; the actual eight-row demo replay matched after rebuilding. No parser or execution-policy change.
+
 - **Hosted account sign-in (2026-10-20):** `services/api/oauth.py` installs Google/GitHub code-flow routes, signed ten-minute Lax state cookies, one-use state records, verified-email invite gating and the existing Strict browser session. `Store.oauth_sign_in` atomically links identities and creates one personal workspace. `services/api/account_deletion.py` erases sole-member owned workspaces through durable storage while preserving shared records; active jobs refuse deletion. `SignInScreen.tsx`, `authFlow.ts` and `views/AccountSettings.tsx` provide social sign-in, API-key fallback, sign-out and typed deletion confirmation. Setup and verification scope: [deployment plan, step 4](deployment-plan.md). No generated graph refresh was requested.
 
 - **One product v1:** [planning pack](../MetricGuard_Planning_Pack/README.md). M0–M5 are its six milestones; MG01–MG26 are backlog items. There is no planned v2 in this pack.

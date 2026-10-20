@@ -32,7 +32,9 @@ import { StartComparison } from './views/StartComparison';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { SignInScreen } from './SignInScreen';
 import { loadAuthProviders } from './authApi';
-import { authPage, shouldRedirectToSignIn } from './authFlow';
+import { shouldRedirectToSignIn } from './authFlow';
+import { sitePage } from './router';
+import { PublicPages } from './PublicPages';
 
 
 const NAV_ITEMS: Array<{ id: Page; label: string; icon: React.ReactNode }> = [
@@ -50,8 +52,10 @@ export function App() {
     window.addEventListener('popstate', sync);
     return () => window.removeEventListener('popstate', sync);
   }, []);
-  const publicPage = authPage(pathname);
-  return publicPage ? <SignInScreen mode={publicPage} /> : <WorkspaceApp />;
+  const page = sitePage(pathname);
+  if (page === 'signin' || page === 'signup') return <SignInScreen mode={page} />;
+  if (page !== 'workspace') return <PublicPages page={page} />;
+  return <WorkspaceApp />;
 }
 
 function WorkspaceApp() {

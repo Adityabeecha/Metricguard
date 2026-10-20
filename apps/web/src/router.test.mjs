@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseRoute, buildRouteUrl } from './router.ts';
+import * as routing from './router.ts';
 
 test('parseRoute parses workspace routes correctly', () => {
   const r1 = parseRoute('/w/local-retail/dashboard');
@@ -61,4 +62,32 @@ test('unknown pages are flagged instead of silently showing Cases', () => {
   assert.equal(parseRoute('/w/local-retail').notFound, undefined);
   assert.equal(parseRoute('/').notFound, undefined);
   assert.equal(parseRoute('/nonsense').notFound, true);
+});
+
+test('public routes stay outside workspace bootstrapping', () => {
+  assert.equal(typeof routing.sitePage, 'function');
+  for (const [path, page] of [['/', 'home'], ['/privacy', 'privacy'], ['/terms/', 'terms'],
+    ['/signin', 'signin'], ['/signup', 'signup'], ['/w/acme/investigations', 'workspace']]) {
+    assert.equal(routing.sitePage(path), page);
+  }
+});
+
+test('homepage sends only verified identities with an accessible workspace to Cases', () => {
+  assert.equal(typeof routing.homeRedirect, 'function');
+  assert.equal(routing.homeRedirect(null), null);
+  assert.equal(routing.homeRedirect({ verified: false, home_workspace_id: 'local-retail' }), null);
+  assert.equal(routing.homeRedirect({ verified: true, home_workspace_id: 'personal-123' }), '/w/personal-123/investigations');
+  assert.equal(routing.homeRedirect({ verified: true, home_workspace_id: 'team-analytics' }), '/w/team-analytics/investigations');
+  for (const id of [null, '', '//evil.test', '../private', 'acme/../../evil']) {
+    assert.equal(routing.homeRedirect({ verified: true, home_workspace_id: id }), null);
+  }
+});
+
+test('unknown and partly matching paths resolve to the public 404', () => {
+  assert.equal(parseRoute('/w/acme/investigations/case/extra').notFound, true);
+  assert.equal(typeof routing.sitePage, 'function');
+  for (const path of ['/no-such-page', '/privacy/extra', '/w/acme/no-such-page',
+    '/w/acme/settings/extra', '/w/acme/investigations/case/extra', '/overview/extra']) {
+    assert.equal(routing.sitePage(path), 'not-found', path);
+  }
 });

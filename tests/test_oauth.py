@@ -255,7 +255,31 @@ def test_public_auth_pages_are_served_by_local_api(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, 'ROOT', tmp_path)
     app = create_app(database_url=f'sqlite:///{tmp_path / "shell.db"}', data_dir=tmp_path / 'data')
     with TestClient(app) as client:
-        for path in ('/signin', '/signup', '/signin?error=waitlist'):
+        for path in ('/signin', '/signup', '/signin?error=waitlist', '/privacy', '/terms'):
             response = client.get(path)
             assert response.status_code == 200
             assert 'OAuth application shell' in response.text
+        missing = client.get('/not-a-page', headers={'accept': 'text/html'})
+        assert missing.status_code == 404 and 'OAuth application shell' in missing.text
+        assert client.get('/missing.js').status_code == 404
+        assert client.head('/').status_code == 200
+        assert client.head('/').content == b''
+        assert client.get('/api/v1/does-not-exist', headers={'accept': 'text/html'}).status_code == 404
+        assert 'OAuth application shell' not in client.get('/api/v1/does-not-exist').text
+
+
+def test_identity_supplies_accessible_home_workspace_without_an_extra_public_api_call(setup):
+    client, store, _, _ = setup
+    user, key = store.create_user('Homepage analyst', 'homepage@example.test')
+    team = store.create_project('Shared team', user['id'])
+    response = client.get('/api/v1/auth/identity', headers={'x-api-key': key})
+    assert response.status_code == 200
+    assert response.json()['home_workspace_id'] == team['id']
+    # A personal workspace takes precedence; revoked memberships never become
+    # homepage destinations, even when the identity itself remains valid.
+    personal = store.create_project('Personal', user['id'], project_id='personal-' + user['id'])
+    assert client.get('/api/v1/auth/identity', headers={'x-api-key': key}).json()['home_workspace_id'] == personal['id']
+    store.revoke_project_member(personal['id'], user['id'])
+    assert client.get('/api/v1/auth/identity', headers={'x-api-key': key}).json()['home_workspace_id'] == team['id']
+    store.revoke_project_member(team['id'], user['id'])
+    assert client.get('/api/v1/auth/identity', headers={'x-api-key': key}).json()['home_workspace_id'] is None

@@ -4,6 +4,7 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt && groupadd -g 10001 runner && useradd -u 10001 -g 10001 -M runner
 COPY packages /app/packages
 COPY services/supervisor /app/services/supervisor
+COPY services/durable.py /app/services/durable.py
 # The root file system is read-only at run time, so compile bytecode at build time:
 # otherwise every job recompiles the engine before it can start.
 RUN python -m compileall -q /app/packages /app/services
