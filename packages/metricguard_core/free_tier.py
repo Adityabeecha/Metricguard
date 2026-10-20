@@ -21,11 +21,12 @@ def configured_limit(full_env_name: str) -> int | None:
     return limit
 
 
-def check_rows(row_count: int) -> None:
+def check_rows(row_count: int, *, exact: bool = True) -> None:
     limit = configured_limit('METRICGUARD_MAX_ROWS')
     if limit is not None and row_count > limit:
+        observed = f'{row_count:,}' if exact else f'more than {limit:,}'
         raise FreeTierLimit('FREE_TIER_ROWS',
-                            f'Free beta limit: {limit:,} rows per dataset (this file has {row_count:,}).')
+                            f'Free beta limit: {limit:,} rows per dataset (this file has {observed}).')
 
 
 def check_upload_size(byte_count: int) -> None:

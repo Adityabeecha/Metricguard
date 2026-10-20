@@ -275,7 +275,7 @@ def extract_to_csv(selection, destination, client=None):
             writer = csv.writer(output, lineterminator='\n')
             writer.writerow([c for c, _ in selection.columns])
             for row in fetch(selection, client):
-                check_rows(rows + 1)
+                check_rows(rows + 1, exact=False)
                 if not isinstance(row, list) or len(row) != len(selection.columns):
                     raise CollectorError('SCHEMA_MISMATCH', 'The warehouse returned a row with the wrong number of values.')
                 cells = []

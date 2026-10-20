@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { connectWithKey, disconnectKey } from './AuthScreens';
 import { useDialog } from './useDialog';
-import { KeyRound, LogOut } from 'lucide-react';
+import { KeyRound, LogOut, UserRound } from 'lucide-react';
 import { api, ApiError, getIdentityEpoch, hasApiCredential, onIdentityChange, type ConnectedIdentity } from './api';
+import { connectionControls } from './authFlow';
 
 /** Re-renders when the in-memory credential is connected, replaced or disconnected. */
 export function useIdentityEpoch(): number {
@@ -38,7 +39,7 @@ export function describeAuthError(error: unknown, workspaceId?: string): string 
 
 type Props = { workspaceId: string };
 
-/** Minimal connect/disconnect control. Always rendered, so it remains reachable when bootstrap fails. */
+/** Identity stays visible; key controls remain reachable for API-key/local access when bootstrap fails. */
 export function ConnectionControl({ workspaceId }: Props) {
   const epoch = useIdentityEpoch();
   const [open, setOpen] = useState(false);
@@ -51,7 +52,8 @@ export function ConnectionControl({ workspaceId }: Props) {
     let active = true;
     setIdentity(null);
     setProblem('');
-    if (!hasApiCredential()) return;
+    setOpen(false);
+    setKeyInput('');
     api.identity(workspaceId).then(result => { if (active) setIdentity(result); }).catch(async e => {
       if (!active || (e instanceof ApiError && e.code === 'IDENTITY_CHANGED')) return;
       // Distinguish an invalid key from missing workspace membership.
@@ -73,25 +75,27 @@ export function ConnectionControl({ workspaceId }: Props) {
     connectWithKey(value);
   };
 
-  const connected = hasApiCredential();
+  const connected = hasApiCredential() || identity?.verified === true;
+  const controls = connectionControls(identity, connected, Boolean(problem));
+  const IdentityIcon = identity?.session ? UserRound : KeyRound;
   const label = connected
     ? identity?.user ? `${identity.user.name || identity.user.email || identity.user.id}${identity.role ? ` · ${identity.role}` : ' · no workspace role'}` : problem ? 'Key not accepted' : 'Verifying…'
-    : 'Local access (no key)';
+    : identity === null && !problem ? 'Verifying…' : 'Local access (no key)';
 
   return (
     <div className="connection-control" style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 8 }}>
       <span className={`topbar-status ${connected && identity?.role && !problem ? 'ready' : 'warning'}`} title={problem || undefined}>
-        <KeyRound size={13} /> {label}
+        <IdentityIcon size={13} /> {label}
       </span>
-      {connected ? (
+      {controls.disconnect ? (
         <button type="button" className="button secondary small" onClick={() => void disconnectKey()}>
           <LogOut size={13} /> Disconnect
         </button>
       ) : null}
-      <button type="button" className="button secondary small" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+      {controls.connect && <button type="button" className="button secondary small" onClick={() => setOpen(o => !o)} aria-expanded={open}>
         {connected ? 'Replace key' : 'Connect with API key'}
-      </button>
-      {open && (
+      </button>}
+      {open && controls.connect && (
         <form ref={formRef} role="dialog" aria-label="Connect with API key" onSubmit={connect} className="panel" style={{ position: 'absolute', right: 0, top: '110%', zIndex: 50, padding: 12, width: 320, display: 'grid', gap: 8 }}>
           <label>
             Issued API key

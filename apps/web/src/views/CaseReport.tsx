@@ -6,6 +6,7 @@ import { caseNumber, KIND_LABEL } from '../investigationLibrary';
 import { ResultReport } from './ResultReport';
 import { CustodyLog, replayMatches } from './evidence/CustodyLog';
 import { caseSummaryMarkdown } from './evidence/copySummary';
+import { loadSummaryBreakdown, savedFilterColumns } from './evidence/breakdownSelection';
 
 /** Copy text to the clipboard, with a fallback for browsers without the async clipboard API. */
 async function copyText(text: string) {
@@ -122,11 +123,12 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
   const replays = [...(data.runs || []).filter(r => r.investigation_id === detail.id && r.id !== replay?.id), ...(replay ? [replay] : [])]
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
   const verified = [...replays].reverse().find(r => r.result && replayMatches(detail.run, r));
+  const breakdownColumns = savedFilterColumns(detail.target_version, detail.baseline_version);
   const copySummary = async () => {
     try {
       const [summary, breakdown] = await Promise.all([
         api.evidenceSummary(detail.run.id).catch(() => null),
-        api.evidenceBreakdown(detail.run.id, undefined, 3).catch(() => null),
+        loadSummaryBreakdown((column, top) => api.evidenceBreakdown(detail.run.id, column, top), breakdownColumns).catch(() => null),
       ]);
       await copyText(caseSummaryMarkdown({ detail, unit, summary, breakdown, link,
         replayVerifiedAt: verified?.completed_at || verified?.created_at || null }));
@@ -165,7 +167,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
           <ResultReport run={detail.run} unit={declaredUnit} relational={relational}
             baselineLabel={versionName(defs, detail.baseline_version_id)} targetLabel={versionName(defs, detail.target_version_id)}
             baselineSql={detail.baseline_version.raw_sql} targetSql={detail.target_version.raw_sql}
-            snapshot={detail.snapshot} versions={defs.flatMap(d => d.versions)}
+            snapshot={detail.snapshot} versions={defs.flatMap(d => d.versions)} breakdownColumns={breakdownColumns}
             sealStatus={pending(replay?.state) || replaying ? 'verifying' : replay?.result ? (same ? 'intact' : 'broken') : null}
             onCustody={() => setCustodyOpen(true)}
             note={<div className="case-conclusion"><h2>Conclusion</h2><p style={{ whiteSpace: 'pre-wrap' }}>{detail.decision}</p></div>} />

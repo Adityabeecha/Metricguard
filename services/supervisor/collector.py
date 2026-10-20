@@ -455,7 +455,7 @@ class PostgresCollector:
 
                         validated_batch = []
                         for raw_row in rows:
-                            check_rows(row_count + 1)
+                            check_rows(row_count + 1, exact=False)
                             row_count += 1
                             if row_count > max_rows:
                                 raise CollectorError('TOO_MANY_ROWS', f"Extraction exceeds maximum limit of {max_rows} rows.")

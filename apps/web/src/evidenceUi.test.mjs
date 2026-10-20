@@ -4,6 +4,7 @@ import { decimalEquals, decimalSum, runningTotals } from './exactDecimal.ts';
 import { hashCells } from './views/evidence/hashCells.ts';
 import { categoryLabel } from './views/evidence/categories.ts';
 import { caseSummaryMarkdown } from './views/evidence/copySummary.ts';
+import { loadSummaryBreakdown, preferredBreakdownColumn, savedFilterColumns } from './views/evidence/breakdownSelection.ts';
 
 test('decimal sums are exact, keep the widest scale and never drift', () => {
   assert.equal(decimalSum(['-200.00', '-90.00', '-50.00']), '-340.00');
@@ -52,4 +53,101 @@ test('copied summary carries the exact figures, balance and case link', () => {
   assert.match(text, /Where it sits: status = pending −200\.00 INR \(59% of the difference\)/);
   assert.match(text, /replay verified 20 Oct 2026/);
   assert.ok(text.endsWith('https://app/w/x/investigations/case-1'));
+});
+
+const split = (column, change, total, extra = {}) => ({ available: true, columns: ['region', 'status'], column,
+  abs_change_total: total, groups: [{ value: 'top', change, records: 1, changed_records: 1, current: null, proposed: null }], ...extra });
+
+test('summary prefers the same available filtered column as Breakdown, including qualified columns', async () => {
+  assert.equal(preferredBreakdownColumn(['fact.status', 'dimension.status'], ['dimension.status']), 'dimension.status');
+  assert.equal(preferredBreakdownColumn(['fact.status', 'dimension.status'], ['status']), undefined);
+  assert.equal(preferredBreakdownColumn(['fact.region', 'dimension.status'], ['status']), 'dimension.status');
+  const choices = { region: split('region', '-100', '100'), status: split('status', '-10', '100') };
+  const selected = await loadSummaryBreakdown(async column => choices[column || 'region'], ['status']);
+  assert.equal(selected.column, 'status'); // the preferred filter wins even when another column has a larger share
+});
+
+test('saved filter preferences cover flat, relational, boolean, ratio and legacy predicates without amount columns', () => {
+  const target = { ir: { predicate_tree: { op: 'and', children: [
+    { op: 'predicate', predicate: { field: 'status', op: 'eq', values: ['done'], type: 'string' } },
+    { op: 'not', child: { op: 'predicate', predicate: { field: 'status', op: 'is_null', values: [], type: 'string' } } },
+  ] }, numerator: { measure: 'amount', filter: { op: 'predicate', predicate: { field: 'region', op: 'eq', values: ['north'], type: 'string' } } },
+    measure: 'amount' } };
+  const baseline = { ir: { predicates: [{ table: 'dimension', column: 'segment', op: 'eq', values: ['a'] }],
+    predicate: { op: 'eq', left: { op: 'column', name: 'status' }, right: { op: 'literal', value: 'old' } },
+    expression: { op: 'column', name: 'amount' } } };
+  assert.deepEqual(savedFilterColumns(target, baseline), ['status', 'region', 'dimension.segment']);
+  assert.deepEqual(savedFilterColumns({ ir: { predicates: [{ field: 'payment_status', op: 'eq', values: ['paid'] }] } }), ['payment_status']);
+});
+
+test('summary fallback selects the largest top-group share across columns, not first column or raw change', async () => {
+  const choices = { region: split('region', '-600', '1000'), status: split('status', '-70', '100') };
+  const selected = await loadSummaryBreakdown(async column => choices[column || 'region'], ['unavailable_column']);
+  assert.equal(selected.column, 'status');
+});
+
+test('equally strong breakdown shares keep the available column order', async () => {
+  const choices = { region: split('region', '-60', '100'), status: split('status', '-3', '5') };
+  const selected = await loadSummaryBreakdown(async column => choices[column || 'region'], []);
+  assert.equal(selected.column, 'region');
+});
+
+test('summary fallback compares very large shares and rational effects exactly', async () => {
+  const columns = ['region', 'status', 'unsupported'];
+  const choices = {
+    region: split('region', '9007199254740992', '18014398509481986', { columns }),
+    status: split('status', '9007199254740993', '18014398509481986', { columns }),
+    unsupported: split('unsupported', null, '1', { columns, ratio: true }),
+  };
+  const selected = await loadSummaryBreakdown(async column => choices[column || 'region'], []);
+  assert.equal(selected.column, 'status');
+  const rational = {
+    region: split('region', '0.33', '1', { ratio: true, groups: [{ value: 'top', change: '0.33', change_exact: '1/3' }] }),
+    status: split('status', '0.33', '1', { ratio: true, groups: [{ value: 'top', change: '0.33', change_exact: '334/1000' }] }),
+  };
+  assert.equal((await loadSummaryBreakdown(async column => rational[column || 'region'], [])).column, 'status');
+});
+
+test('Where it sits prints the largest supported group and rounds its exact share without floating point', () => {
+  const detail = { id: 'case', title: 'Exact share', created_at: '2026-10-20', run: { id: 'abcd', result: { delta_target_minus_baseline: '1' } } };
+  const breakdown = split('status', '0', '2000000000000000000000000000000000000', { groups: [
+    { value: 'zero', change: '0' }, { value: 'leading', change: '289999999999999999999999999999999999' },
+  ] });
+  const text = caseSummaryMarkdown({ detail, unit: 'INR', summary: null, breakdown, link: 'case-link' });
+  assert.match(text, /Where it sits: status = leading .*\(14% of the difference\)/);
+  assert.doesNotMatch(text, /status = zero/);
+});
+
+test('unsupported or zero group effects do not manufacture a Where it sits statement', async () => {
+  const detail = { id: 'case', title: 'Undefined', created_at: '2026-10-20', run: { id: 'abcd', result: {} } };
+  for (const breakdown of [split('status', null, null, { ratio: true }), split('status', '0.00', '0'),
+    split('status', null, '1', { ratio: true, groups: [{ value: 'undefined', change: null, change_exact: '1/2', current: '100', proposed: '0' }] }),
+    { ...split('status', '50', '100'), available: false }]) {
+    const text = caseSummaryMarkdown({ detail, unit: '', summary: null, breakdown, link: 'case-link' });
+    assert.doesNotMatch(text, /Where it sits/);
+  }
+  assert.equal(await loadSummaryBreakdown(async () => ({ available: false, columns: [] }), []), null);
+});
+
+test('share summaries use exact percentage points and record effects instead of scaled deltas', () => {
+  const detail = { id: 'case', title: 'Share', created_at: '2026-10-20', run: { id: 'abcd', result: {
+    aggregate: 'ratio', ratio: { unit: 'share' }, delta_target_minus_baseline: '-0.200000', residual: '0.000000',
+  } } };
+  const summary = { changed: 2, top_changes: [
+    { row_key: 'R1', delta: '-800000000', effect: '-0.200000' },
+    { row_key: 'R2', delta: '999999999', effect: null },
+  ] };
+  const breakdown = split('status', '-0.200000', '1/5', { ratio: true, groups: [
+    { value: 'pending', change: '-0.200000', change_exact: '-1/5' },
+  ] });
+  const text = caseSummaryMarkdown({ detail, unit: 'pts', summary, breakdown, link: 'case-link' });
+  assert.match(text, /−20\.0000 pts: the proposed calculation is lower/);
+  assert.match(text, /Largest: R1 −20\.0000 pts\./);
+  assert.doesNotMatch(text, /R2|800,000,000|999,999,999/);
+  assert.match(text, /Where it sits: status = pending −20\.0000 pts \(100% of the difference\)/);
+});
+
+test('a missing qualified filter never selects the same name from a different lookup', () => {
+  assert.equal(preferredBreakdownColumn(['dimension.status'], ['fact.status']), undefined);
+  assert.equal(preferredBreakdownColumn(['dimension.status'], ['status']), 'dimension.status');
 });

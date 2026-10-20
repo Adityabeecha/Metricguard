@@ -176,7 +176,7 @@ def compare_snapshots(baseline_database, target_database, ir, context):
                 else:
                     key, (ai, ac, an), (bi, bc, bn), bp, tp = b_row[0], b_row[1], t_row[1], True, True
                     b_row, t_row = before.next(), after.next()
-                check_rows(sum(item['records'] for item in summary.values()) + 1)
+                check_rows(sum(item['records'] for item in summary.values()) + 1, exact=False)
                 change = classify(bp, tp, ai, bi, ac, bc, an, bn)
                 summary[change]['records'] += 1
                 summary[change]['delta'] += bc - ac

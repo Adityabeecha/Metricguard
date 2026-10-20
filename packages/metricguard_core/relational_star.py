@@ -460,7 +460,7 @@ def ingest(source, destination, payload):
                         with (Path(folder) / entry_name(role)).open('w', encoding='utf-8', newline='') as output:
                             writer = csv.writer(output); writer.writerow(columns)
                             for line, raw in enumerate(reader, 2):
-                                check_rows(count + 1)
+                                check_rows(count + 1, exact=False)
                                 if count >= row_limit(c):
                                     fail('too_many_rows', f'{role} CSV exceeds {row_limit(c)} rows.')
                                 if None in raw or any(v is None for v in raw.values()):

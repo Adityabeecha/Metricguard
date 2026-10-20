@@ -181,3 +181,52 @@ test('CSV timestamps are bounded timezone-free values and booleans are canonical
   assert.equal(p.observed_types.d, 'string');
   assert.equal(p.observed_types.e, 'string');
 });
+
+
+import { uploadLimitText, previewRowLimitMessage, canConfirmUpload, defaultFlatImport, loadLabelAfterFilePick, datasetUsageLabel, inheritedUnit } from './onboardingPolicy.ts';
+import { supportsRatios, buildFlatSql, ratioUnavailableReason } from './comparisonBuilder.ts';
+
+test('hosted upload copy uses actual limits and local copy stays unchanged', () => {
+  assert.equal(uploadLimitText({max_upload_mb:25,max_rows:50000}), 'Up to 25 MB and 50,000 rows on the free beta');
+  assert.equal(uploadLimitText({max_upload_mb:null,max_rows:null}), 'Drop a CSV (up to 512 MiB), Parquet or Excel (.xlsx) file');
+  assert.equal(uploadLimitText({max_upload_mb:null,max_rows:50000}), 'Up to 50,000 rows on the free beta');
+});
+test('preview limit blocks confirmation before meaning settings, not just at import', () => {
+  const limits = { max_rows:50000 };
+  assert.equal(previewRowLimitMessage(limits,50000), '');
+  assert.equal(previewRowLimitMessage(limits,120000), 'Free beta limit: 50,000 rows per dataset (this file has 120,000).');
+  assert.equal(previewRowLimitMessage(limits,50001,false), 'Free beta limit: 50,000 rows per dataset (this file has more than 50,000).');
+  assert.equal(canConfirmUpload(true,false,''),true);
+  assert.equal(canConfirmUpload(true,false,previewRowLimitMessage(limits,50001)),false);
+  assert.equal(canConfirmUpload(false,false,''),false);
+  assert.equal(canConfirmUpload(true,true,''),false);
+});
+test('default CSV contract offers average, per-record, rates and shares', () => {
+  const contract = {...defaultFlatImport(), row_key:'id',measure:'amount',categories:['status'],scale:2};
+  assert.equal(contract.version,5);
+  assert.equal(contract.predicate_policy,'flat-boolean-v1');
+  assert.equal(supportsRatios(contract),true);
+  for (const aggregate of ['average','per_record','rate','share']) {
+    const sql = buildFlatSql(contract,{aggregate,filters:[],partFilter:{column:'status',op:'eq',value:'paid'}});
+    assert.ok(sql.startsWith('SELECT '));
+  }
+  assert.equal(defaultFlatImport(false).version,4);
+});
+test('new load keeps typed label through file picking and displays inherited unit', () => {
+  assert.equal(loadLabelAfterFilePick('October 2026','extract.csv',true),'October 2026');
+  assert.equal(loadLabelAfterFilePick('','extract.csv',true),'');
+  assert.equal(inheritedUnit({unit_label:'INR'},{unit_label:'USD'},''),'INR');
+  assert.equal(inheritedUnit(null,{unit_label:'INR'},''),'INR');
+});
+test('dataset usage identifies saved calculations rather than governed metrics', () => {
+  assert.equal(datasetUsageLabel(2,2),'Usage (2 saved calculations / 2 runs)');
+  assert.equal(datasetUsageLabel(1,1),'Usage (1 saved calculation / 1 run)');
+});
+
+test('older and expression datasets explain the exact ratio limitation and remedy', () => {
+  assert.match(ratioUnavailableReason({version:4}), /older calculation format.*same file again/);
+  assert.match(ratioUnavailableReason({version:6}), /subtraction.*Several amount columns/);
+  assert.match(ratioUnavailableReason({version:7}), /CASE WHEN.*plain amount column/);
+  assert.match(ratioUnavailableReason({mode:'relational_snapshot',version:2}), /two connected tables.*one flat table/);
+  assert.equal(ratioUnavailableReason({version:5}), '');
+});

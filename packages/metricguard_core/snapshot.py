@@ -32,7 +32,7 @@ def ingest_csv(source, destination, metadata=None):
             reader=csv.DictReader(stream)
             if reader.fieldnames!=list(SCHEMA): raise CoreError('invalid_schema','CSV must have the exact ordered schema: '+', '.join(SCHEMA))
             for number,raw in enumerate(reader,2):
-                check_rows(row_count + 1)
+                check_rows(row_count + 1, exact=False)
                 if row_count>=1000000: raise CoreError('too_many_rows','Snapshot exceeds 1000000 rows')
                 if None in raw or any(v is None for v in raw.values()): raise CoreError('invalid_row',f'Wrong field count at line {number}')
                 row=[]

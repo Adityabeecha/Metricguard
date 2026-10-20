@@ -1,12 +1,42 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { authPage, oauthErrorMessage, configuredProviders, safeWorkspaceReturn, shouldRedirectToSignIn } from './authFlow.ts';
+import { authPage, authPageTitle, connectionControls, oauthErrorMessage, configuredProviders, safeWorkspaceReturn, shouldRedirectToSignIn } from './authFlow.ts';
 
 test('sign-in and sign-up are public auth routes with optional trailing slash', () => {
   assert.equal(authPage('/signin'), 'signin');
   assert.equal(authPage('/signup/'), 'signup');
   assert.equal(authPage('/w/acme/settings'), null);
   assert.equal(authPage('/signin/unknown'), null);
+});
+
+test('auth routes have distinct browser titles for direct visits and mode switches', () => {
+  for (const [path, title] of [
+    ['/signin', 'Sign in — MetricGuard'],
+    ['/signup/', 'Create your account — MetricGuard'],
+    ['/signin/', 'Sign in — MetricGuard'],
+  ]) {
+    assert.equal(authPageTitle(authPage(path)), title);
+  }
+});
+
+test('cookie identities never offer API-key disconnect or replacement actions', () => {
+  assert.deepEqual(connectionControls({ session: true }, true, false), { disconnect: false, connect: false });
+  // The cookie may be verified before the shared signed-in flag is restored.
+  assert.deepEqual(connectionControls({ session: true }, false, false), { disconnect: false, connect: false });
+  // A workspace access failure must not turn cookie sign-in into key management.
+  assert.deepEqual(connectionControls({ session: true }, true, true), { disconnect: false, connect: false });
+});
+
+test('API keys and local access retain key controls, including invalid-key recovery', () => {
+  assert.deepEqual(connectionControls({ session: false }, true, false), { disconnect: true, connect: true });
+  assert.deepEqual(connectionControls({ session: false }, false, false), { disconnect: false, connect: true });
+  assert.deepEqual(connectionControls(null, true, true), { disconnect: true, connect: true });
+  assert.deepEqual(connectionControls(null, false, true), { disconnect: false, connect: true });
+});
+
+test('key actions wait for identity verification to avoid flashing on cookie-session reloads', () => {
+  assert.deepEqual(connectionControls(null, true, false), { disconnect: false, connect: false });
+  assert.deepEqual(connectionControls(null, false, false), { disconnect: false, connect: false });
 });
 
 test('OAuth errors use friendly fixed copy and never echo untrusted callback text', () => {

@@ -263,8 +263,10 @@ metric_diff_reports = Table('metric_diff_reports', metadata,
 
 
 def _with_flat_policy(snapshot):
-    """Warehouse snapshots recorded before 2026-10-18 lack the execution policy their manifest declares."""
+    """Expose declared metadata on older snapshots whose stored summary omitted it."""
     manifest = snapshot.get('manifest') or {}
+    if not snapshot.get('unit_label') and manifest.get('unit_label'):
+        snapshot = {**snapshot, 'unit_label': manifest['unit_label']}
     if (not snapshot.get('execution_policy') and manifest.get('mode') == 'flat_snapshot' and
             manifest.get('execution_policy') == 'flat_snapshot_v1'):
         return {**snapshot, 'execution_policy': 'flat_snapshot_v1'}
@@ -706,6 +708,8 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                         grain=manifest.get('grain'), cutoff_at=manifest.get('cutoff_at'), schema=manifest['schema'],
                         status='validated', created_at=now(), artifact_path=str(artifact_path), manifest=manifest,
                         project_id=import_pid)
+                    if manifest.get('unit_label'):
+                        data['unit_label'] = manifest['unit_label']
                     conn.execute(insert(snapshots).values(id=snapshot_id, project_id=import_pid,
                         manifest_hash=manifest['manifest_hash'], data=data))
             conn.execute(update(snapshot_imports).where(condition).values(state='failed' if error else 'validated',

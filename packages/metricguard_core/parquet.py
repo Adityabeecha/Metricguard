@@ -40,7 +40,7 @@ def ingest_parquet(source, destination, metadata=None):
             cursor = con.execute('SELECT * FROM read_parquet(?)', [source_name])
             while rows := cursor.fetchmany(10000):
                 for row in rows:
-                    check_rows(row_count + 1)
+                    check_rows(row_count + 1, exact=False)
                     if row_count >= 1000000:
                         raise CoreError('too_many_rows', 'Snapshot exceeds 1000000 rows')
                     values = dict(zip(SCHEMA, row))

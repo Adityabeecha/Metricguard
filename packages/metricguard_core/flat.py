@@ -374,7 +374,7 @@ class _RowSink:
         return False
 
     def append(self, row):
-        check_rows(self.count + 1)
+        check_rows(self.count + 1, exact=False)
         if self.nullable is not None:
             for name, value in zip(self.categories, row[self.cat_offset:]):
                 if value is None and name not in self.nullable:

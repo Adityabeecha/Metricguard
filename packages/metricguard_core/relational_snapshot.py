@@ -117,7 +117,7 @@ def ingest_relational(source, destination, payload):
                     with (Path(folder) / (role + '.csv')).open('w', encoding='utf-8', newline='') as output:
                         writer = csv.writer(output); writer.writerow(columns)
                         for line, raw in enumerate(reader, 2):
-                            check_rows(count + 1)
+                            check_rows(count + 1, exact=False)
                             if count >= MAX_ROWS:
                                 fail('too_many_rows', f'{role} CSV exceeds {MAX_ROWS} rows.')
                             if None in raw or any(v is None for v in raw.values()):

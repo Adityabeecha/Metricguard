@@ -3,7 +3,7 @@ import { Github, RefreshCw } from 'lucide-react';
 import { api, ApiError, hasApiCredential, setSessionSignedIn } from './api';
 import { ConnectForm, KeyHelp } from './AuthScreens';
 import { loadAuthProviders } from './authApi';
-import { oauthErrorMessage, safeWorkspaceReturn, type AuthProviders } from './authFlow';
+import { authPageTitle, oauthErrorMessage, safeWorkspaceReturn, type AuthProviders } from './authFlow';
 import { useIdentityEpoch } from './identity';
 import { Logo } from './Logo';
 import { ThemeSwitch } from './ThemeSwitch';
@@ -21,6 +21,12 @@ export function SignInScreen({ mode }: { mode: 'signin' | 'signup' }) {
   const epoch = useIdentityEpoch();
   const callbackMessage = oauthErrorMessage(params.get('error'));
   const returnTo = safeWorkspaceReturn(params.get('return_to'));
+
+  useEffect(() => {
+    const title = authPageTitle(mode);
+    document.title = title;
+    return () => { if (document.title === title) document.title = 'MetricGuard'; };
+  }, [mode]);
 
   useEffect(() => {
     let active = true;

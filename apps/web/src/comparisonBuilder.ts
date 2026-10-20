@@ -226,6 +226,21 @@ export function supportsRatios(contract: FlatContract | RelationalContract): boo
   return version === 5 || version === 8;
 }
 
+/** Explain the frozen format boundary and the specific upload that enables ratios. */
+export function ratioUnavailableReason(contract: FlatContract | RelationalContract): string {
+  if (supportsRatios(contract)) return '';
+  if ((contract as RelationalContract).mode === 'relational_snapshot') {
+    return 'Averages and ratios are not supported for two connected tables. Prepare one flat table and upload it as a single dataset.';
+  }
+  if ((contract as FlatContract).version === 6) {
+    return 'This dataset totals a subtraction of two columns. To use averages or ratios, upload the original columns using "Several amount columns".';
+  }
+  if ((contract as FlatContract).version === 7) {
+    return 'This dataset uses a conditional total (CASE WHEN), which does not support averages or ratios. Upload a plain amount column and put the condition in the calculation filters.';
+  }
+  return 'This dataset uses an older calculation format. Upload the same file again with "Allow filters combined with AND, OR and NOT" enabled to use averages, rates and shares.';
+}
+
 /** The amount columns of a dataset with several amounts (contract v8), else an empty list. */
 export function amountColumns(contract: FlatContract | RelationalContract): string[] {
   if ((contract as RelationalContract).mode === 'relational_snapshot') return [];
@@ -256,7 +271,7 @@ export function buildFlatSql(contract: FlatContract, form: CalculationForm): str
   if (form.aggregate === 'count' && !supportsCount(contract)) throw new Error('This dataset can only total its amount column.');
   if (form.aggregate === 'count_distinct' && !supportsDistinct(contract)) throw new Error('This dataset cannot count distinct values.');
   if (form.aggregate && RATIO_AGGREGATES.includes(form.aggregate) && !supportsRatios(contract)) {
-    throw new Error('Averages and ratios need a dataset registered with compound filters (re-register it to enable them).');
+    throw new Error(ratioUnavailableReason(contract));
   }
   const m = flatMeasureSql(contract, form);
   const second = () => {

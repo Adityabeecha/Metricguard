@@ -198,7 +198,7 @@ def xlsx_to_csv(source, destination):
                         width = max(cells) + 1  # the header row fixes the columns
                     elif max(cells) >= width:
                         _fail(f'Row {row_ref} has values to the right of the header row.')
-                    check_rows(rows_written)  # first written row is the header
+                    check_rows(rows_written, exact=False)  # first written row is the header
                     writer.writerow([cells.get(i, '') for i in range(width)])
                     rows_written += 1
             except ElementTree.ParseError as error:

@@ -8,6 +8,19 @@ export function authPage(path: string): 'signin' | 'signup' | null {
   return match ? match[1] as 'signin' | 'signup' : null;
 }
 
+export function authPageTitle(mode: 'signin' | 'signup'): string {
+  return mode === 'signup' ? 'Create your account — MetricGuard' : 'Sign in — MetricGuard';
+}
+
+/** Cookie identities use account settings; key controls remain available for key/local access. */
+export function connectionControls(identity: { session?: boolean } | null, connected: boolean, verificationFailed: boolean):
+  { disconnect: boolean; connect: boolean } {
+  if (identity?.session === true || (identity === null && !verificationFailed)) {
+    return { disconnect: false, connect: false };
+  }
+  return { disconnect: connected, connect: true };
+}
+
 export function oauthErrorMessage(code: string | null): string {
   if (!code) return '';
   if (code === 'waitlist') return "You're on the waitlist — we'll email you when your invite is ready";

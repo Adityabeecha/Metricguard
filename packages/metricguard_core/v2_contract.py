@@ -147,7 +147,7 @@ def _load_mapped_csv(source: Path, destination: Path, contract: dict, mapping: d
                 writer = csv.writer(output)
                 writer.writerow(SCHEMA)
                 for raw in reader:
-                    check_rows(count + 1)
+                    check_rows(count + 1, exact=False)
                     if count >= MAX_ROWS:
                         raise CoreError('too_many_rows', 'Snapshot exceeds one million rows')
                     if None in raw or any(item is None for item in raw.values()):
@@ -276,7 +276,7 @@ def _csv_observed_type(value: str) -> str:
 
 
 def _bounded_preview(headers: list[str], declared: dict, rows: list[dict], source_hash: str,
-                     *, csv_source: bool) -> dict:
+                     *, csv_source: bool, row_count: int | None = None) -> dict:
     observed = {}
     for header in headers:
         types = {(_csv_observed_type(row[header]) if csv_source else declared[header])
@@ -286,6 +286,8 @@ def _bounded_preview(headers: list[str], declared: dict, rows: list[dict], sourc
                'observed_types': observed,
                'sample_rows': [{name: _preview_value(row[name]) for name in headers} for row in rows],
                'source_hash': source_hash}
+    if row_count is not None:
+        preview['row_count'] = row_count
     def output_bytes() -> int:
         return len(json.dumps(preview, ensure_ascii=True, allow_nan=False).encode('utf-8'))
 
@@ -315,8 +317,9 @@ def preview_source(source: Path) -> dict:
                 if not headers or len(headers) != len(set(headers)) or any(not header for header in headers):
                     raise CoreError('invalid_schema', 'CSV headers are missing or duplicated')
                 rows = []
+                count = 0
                 for count, row in enumerate(reader, 1):
-                    check_rows(count)
+                    check_rows(count, exact=False)
                     if count > MAX_ROWS:
                         raise CoreError('too_many_rows', 'Source exceeds one million rows')
                     if None in row or any(value is None for value in row.values()):
@@ -351,4 +354,5 @@ def preview_source(source: Path) -> dict:
             raise CoreError('invalid_parquet', 'Parquet preview could not be read') from exc
     if file_hash(source) != source_hash:
         raise CoreError('source_changed', 'Source changed during preview')
-    return _bounded_preview(headers, declared, rows, source_hash, csv_source=source_format == '.csv')
+    return _bounded_preview(headers, declared, rows, source_hash,
+                            csv_source=source_format == '.csv', row_count=count)

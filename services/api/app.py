@@ -809,7 +809,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
 
     @app.post('/api/v1/flat/snapshots', status_code=202)
     async def flat_snapshot(request: Request, file: UploadFile = File(...), preparation_manifest: UploadFile | None = File(None), contract_id: str = Form(...),
-                            name: str = Form('Flat extract'), project_id: str | None = Form(None)):
+                            name: str = Form(''), project_id: str | None = Form(None)):
         auth = get_auth_context(request, store)
         if execution_mode != 'isolated':
             raise DomainError('ISOLATION_REQUIRED', 'Flat datasets require the local isolated runner.')
@@ -825,6 +825,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         if ((suffix in ('.csv', '.xlsx') and contract['null_policy'] == 'native_null') or
                 (suffix == '.parquet' and contract['null_policy'] != 'native_null')):
             raise DomainError('INVALID_CONTRACT', 'The approved NULL policy does not match the source format.')
+        name = name.strip() or Path(file.filename or 'Flat extract').name
         if not 1 <= len(name) <= 160:
             raise DomainError('INVALID_METADATA', 'A dataset name of 1–160 characters is required.')
         # Stream to disk in chunks: large extracts (millions of rows) never sit in memory.

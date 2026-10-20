@@ -25,6 +25,7 @@ import { WarehouseSource } from './WarehouseSource';
 import { humanizeError, type HumanizedError } from '../errorUtils';
 import { ROLE_LABEL, summarizeDataset } from '../datasetSummary';
 import { useDialog } from '../useDialog';
+import { DEFAULT_COMPOUND_FILTERS, defaultFlatImport, uploadLimitText, previewRowLimitMessage, canConfirmUpload, loadLabelAfterFilePick, inheritedUnit, datasetUsageLabel, type UploadLimits } from '../onboardingPolicy';
 
 interface DataSourcesViewProps {
   data: Bootstrap;
@@ -70,7 +71,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
   const [comparabilityConfirmed, setComparabilityConfirmed] = useState(false);
   const [preparationFile, setPreparationFile] = useState<File | null>(null);
   const [categoryTypeOverrides, setCategoryTypeOverrides] = useState<Record<string, string>>({});
-  const [compoundFilters, setCompoundFilters] = useState(false);
+  const [compoundFilters, setCompoundFilters] = useState(DEFAULT_COMPOUND_FILTERS);
   const [enableSubtraction, setEnableSubtraction] = useState(false);
   const [enableCase, setEnableCase] = useState(false);
   // Several amount columns (contract v8): extra columns and their units, beside the main amount.
@@ -107,6 +108,21 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
   const runs = data.runs || [];
   const flatContracts = data.flat_contracts || [];
   const projectId = data.project?.id || 'local-retail';
+  const [uploadLimits, setUploadLimits] = useState<UploadLimits | null>(null);
+  const [limitsProblem, setLimitsProblem] = useState('');
+  useEffect(() => {
+    let active = true;
+    setUploadLimits(null); setLimitsProblem('');
+    api.get<UploadLimits>(`/usage?project_id=${encodeURIComponent(projectId)}`)
+      .then(limits => { if (active) setUploadLimits(limits); })
+      .catch(error => { if (active) setLimitsProblem(`Upload limits could not be loaded. Reload the page to try again. ${error instanceof Error ? error.message : String(error)}`); });
+    return () => { active = false; };
+  }, [projectId]);
+  const previewProblem = uploadLimits && filePreview
+    ? previewRowLimitMessage(uploadLimits, filePreview.totalRowsSampled, filePreview.row_count_exact !== false) : '';
+  const uploadProblem = limitsProblem || previewProblem || (step === 'upload' ? validationError?.message || '' : '');
+  const uploadReady = canConfirmUpload(Boolean(selectedFile && filePreview && uploadLimits), busy, uploadProblem);
+
 
   // Keep selected snapshot valid for current workspace snapshots
   useEffect(() => {
@@ -171,7 +187,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
     };
     const same = (a: string[], b: string[]) => a.length === b.length && [...a].sort().join('\u0000') === [...b].sort().join('\u0000');
     return flatContracts.find(c => {
-      const version = enableMulti ? 8 : compoundFilters ? 5 : 4;
+      const version = enableMulti ? 8 : defaultFlatImport(compoundFilters).version;
       if (c.version !== version || c.row_key !== confirmedKey || c.null_policy !== nullPolicy) return false;
       if ((c.unit_label || '').trim() !== confirmedUnit.trim() || c.scale !== scale) return false;
       if (enableMulti) {
@@ -240,9 +256,13 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
     setCreatedSnapshot(null);
     setCategoryTypeOverrides({});
     setShowAdvanced(false);
-    setCompoundFilters(false);
+    setCompoundFilters(DEFAULT_COMPOUND_FILTERS);
+    setSnapshotName('');
     setEnableSubtraction(false);
     setEnableCase(false);
+    setEnableMulti(false);
+    setExtraAmounts([]);
+    setExtraUnits({});
     setScopeConfirmed(false);
     setComparabilityConfirmed(false);
     setLoadContract(null);
@@ -264,12 +284,16 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
     setExtraAmounts([]); setExtraUnits({}); setMinuendColumn(''); setSubtrahendColumn('');
     setCategoryTypeOverrides({});
     setValidationError(null);
-    const cleanName = file.name.replace(/\.(csv|parquet|xlsx)$/i, '');
-    setSnapshotName(cleanName);
+    setSnapshotName(current => loadLabelAfterFilePick(current, file.name, Boolean(loadContract)));
 
     const isParquet = file.name.toLowerCase().endsWith('.parquet');
     const isExcel = file.name.toLowerCase().endsWith('.xlsx');
     setNullPolicy(isParquet ? 'native_null' : 'blank_nullable');
+    if (!uploadLimits) return;
+    if (uploadLimits.max_upload_mb != null && file.size > uploadLimits.max_upload_mb * 1024 * 1024) {
+      setValidationError({ title: 'Free beta limit', message: `Free beta limit: ${uploadLimits.max_upload_mb.toLocaleString('en-US')} MB per upload (this file has ${file.size.toLocaleString('en-US')} bytes).` });
+      return;
+    }
 
     if (isParquet || isExcel) {
       // Parquet and Excel are read inside the isolated runner; wait for its preview.
@@ -289,7 +313,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
         }
         if (isExcel && record.preview.csv_head) {
           // The runner converted the sheet exactly; infer columns from its first rows as for a CSV.
-          const parsed = parseCsvText(record.preview.csv_head, 25);
+          const parsed = { ...parseCsvText(record.preview.csv_head, 25), ...(record.preview.row_count != null ? { totalRowsSampled: record.preview.row_count, row_count_exact: true } : { row_count_exact: false }) };
           setFilePreview(parsed);
           const inf = inferMeaning(parsed.headers, parsed.observed_types, parsed.sample_rows, file.name, parsed.key_issues);
           setConfirmedKey(inf.rowKey);
@@ -319,7 +343,8 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
             declared_types: record.preview.declared_types,
             observed_types: Object.fromEntries(Object.entries(record.preview.declared_types).map(([k, v]) => [k, ({VARCHAR: 'string', BOOLEAN: 'boolean', DATE: 'date', TIMESTAMP: 'timestamp'} as Record<string, string>)[v || ''] || 'string'])),
             sample_rows: record.preview.sample_rows,
-            totalRowsSampled: record.preview.sample_rows.length,
+            totalRowsSampled: record.preview.row_count ?? record.preview.sample_rows.length,
+            row_count_exact: record.preview.row_count != null,
           });
         }
       } catch (err: unknown) {
@@ -338,7 +363,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
         let text = large ? await file.slice(0, 2 * 1024 * 1024).text() : await file.text();
         if (large) text = text.slice(0, text.lastIndexOf('\n') + 1);
         const parsed = parseCsvText(text, 25);
-        setFilePreview(parsed);
+        setFilePreview({ ...parsed, row_count_exact: !large });
         const inf = inferMeaning(parsed.headers, parsed.observed_types, parsed.sample_rows, file.name, parsed.key_issues);
         setConfirmedKey(inf.rowKey);
         setConfirmedMeasure(inf.measure);
@@ -415,7 +440,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
 
   // A newer load of an existing dataset: same definition, so the two loads can be compared.
   const handleAddLoad = async () => {
-    if (!selectedFile || !loadContract) return;
+    if (!selectedFile || !loadContract || !uploadReady) return;
     setStep('validating'); setBusy(true); setValidationError(null);
     try {
       finishImport(await uploadAndWait(loadContract.id, snapshotName.trim() || selectedFile.name));
@@ -429,7 +454,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
   // Execute Snapshot Ingestion (Step 3)
   const handleValidateAndCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedFile || !filePreview) return;
+    if (!selectedFile || !filePreview || previewProblem || !uploadLimits) return;
     if (validateBlocker) {
       setValidationError({ title: 'Check dataset settings', message: validateBlocker });
       return;
@@ -559,7 +584,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
         scope: 'entire_supplied_snapshot',
         null_policy: nullPolicy,
       } : {
-        version: enableCase ? 7 : compoundFilters ? 5 : 4,
+        version: enableCase ? 7 : defaultFlatImport(compoundFilters).version,
         ...(enableCase ? { measure_policy: 'flat-case-v1' } : {}),
         ...(compoundFilters || enableCase ? { predicate_policy: 'flat-boolean-v1' } : {}),
         mode: 'flat_snapshot',
@@ -847,7 +872,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
                   className={`section-tab-button ${detailTab === 'usage' ? 'active' : ''}`}
                   onClick={() => setDetailTab('usage')}
                 >
-                  Usage ({snapshotDefinitions.length} metrics / {snapshotRuns.length} runs)
+                  {datasetUsageLabel(snapshotDefinitions.length, snapshotRuns.length)}
                 </button>
                 <button
                   type="button"
@@ -898,9 +923,9 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
               {detailTab === 'usage' && (
                 <div className="detail-tab-body">
                   <div className="usage-section">
-                    <h3>Definitions using this snapshot</h3>
+                    <h3>Saved calculations using this snapshot</h3>
                     {snapshotDefinitions.length === 0 ? (
-                      <p className="helper-muted">No metric definitions have executed against this snapshot yet.</p>
+                      <p className="helper-muted">No saved calculations have executed against this snapshot yet.</p>
                     ) : (
                       <div className="definition-list">
                         {snapshotDefinitions.map((def) => (
@@ -1095,10 +1120,11 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
                         <span>
                           {selectedFile
                             ? `${formatBytes(selectedFile.size)} selected`
-                            : 'Drop a CSV (up to 512 MiB), Parquet or Excel (.xlsx) file'}
+                            : uploadLimits ? uploadLimitText(uploadLimits) : 'Checking upload limits...'}
                         </span>
                         <input
                           type="file"
+                          disabled={!uploadLimits || busy}
                           accept=".csv,.parquet,.xlsx,text/csv,application/vnd.apache.parquet,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                           onChange={(e) => {
                             const f = e.target.files?.[0];
@@ -1107,12 +1133,15 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
                         />
                       </label>
 
+                      {selectedFile && uploadLimits && <p className="helper-muted">{uploadLimitText(uploadLimits)}</p>}
+                      {limitsProblem && <p role="alert" className="disabled-reason">{limitsProblem}</p>}
+                      {previewProblem && <p role="alert" className="disabled-reason">{previewProblem}</p>}
                       {/* File preview */}
                       {filePreview && (
                         <div className="file-preview-card">
                           <div className="preview-heading-row">
                             <strong>
-                              {filePreview.headers.length} columns detected · {filePreview.totalRowsSampled} {selectedFile?.name.toLowerCase().endsWith('.parquet') ? 'sample rows' : (selectedFile?.size || 0) > 25 * 1024 * 1024 ? 'rows checked from the beginning of the file; all rows are validated during import' : 'rows checked'}
+                              {filePreview.headers.length} columns detected · {filePreview.totalRowsSampled} {filePreview.row_count_exact === false ? 'sample rows; all rows are checked during import' : 'rows counted'}
                             </strong>
                             <span className="badge neutral">Previewing top rows</span>
                           </div>
@@ -1197,7 +1226,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
                             <Database size={15} style={{ color: 'var(--link)' }} />
                             <span>Inferred Logical Schema</span>
                             <span className="badge neutral" style={{ fontSize: 12, fontWeight: 500 }}>
-                              {filePreview.headers.length} columns detected · {filePreview.totalRowsSampled} {selectedFile?.name.toLowerCase().endsWith('.parquet') ? 'sample rows' : (selectedFile?.size || 0) > 25 * 1024 * 1024 ? 'rows checked from the beginning of the file; all rows are validated during import' : 'rows checked'}
+                              {filePreview.headers.length} columns detected · {filePreview.totalRowsSampled} {filePreview.row_count_exact === false ? 'sample rows; all rows are checked during import' : 'rows counted'}
                             </span>
                           </div>
                           <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--muted)' }}>
@@ -1769,9 +1798,9 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
                   <div className="snapshot-summary-pill-row">
                     <span><strong>Snapshot:</strong> {createdSnapshot?.name || snapshotName || selectedFile?.name}</span>
                     <span><strong>Rows:</strong> {(createdSnapshot?.row_count ?? filePreview?.totalRowsSampled ?? 0).toLocaleString('en-US')}</span>
-                    <span><strong>Key:</strong> {confirmedKey || 'Not declared'}</span>
-                    <span><strong>Amount:</strong> {enableSubtraction ? `${minuendColumn} − ${subtrahendColumn}` : enableMulti ? [confirmedMeasure, ...multiExtras].join(", ") : confirmedMeasure || "Not declared"}</span>
-                    <span><strong>Unit:</strong> {confirmedUnit || 'Not declared'}</span>
+                    <span><strong>Key:</strong> {loadContract?.row_key || confirmedKey || 'Not declared'}</span>
+                    <span><strong>Amount:</strong> {loadContract ? loadContract.measure : enableSubtraction ? `${minuendColumn} − ${subtrahendColumn}` : enableMulti ? [confirmedMeasure, ...multiExtras].join(", ") : confirmedMeasure || "Not declared"}</span>
+                    <span><strong>Unit:</strong> {inheritedUnit(createdSnapshot, loadContract, confirmedUnit) || 'Not declared'}</span>
                   </div>
                 </div>
               )}
@@ -1811,7 +1840,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
                     Cancel
                   </button>
                   {sourceType === 'file' && loadContract && (
-                    <button type="button" className="button primary" disabled={!selectedFile || busy} onClick={() => void handleAddLoad()}>
+                    <button type="button" className="button primary" disabled={!uploadReady} onClick={() => void handleAddLoad()}>
                       Validate and add load <ShieldCheck size={16} />
                     </button>
                   )}
@@ -1819,7 +1848,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn }: Dat
                     <button
                       type="button"
                       className="button primary"
-                      disabled={!selectedFile || busy}
+                      disabled={!uploadReady}
                       onClick={() => setStep('confirm')}
                     >
                       Continue to confirmation <ArrowRight size={15} />

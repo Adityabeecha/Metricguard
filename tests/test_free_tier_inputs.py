@@ -39,7 +39,7 @@ def _flat(null_policy='blank_nullable'):
         'predicate_policy': 'flat-boolean-v1'})
 
 
-def _xlsx(path):
+def _xlsx(path, source_rows=None):
     main = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
     with zipfile.ZipFile(path, 'w') as output:
         output.writestr('xl/workbook.xml', f'<workbook xmlns="{main}" '
@@ -47,7 +47,7 @@ def _xlsx(path):
             '<sheets><sheet name="Data" r:id="s"/></sheets></workbook>')
         output.writestr('xl/_rels/workbook.xml.rels',
             '<Relationships><Relationship Id="s" Target="worksheets/sheet1.xml"/></Relationships>')
-        rows = [['id', 'amount', 'status'], ['a', '1.00', 'paid'], ['b', '2.00', 'paid']]
+        rows = source_rows if source_rows is not None else [['id', 'amount', 'status'], ['a', '1.00', 'paid'], ['b', '2.00', 'paid']]
         body = ''.join(f'<row r="{i}">' + ''.join(
             f'<c r="{letter}{i}" t="inlineStr"><is><t>{value}</t></is></c>'
             for letter, value in zip('ABC', row)) + '</row>' for i, row in enumerate(rows, 1))
@@ -80,6 +80,10 @@ def test_exact_boundaries_and_public_error(monkeypatch):
     assert caught.value.code == 'FREE_TIER_ROWS'
     assert caught.value.status == 413
     assert str(caught.value) == 'Free beta limit: 50,000 rows per dataset (this file has 120,000).'
+    with pytest.raises(FreeTierLimit) as partial:
+        check_rows(50_001, exact=False)
+    assert str(partial.value) == 'Free beta limit: 50,000 rows per dataset (this file has more than 50,000).'
+    assert '50,001' not in str(partial.value)
     monkeypatch.setenv('METRICGUARD_MAX_UPLOAD_MB', '1')
     check_upload_size(1024 * 1024)
     with pytest.raises(FreeTierLimit) as caught:
@@ -103,8 +107,10 @@ def test_flat_sources_enforce_optional_cap(tmp_path, monkeypatch, source_kind, l
     destination = tmp_path / 'snapshot.duckdb'
     if limited:
         monkeypatch.setenv('METRICGUARD_MAX_ROWS', '1')
-        with pytest.raises(FreeTierLimit, match='1 rows per dataset'):
+        with pytest.raises(FreeTierLimit, match='1 rows per dataset') as caught:
             ingest_flat(source, destination, contract)
+        observed = '2' if source_kind == 'parquet' else 'more than 1'
+        assert f'this file has {observed}' in str(caught.value)
         assert not destination.exists()
     else:
         assert ingest_flat(source, destination, contract)['row_count'] == 2
@@ -132,10 +138,13 @@ def test_retail_and_mapped_sources(tmp_path, monkeypatch, source_kind, mapped, l
         lambda: (ingest_csv if source_kind == 'csv' else ingest_parquet)(source, destination))
     if limited:
         monkeypatch.setenv('METRICGUARD_MAX_ROWS', '1')
-        with pytest.raises(FreeTierLimit):
+        with pytest.raises(FreeTierLimit) as caught:
             load()
-        with pytest.raises(FreeTierLimit):
+        observed = '2' if source_kind == 'parquet' else 'more than 1'
+        assert f'this file has {observed}' in str(caught.value)
+        with pytest.raises(FreeTierLimit) as preview:
             preview_source(source)
+        assert f'this file has {observed}' in str(preview.value)
         assert not destination.exists()
     else:
         assert load()['row_count'] == 2
@@ -223,7 +232,7 @@ def test_two_load_union_cannot_exceed_cap(tmp_path, monkeypatch):
     ir = parse_flat('SELECT SUM(amount) FROM snapshot', contract)
     assert compare_snapshots(*snapshots, ir, context)['residual'] == '0'
     monkeypatch.setenv('METRICGUARD_MAX_ROWS', '2')
-    with pytest.raises(FreeTierLimit, match='this file has 3'):
+    with pytest.raises(FreeTierLimit, match='this file has more than 2'):
         compare_snapshots(*snapshots, ir, context)
 
 
@@ -261,6 +270,7 @@ def test_warehouse_extraction_stops_streaming(tmp_path, monkeypatch, kind, limit
         with pytest.raises(CollectorError) as caught:
             warehouse.extract_to_csv(selection, tmp_path / 'extract.csv', client=object())
         assert (caught.value.code, caught.value.status) == ('FREE_TIER_ROWS', 413)
+        assert 'this file has more than 1' in caught.value.message
         assert visited == ['a', 'b']
     else:
         assert warehouse.extract_to_csv(selection, tmp_path / 'extract.csv', client=object()) == 3
@@ -299,3 +309,24 @@ def test_postgres_streaming_cap_before_bulk_load(tmp_path, monkeypatch, limited)
         assert not destination.with_name(destination.name + '.rows.csv').exists()
     else:
         assert invoke() == 2
+
+
+@pytest.mark.parametrize('source_kind', ['csv', 'parquet', 'xlsx'])
+@pytest.mark.parametrize('total', [0, 2, 8])
+def test_preview_reports_full_row_count_beyond_display_sample(tmp_path, source_kind, total):
+    from services.supervisor.runner import preview_job
+    source = tmp_path / f'source.{source_kind}'
+    rows = [[str(i), '1.00', 'paid'] for i in range(total)]
+    if source_kind == 'csv':
+        _csv(source, [['id', 'amount', 'status'], *rows])
+    elif source_kind == 'xlsx':
+        _xlsx(source, [['id', 'amount', 'status'], *rows])
+    else:
+        with duckdb.connect() as connection:
+            connection.execute('CREATE TABLE dataset (id VARCHAR, amount DECIMAL(12,2), status VARCHAR)')
+            if rows:
+                connection.executemany('INSERT INTO dataset VALUES (?, ?, ?)', rows)
+            connection.execute('COPY dataset TO ? (FORMAT PARQUET)', [str(source)])
+    result = preview_job(tmp_path, tmp_path / 'output')
+    assert result['row_count'] == total
+    assert len(result['sample_rows']) == min(total, 5)

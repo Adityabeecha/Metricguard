@@ -10,6 +10,8 @@ export interface ParsedCsvPreview {
   null_counts?: Record<string, number>;
   sample_rows: Array<Record<string, string | null>>;
   totalRowsSampled: number;
+  /** False for a bounded prefix/sample; true only after the entire file was scanned. */
+  row_count_exact?: boolean;
   /** Per column, why it cannot be a row key (checked over every row), e.g. 'repeats "A1"'. */
   key_issues?: Record<string, string>;
 }

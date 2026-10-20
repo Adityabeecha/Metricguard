@@ -8,6 +8,7 @@ import { Bridge } from './evidence/Bridge';
 import { Ledger } from './evidence/Ledger';
 import { categoryLabel, type CategoryKey } from './evidence/categories';
 import { HashPrint } from './evidence/HashPrint';
+import { preferredBreakdownColumn } from './evidence/breakdownSelection';
 
 const PAGE = 100;
 
@@ -186,8 +187,7 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads }: 
         if (!active) return;
         onColumns(d.columns || []);
         // Open on a column the calculations filter on: it usually explains the difference best.
-        const tail = (c: string) => c.split('.').pop();
-        const wanted = !column && preferred.map(p => (d.columns || []).find(c => c === p || tail(c) === tail(p))).find(Boolean);
+        const wanted = !column && preferredBreakdownColumn(d.columns || [], preferred);
         if (wanted && wanted !== d.column) { setColumn(wanted); return; }
         setData(d);
         if (!column && d.column) setColumn(d.column);

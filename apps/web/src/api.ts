@@ -23,7 +23,7 @@ export type DatasetContract={id:string;version:2;version_number:number;name:stri
 export type ColumnMapping={id:string;contract_id:string;version_number:number;columns:Record<string,string>;contract_hash:string;mapping_hash:string;created_at:string};
 export type Investigation={id:string;title:string;decision:string;actor_label:string;run_id:string;snapshot_id:string;baseline_version_id:string;target_version_id:string;context:Context;relationship:string;review_status:string;created_at:string};
 export type InvestigationDetail=Investigation&{record_type?:'investigation'|'draft';is_draft?:boolean;snapshot:Snapshot;run:Run;baseline_version:Version;target_version:Version;replay_available:boolean};
-export type DatasetPreview={headers:string[];declared_types:Record<string,string|null>;observed_types:Record<string,string>;sample_rows:Array<Record<string,string|null>>;source_hash:string;
+export type DatasetPreview={row_count?:number;headers:string[];declared_types:Record<string,string|null>;observed_types:Record<string,string>;sample_rows:Array<Record<string,string|null>>;source_hash:string;
   /** Excel only: the first worksheet's name and its converted CSV's first lines (bounded). */
   source_format?:'xlsx';sheet_name?:string;csv_head?:string};
 export type DatasetPreviewRecord={id:string;state:string;preview?:DatasetPreview|null;error?:{code:string;message:string}|null};

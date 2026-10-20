@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowRight, Database, Plus, Save, Trash2, UploadCloud } from
 import { api, ApiError, type Bootstrap, type ColumnValues, type FlatContract, type InvestigationDraft, type RelationalContract, type Run, type Snapshot } from '../api';
 import {
   aggregateRowLimitReason, buildFlatSql, buildRelationalSql, describeCalculation, flatFilterColumns, formProblems, guidedFormSupported,
-  OP_LABEL, operatorsFor, relationalFilterColumns, supportsAnyMatch, supportsCount, supportsDistinct, supportsRatios,
+  OP_LABEL, operatorsFor, relationalFilterColumns, supportsAnyMatch, supportsCount, supportsDistinct, supportsRatios, ratioUnavailableReason,
   RATIO_AGGREGATES, amountColumns, lookupJoins, starLookups, defaultConditionColumn, type Aggregate, type LookupJoin, type CalculationForm, type Filter, type FilterColumn,
 } from '../comparisonBuilder';
 import { summarizeDataset } from '../datasetSummary';
@@ -556,9 +556,10 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                      share: 'Amount from records meeting the condition ÷ amount from all included records.',
                      amount_ratio: 'Each total is added up separately; a record with one blank amount still counts in the other total.',
                      margin: 'The margin skips records where either amount is blank; the bottom total still includes them.' }[sides.target.form.aggregate || 'sum']}
-                  {!supportsRatios(contract) && supportsDistinct(contract) && ' Averages and ratios need the dataset re-registered with compound filters.'}
+                  {!supportsRatios(contract) && <> {ratioUnavailableReason(contract)}</>}
                 </span>
               </label>
+              {!supportsRatios(contract) && <button type="button" className="button secondary small" onClick={() => onNavigate('data', undefined, { add: '1', return: 'start' })}>Upload with these settings</button>}
               {amounts.length > 1 && !['count', 'count_distinct', 'rate'].includes(sides.target.form.aggregate || 'sum') && (
                 <label style={{ maxWidth: 220 }}>{sides.target.form.aggregate === 'amount_ratio' || sides.target.form.aggregate === 'margin' ? 'Top amount' : 'Amount column'}
                   <select value={sides.target.form.amountColumn || amounts[0]} onChange={e => setShared({ amountColumn: e.target.value })}>
