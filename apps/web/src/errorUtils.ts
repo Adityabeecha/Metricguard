@@ -43,6 +43,11 @@ export function humanizeError(
 
   // Handle known error codes
   switch (rawCode) {
+    case 'FREE_TIER_ROWS':
+    case 'FREE_TIER_UPLOAD':
+    case 'FREE_TIER_ACTIVE_RUNS':
+    case 'FREE_TIER_DAILY_RUNS':
+      return { title: 'Free beta limit', message: rawMsg, code: rawCode };
     case 'ROW_KEY_NOT_UNIQUE':
     case 'DUPLICATE_KEY':
       return {

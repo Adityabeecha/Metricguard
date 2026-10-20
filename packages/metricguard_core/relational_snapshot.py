@@ -11,6 +11,7 @@ from pathlib import Path
 
 import duckdb
 
+from .free_tier import check_rows, check_upload_size
 from .common import CoreError, digest, file_hash
 from .numeric import ScaledInteger
 from .snapshot import manifest_path
@@ -51,6 +52,7 @@ def prove_grain(con, contract):
         total, distinct, missing = con.execute(
             f'SELECT COUNT(*), COUNT(DISTINCT {key}), COUNT(*) FILTER (WHERE {key} IS NULL OR {key} = \'\') FROM {table}'
         ).fetchone()
+        check_rows(total)
         if not 0 <= total <= MAX_ROWS or distinct != total or missing:
             fail('invalid_keys', f'{role} key must be unique, non-NULL and non-empty across the complete table.')
         counts[role] = total
@@ -78,6 +80,8 @@ def ingest_relational(source, destination, payload):
     source, destination = Path(source), Path(destination)
     if destination.exists() or manifest_path(destination).exists():
         fail('immutable_snapshot', 'Snapshot destination already exists.')
+    check_rows(0)
+    check_upload_size(source.stat().st_size)
     if source.stat().st_size > MAX_BYTES + 4096:
         fail('file_too_large', 'Relational upload exceeds 25 MiB plus bundle metadata.')
     source_hash = file_hash(source)
@@ -86,6 +90,7 @@ def ingest_relational(source, destination, payload):
     try:
         with zipfile.ZipFile(source) as bundle, tempfile.TemporaryDirectory(prefix='relational-', dir=destination.parent) as folder:
             entries = bundle.infolist()
+            check_upload_size(sum(entry.file_size for entry in entries))
             if (len(entries) != 2 or {e.filename for e in entries} != {'fact.csv', 'dimension.csv'} or
                     any(e.flag_bits & 1 or e.file_size > MAX_BYTES for e in entries) or
                     sum(e.file_size for e in entries) > MAX_BYTES):
@@ -112,6 +117,7 @@ def ingest_relational(source, destination, payload):
                     with (Path(folder) / (role + '.csv')).open('w', encoding='utf-8', newline='') as output:
                         writer = csv.writer(output); writer.writerow(columns)
                         for line, raw in enumerate(reader, 2):
+                            check_rows(count + 1)
                             if count >= MAX_ROWS:
                                 fail('too_many_rows', f'{role} CSV exceeds {MAX_ROWS} rows.')
                             if None in raw or any(v is None for v in raw.values()):

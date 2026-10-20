@@ -17,6 +17,7 @@ from .store import DomainError
 from packages.metricguard_core.relational import EXECUTION_POLICY, MAX_BYTES, context_for, validate_ir
 from packages.metricguard_core.relational_snapshot import validate_manifest
 from services import durable
+from packages.metricguard_core.free_tier import check_upload_size
 
 
 def clean_contract(record):
@@ -142,6 +143,7 @@ def install_relational_routes(app, store, data_dir, execution_mode, resolve_proj
                     with path.open('wb') as output:
                         while blob := await upload.read(min(1024 * 1024, limit - total + 1)):
                             total += len(blob); size += len(blob)
+                            check_upload_size(total)
                             if total > limit:
                                 raise DomainError('UPLOAD_LIMIT', f'CSV files must fit within {limit // (1024 * 1024)} MiB combined.', 413)
                             sha.update(blob); output.write(blob)

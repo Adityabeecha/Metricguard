@@ -18,7 +18,7 @@ export type RatioPart={aggregate:'sum'|'count';measure:string;minus?:string|null
 export type RatioBlock={policy:string;numerator:RatioPart;denominator:RatioPart;display_places:number;numerator_scale:number;denominator_scale:number;share_scale:number;baseline:RatioSide;target:RatioSide;numerator_change:string|null;denominator_change:string|null;status:'defined'|'components_only';sigma:string|null;scale_divisor:string|null;scaled_gap:string|null;gap_exact:string|null;effects:Array<{rule:'numerator_effect'|'denominator_effect';exact:string;display:string}>;corners:Record<string,string>|null;pooled_average:string|null;unit:'share'|'amount_per_record'|'records_per_amount'|'amount_per_amount'};
 export type DistinctSummary={policy:string;entity_column:string;gained:number;lost:number;kept:number;baseline_null_entity_rows:number;target_null_entity_rows:number};
 export type EntityRecords={entity:string;entity_column:string|null;items:Array<{record:string;current_included:boolean;proposed_included:boolean}>;total:number;offset?:number;next_offset?:number|null;truncated?:boolean};
-export type Run={id:string;baseline_version_id:string;target_version_id:string;snapshot_id:string;target_snapshot_id?:string;context:Context;relationship:string;purpose?:string;state:string;created_at:string;result:Result|null;error:{code?:string;message?:string}|null;execution_mode:string};
+export type Run={evidence_state?:'expired';evidence_expired_at?:string;id:string;baseline_version_id:string;target_version_id:string;snapshot_id:string;target_snapshot_id?:string;context:Context;relationship:string;purpose?:string;state:string;created_at:string;result:Result|null;error:{code?:string;message?:string}|null;execution_mode:string};
 export type DatasetContract={id:string;version:2;version_number:number;name:string;currency:string;timezone:string;scope:string;grain:string;cutoff_at:string;null_policy:'blank_nullable'|'literal_NULL'|'native_null';row_key:'order_id';entity_key:'customer_id';decimal_scale:2;schema:Record<string,string>;contract_hash:string;created_at:string};
 export type ColumnMapping={id:string;contract_id:string;version_number:number;columns:Record<string,string>;contract_hash:string;mapping_hash:string;created_at:string};
 export type Investigation={id:string;title:string;decision:string;actor_label:string;run_id:string;snapshot_id:string;baseline_version_id:string;target_version_id:string;context:Context;relationship:string;review_status:string;created_at:string};
@@ -520,6 +520,7 @@ export type ColumnValues = {
 };
 
 export const api = {
+  get: <T>(path: string) => request<T>(path),
   download: async (path:string, filename:string) => {
     const response = await apiFetch(path);
     if (!response.ok) {

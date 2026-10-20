@@ -26,6 +26,7 @@ import duckdb
 import sqlglot
 from sqlglot import exp
 
+from .free_tier import check_rows, check_upload_size
 from .common import CoreError, digest, file_hash
 from .numeric import ScaledInteger
 from .relational import (EXECUTION_POLICY, IDENT, MAX_BYTES, MAX_ROWS, MODE, SCOPE, HASH,
@@ -376,6 +377,7 @@ def prove_grain(con, contract):
         f'SELECT COUNT(*), COUNT(DISTINCT {quote(c["fact"]["key"])}), '
         f'COUNT(*) FILTER (WHERE {quote(c["fact"]["key"])} IS NULL OR {quote(c["fact"]["key"])} = \'\') '
         f'FROM {quote(c["fact"]["table"])}').fetchone()
+    check_rows(fact_total)
     if not 0 <= fact_total <= row_limit(c) or distinct != fact_total or missing:
         fail('invalid_keys', 'fact key must be unique, non-NULL and non-empty across the complete table.')
     per_dimension = {}
@@ -383,6 +385,7 @@ def prove_grain(con, contract):
         table, key, fk, a = quote(d['table']), quote(d['key']), quote(d['fact_foreign_key']), alias(d['role'])
         total, distinct, missing = con.execute(
             f'SELECT COUNT(*), COUNT(DISTINCT {key}), COUNT(*) FILTER (WHERE {key} IS NULL OR {key} = \'\') FROM {table}').fetchone()
+        check_rows(total)
         if not 0 <= total <= row_limit(c) or distinct != total or missing:
             fail('invalid_keys', f'{d["role"]} key must be unique, non-NULL and non-empty across the complete table.')
         rows, matched, unmatched, null_fk = con.execute(
@@ -410,6 +413,8 @@ def ingest(source, destination, payload):
     source, destination = Path(source), Path(destination)
     if destination.exists() or manifest_path(destination).exists():
         fail('immutable_snapshot', 'Snapshot destination already exists.')
+    check_rows(0)
+    check_upload_size(source.stat().st_size)
     if source.stat().st_size > byte_limit(c) + 4096 * (1 + len(c['dimensions'])):
         fail('file_too_large', f'Relational upload exceeds {byte_limit(c) // (1024 * 1024)} MiB plus bundle metadata.')
     source_hash = file_hash(source)
@@ -421,6 +426,7 @@ def ingest(source, destination, payload):
     try:
         with zipfile.ZipFile(source) as bundle, tempfile.TemporaryDirectory(prefix='relational-', dir=destination.parent) as folder:
             entries = bundle.infolist()
+            check_upload_size(sum(entry.file_size for entry in entries))
             if ({e.filename for e in entries} != {entry_name(r) for r in roles} or len(entries) != len(roles) or
                     any(e.flag_bits & 1 or e.file_size > byte_limit(c) for e in entries) or sum(e.file_size for e in entries) > byte_limit(c)):
                 fail('invalid_bundle', 'The internal bundle requires one bounded, unencrypted CSV per table.')
@@ -454,6 +460,7 @@ def ingest(source, destination, payload):
                         with (Path(folder) / entry_name(role)).open('w', encoding='utf-8', newline='') as output:
                             writer = csv.writer(output); writer.writerow(columns)
                             for line, raw in enumerate(reader, 2):
+                                check_rows(count + 1)
                                 if count >= row_limit(c):
                                     fail('too_many_rows', f'{role} CSV exceeds {row_limit(c)} rows.')
                                 if None in raw or any(v is None for v in raw.values()):

@@ -23,6 +23,7 @@ import duckdb
 import psycopg
 from psycopg import sql
 
+from packages.metricguard_core.free_tier import FreeTierLimit, check_rows, check_upload_size
 from packages.metricguard_core.common import (
     CoreError, DATES, NUMERIC, SCHEMA, digest, file_hash
 )
@@ -292,8 +293,8 @@ class PostgresCollector:
             final_db.unlink(missing_ok=True)
             final_manifest.unlink(missing_ok=True)
 
-            code = exc.code if isinstance(exc, CollectorError) else 'EXTRACTION_FAILED'
-            msg = exc.message if isinstance(exc, CollectorError) else redact_credentials(str(exc))
+            code = exc.code if isinstance(exc, (CollectorError, FreeTierLimit)) else 'EXTRACTION_FAILED'
+            msg = exc.message if isinstance(exc, (CollectorError, FreeTierLimit)) else redact_credentials(str(exc))
 
             if self.store is not None and hasattr(self.store, 'update_extraction'):
                 self.store.update_extraction(
@@ -302,7 +303,7 @@ class PostgresCollector:
                     error={'code': code, 'message': msg}
                 )
 
-            if isinstance(exc, CollectorError):
+            if isinstance(exc, (CollectorError, FreeTierLimit)):
                 raise
             raise CollectorError(code, msg) from None
 
@@ -424,6 +425,7 @@ class PostgresCollector:
 
         cursor_name = f"mg_cur_{uuid4().hex}"
         seen_keys: set[str] = set()
+        check_rows(0)
         row_count = 0
         max_rows = MAX_FLAT_ROWS if is_flat else selection.row_limit
 
@@ -453,6 +455,7 @@ class PostgresCollector:
 
                         validated_batch = []
                         for raw_row in rows:
+                            check_rows(row_count + 1)
                             row_count += 1
                             if row_count > max_rows:
                                 raise CollectorError('TOO_MANY_ROWS', f"Extraction exceeds maximum limit of {max_rows} rows.")
@@ -465,6 +468,7 @@ class PostgresCollector:
                             validated_batch.append(val_row)
 
                         writer.writerows([_staged_cell(value, row_count) for value in row] for row in validated_batch)
+                        check_upload_size(staged.tell())
 
                 # Load every validated row at once, then verify the count in DuckDB.
                 table_name = 'snapshot' if is_flat else 'orders'

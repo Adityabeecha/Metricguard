@@ -117,7 +117,7 @@ def _shared_files(conn, erase, paths: set[Path], root: Path) -> set[Path]:
             for name in names:
                 escaped = name.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
                 matches.append(normalized.like('%/' + escaped, escape='\\'))
-            query = select(table).where(table.c.project_id.not_in(erase), or_(*matches))
+            query = select(table).where(or_(table.c.project_id.not_in(erase), table.c.project_id.is_(None)), or_(*matches))
             for row in conn.execute(query).mappings():
                 stored = row['data'].get('artifact_path') if table is snapshots else row['source_path']
                 if _owned_path(stored, root) in paths:

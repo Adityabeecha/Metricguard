@@ -13,6 +13,7 @@ from pathlib import Path
 
 import duckdb
 
+from .free_tier import check_rows
 from .common import digest, file_hash
 from .flat import ingest_flat, validate_contract as validate_flat
 from .relational import fail, quote
@@ -96,6 +97,7 @@ def prepare(database, destination, *, selected_columns, joins, name):
             with duckdb.connect(str(database), read_only=True, config={'threads': '1', 'memory_limit': '256MB',
                     'autoinstall_known_extensions': 'false', 'autoload_known_extensions': 'false'}) as con:
                 verify_database(con, contract, source_manifest)
+                check_rows(con.execute('SELECT COUNT(*)' + from_sql + ' WHERE ' + condition).fetchone()[0])
                 # All projections and predicates above derive solely from checked registered identifiers.
                 con.execute('COPY (SELECT ' + ', '.join(fields) + from_sql + ' WHERE ' + condition +
                             ') TO ? (FORMAT PARQUET)', [str(prepared)])

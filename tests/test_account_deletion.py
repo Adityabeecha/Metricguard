@@ -66,6 +66,8 @@ def test_sole_owner_erases_metadata_sessions_and_local_and_durable_artifacts(acc
     for path in [snap, side, backup, *evidence]:
         assert not path.exists()
         assert not (storage.backend.root / storage.key(path)).exists()
+        if path.name.endswith('.jsonl'):
+            assert not (storage.backend.root / (storage.key(path) + '.gz')).exists()
     assert unrelated.exists()
     assert (root / 'metricguard.db').exists()
     with store.engine.connect() as conn:
@@ -116,7 +118,7 @@ def test_shared_snapshot_bytes_remain_referenced_by_another_project(account):
     delete_account(store, uid, root)
     assert shared.exists()
     assert lineage.exists()
-    assert (storage.backend.root / storage.key(lineage)).exists()
+    assert (storage.backend.root / (storage.key(lineage) + '.gz')).exists()
     assert (storage.backend.root / storage.key(shared)).exists()
     assert store.get_project(other_pid)
 
@@ -146,7 +148,7 @@ def test_other_owners_snapshot_preserves_same_artifact_path_alias(account, monke
 
     for path in (shared, sidecar, lineage):
         assert path.is_file()
-        assert (storage.backend.root / storage.key(path)).is_file()
+        assert (storage.backend.root / (storage.key(path) + ('.gz' if path.name.endswith('.jsonl') else ''))).is_file()
     assert store.get_project(other_pid)
 
 
@@ -214,7 +216,7 @@ def test_prepared_snapshot_lineage_is_deleted_even_when_only_durable_copy_exists
     lineage.unlink()
     seed_project(store, pid, snap)
     delete_account(store, uid, root)
-    assert not (storage.backend.root / storage.key(lineage)).exists()
+    assert not (storage.backend.root / (storage.key(lineage) + '.gz')).exists()
 
 
 def test_deletion_waits_for_backup_publication_and_then_erases_archive(account, monkeypatch):

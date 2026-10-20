@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree
 
+from .free_tier import check_rows, check_upload_size
 from .common import CoreError
 
 MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024  # bounds zip bombs; the CSV limit still applies after conversion
@@ -130,6 +131,8 @@ def _date_text(raw, ref):
 def xlsx_to_csv(source, destination):
     """Write the first worksheet of `source` as UTF-8 CSV; returns (sheet name, data rows)."""
     source, destination = Path(source), Path(destination)
+    check_rows(0)
+    check_upload_size(source.stat().st_size)
     try:
         bundle = zipfile.ZipFile(source)
     except (zipfile.BadZipFile, OSError) as error:
@@ -195,6 +198,7 @@ def xlsx_to_csv(source, destination):
                         width = max(cells) + 1  # the header row fixes the columns
                     elif max(cells) >= width:
                         _fail(f'Row {row_ref} has values to the right of the header row.')
+                    check_rows(rows_written)  # first written row is the header
                     writer.writerow([cells.get(i, '') for i in range(width)])
                     rows_written += 1
             except ElementTree.ParseError as error:

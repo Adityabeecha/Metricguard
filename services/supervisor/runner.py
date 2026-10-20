@@ -6,6 +6,7 @@ METRICGUARD_JOB_INPUT and METRICGUARD_JOB_OUTPUT instead.
 """
 
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -109,8 +110,16 @@ def run_job(input_dir=None, output_dir=None):
             else:
                 info = write_flat_context(snapshot, manifest['contract'], evidence, output_dir / 'context.jsonl')
             (output_dir / 'context.json').write_text(json.dumps(info), encoding='utf-8')
-        except Exception:
-            (output_dir / 'context.jsonl').unlink(missing_ok=True)
+        except Exception as error:
+            from services.supervisor.row_context import unavailable_context
+            info = unavailable_context(str(error) if isinstance(error, ValueError) else 'CONTEXT_GENERATION_FAILED')
+            logging.getLogger(__name__).warning('Column context generation dropped: %s (%s)',
+                                               info['reason'], info['code'])
+            try:
+                (output_dir / 'context.jsonl').unlink(missing_ok=True)
+                (output_dir / 'context.json').write_text(json.dumps(info), encoding='utf-8')
+            except OSError:
+                logging.getLogger(__name__).warning('Unable to save optional column context failure metadata')
     encoded = json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8')
     if len(encoded) > MAX_OUTPUT_BYTES:
         raise ValueError('RUNNER_OUTPUT_TOO_LARGE')

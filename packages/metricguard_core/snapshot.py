@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import duckdb
+from .free_tier import check_rows, check_upload_size
 from .common import CoreError, SCHEMA, NUMERIC, DATES, ALL_COLUMNS, digest, file_hash
 
 DEFAULT_METADATA={'currency':'INR','timezone':'Asia/Kolkata','scope':'synthetic_retail_all_orders','grain':'one_row_per_order_id','cutoff_at':'2026-09-02','null_policy':'blank_nullable'}
@@ -21,6 +22,8 @@ def ingest_csv(source, destination, metadata=None):
     if meta['null_policy'] not in {'blank_nullable','literal_NULL'}: raise CoreError('invalid_metadata','Unknown explicit NULL policy')
     try: date.fromisoformat(meta['cutoff_at'][:10])
     except (ValueError,TypeError): raise CoreError('invalid_metadata','Valid extraction cutoff required')
+    check_rows(0)
+    check_upload_size(source.stat().st_size)
     if source.stat().st_size>MAX_BYTES: raise CoreError('file_too_large','CSV exceeds 25 MiB')
     source_hash=file_hash(source)
     row_count=0; ids=set()
@@ -29,6 +32,7 @@ def ingest_csv(source, destination, metadata=None):
             reader=csv.DictReader(stream)
             if reader.fieldnames!=list(SCHEMA): raise CoreError('invalid_schema','CSV must have the exact ordered schema: '+', '.join(SCHEMA))
             for number,raw in enumerate(reader,2):
+                check_rows(row_count + 1)
                 if row_count>=1000000: raise CoreError('too_many_rows','Snapshot exceeds 1000000 rows')
                 if None in raw or any(v is None for v in raw.values()): raise CoreError('invalid_row',f'Wrong field count at line {number}')
                 row=[]

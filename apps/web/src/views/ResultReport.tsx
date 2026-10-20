@@ -13,16 +13,17 @@ const recordKey = (row: AnyEvidence) => row.fact_key ?? row.row_key ?? row.order
 export function useEvidenceSummary(run: Run | RelationalRun | null) {
   const [summary, setSummary] = useState<EvidenceSummary | null>(null);
   const [problem, setProblem] = useState('');
-  const runId = run?.result ? run.id : '';
+  const expired = run?.evidence_state === 'expired';
+  const runId = run?.result && !expired ? run.id : '';
   useEffect(() => {
-    if (!runId) { setSummary(null); return; }
+    if (!runId) { setSummary(null); setProblem(expired ? 'Detailed records expired — rerun to see them' : ''); return; }
     let active = true;
     setProblem(''); setSummary(null);
     api.evidenceSummary(runId)
       .then(s => { if (active) setSummary(s); })
       .catch(e => { if (active) setProblem(e instanceof Error ? e.message : String(e)); });
     return () => { active = false; };
-  }, [runId]);
+  }, [runId, expired]);
   return { summary, problem };
 }
 
@@ -300,6 +301,7 @@ function inclusion(row: AnyEvidence, side: 'baseline' | 'target') {
 export function ResultReport({ run, unit: declaredUnit, relational, baselineLabel, targetLabel, baselineSql, targetSql, baselineDescription, targetDescription, snapshot, versions, breakdownColumns, sealStatus, note }: Props) {
   const [tab, setTab] = useState<Tab>('records');
   const result = run.result as Result;
+  const expired = run.evidence_state === 'expired';
   const kind = result.aggregate;
   // The same calculation on an earlier and a later load of one dataset, instead of two calculations.
   const loads = Boolean((run as Run).target_snapshot_id);
@@ -334,7 +336,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   const [columns, setColumns] = useState<string[]>([]);
   const [shown, setShown] = useState<string[]>([]);
   const [csvProblem, setCsvProblem] = useState('');
-  const records = useRecordPage(run.result ? run.id : '', { offset, changedOnly, q, order, withContext: shown.length > 0 });
+  const records = useRecordPage(run.result && !expired ? run.id : '', { offset, changedOnly, q, order, withContext: shown.length > 0 });
   const pages = Math.max(1, Math.ceil(records.total / PAGE));
   const pageNo = Math.floor(offset / PAGE) + 1;
   const waitingFor = summaryLoading || (records.busy && records.rows.length === 0);
@@ -394,7 +396,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
             {result.delta_target_minus_baseline != null && <span className="figure-unit">{percent ? 'pts' : unit}</span>}
           </div>
           <p className="answer-sentence" aria-live="polite">{summary.headline}{summary.recordsSentence ? ` ${summary.recordsSentence}` : ''}</p>
-          {evidence.problem && <p className="disabled-reason">The record summary could not be loaded: {evidence.problem}</p>}
+          {evidence.problem && <p className="disabled-reason" role="status">{expired ? evidence.problem : `The record summary could not be loaded: ${evidence.problem}`}</p>}
           <div className="answer-pair">
             <span>{cur} {noun}<b>{show(result.baseline_value)}</b></span>
             <span>{pro} {noun}<b>{show(result.target_value)}</b></span>
@@ -442,8 +444,9 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
       {tab === 'breakdown' && kind === 'count_distinct' && result.distinct && <DistinctPanel distinct={result.distinct} />}
 
       {/* Kept mounted so its column list feeds the record table's "Show columns"; hidden outside its tab. */}
-      {run.result && <div hidden={tab !== 'breakdown'}><Breakdown runId={run.id} unit={unit} percent={percent} onColumns={setColumns} preferred={breakdownColumns} loads={loads} /></div>}
+      {run.result && !expired && <div hidden={tab !== 'breakdown'}><Breakdown runId={run.id} unit={unit} percent={percent} onColumns={setColumns} preferred={breakdownColumns} loads={loads} /></div>}
 
+      {expired && (tab === 'records' || tab === 'breakdown') && <p className="disabled-reason" role="status">Detailed records expired — rerun to see them</p>}
       {tab === 'records' && summaryLoading && (
         <div className="guided-explain run-progress" role="status">
           <span className="run-spinner" aria-hidden="true" />
@@ -481,7 +484,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
       )}
 
       <div className="detail-stack">
-        <details hidden={tab !== 'records'} open={top.length === 0 && !summaryLoading}>
+        <details hidden={expired || tab !== 'records'} open={top.length === 0 && !summaryLoading}>
           <summary>{listLabel} ({listedTotal == null ? '…' : groupDigits(String(listedTotal))})</summary>
           <div>
             {result.evidence_coverage

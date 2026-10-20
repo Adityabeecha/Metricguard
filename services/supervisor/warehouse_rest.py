@@ -26,6 +26,7 @@ from pathlib import Path
 
 import httpx
 
+from packages.metricguard_core.free_tier import FreeTierLimit, check_rows, check_upload_size, configured_limit
 from services.supervisor.collector import CollectorError, IDENTIFIER_REGEX
 
 MAX_ROWS = 5_000_000
@@ -263,15 +264,18 @@ def bigquery_rows(selection, client):
 def extract_to_csv(selection, destination, client=None):
     """Write the selection's rows to `destination` (CSV with contract column names); returns the row count."""
     _check(selection)
+    check_rows(0)
     own = client is None
     client = client or httpx.Client(timeout=httpx.Timeout(120.0, connect=20.0), follow_redirects=False)
     rows = 0
+    bounded_upload = configured_limit('METRICGUARD_MAX_UPLOAD_MB') is not None
     try:
         fetch = snowflake_rows if selection.kind == 'snowflake' else bigquery_rows
         with Path(destination).open('w', encoding='utf-8', newline='') as output:
             writer = csv.writer(output, lineterminator='\n')
             writer.writerow([c for c, _ in selection.columns])
             for row in fetch(selection, client):
+                check_rows(rows + 1)
                 if not isinstance(row, list) or len(row) != len(selection.columns):
                     raise CollectorError('SCHEMA_MISMATCH', 'The warehouse returned a row with the wrong number of values.')
                 cells = []
@@ -282,10 +286,12 @@ def extract_to_csv(selection, destination, client=None):
                                  else '' if value is None else value)
                 writer.writerow(cells)
                 rows += 1
+                if bounded_upload:
+                    check_upload_size(output.tell())
                 if rows > MAX_ROWS:
                     raise CollectorError('TOO_MANY_ROWS', f'The table has more than {MAX_ROWS:,} rows; take a sample or add a cutoff.')
-    except CollectorError as error:
-        raise CollectorError(error.code, _redact(error.message, selection.token)) from None
+    except (CollectorError, FreeTierLimit) as error:
+        raise CollectorError(error.code, _redact(error.message, selection.token), status=error.status) from None
     finally:
         if own:
             client.close()

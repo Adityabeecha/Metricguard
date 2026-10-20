@@ -10,6 +10,7 @@ import tempfile
 
 import duckdb
 
+from .free_tier import check_rows, check_upload_size
 from .common import CoreError, DATES, NUMERIC, SCHEMA, digest, file_hash
 from .snapshot import MAX_BYTES, NULLABLE, manifest_path
 
@@ -146,6 +147,7 @@ def _load_mapped_csv(source: Path, destination: Path, contract: dict, mapping: d
                 writer = csv.writer(output)
                 writer.writerow(SCHEMA)
                 for raw in reader:
+                    check_rows(count + 1)
                     if count >= MAX_ROWS:
                         raise CoreError('too_many_rows', 'Snapshot exceeds one million rows')
                     if None in raw or any(item is None for item in raw.values()):
@@ -174,6 +176,7 @@ def _load_mapped_parquet(source: Path, destination: Path, contract: dict, mappin
             if any(source_types.get(mapping['columns'][role]) != kind for role, kind in SCHEMA.items()):
                 raise CoreError('invalid_schema', 'Mapped Parquet columns are missing or have incompatible types')
             count = con.execute('SELECT COUNT(*) FROM read_parquet(?)', [source_name]).fetchone()[0]
+            check_rows(count)
             if count > MAX_ROWS:
                 raise CoreError('too_many_rows', 'Snapshot exceeds one million rows')
             ids = set()
@@ -213,6 +216,8 @@ def ingest_mapped(source, destination, contract, mapping) -> dict:
         raise CoreError('invalid_contract', 'CSV requires a declared text NULL token')
     if source_format == '.parquet' and contract['null_policy'] != 'native_null':
         raise CoreError('invalid_contract', 'Parquet requires native NULL values')
+    check_rows(0)
+    check_upload_size(source.stat().st_size)
     if source.stat().st_size > MAX_BYTES:
         raise CoreError('file_too_large', 'Source exceeds 25 MiB')
     source_hash = file_hash(source)
@@ -297,6 +302,8 @@ def preview_source(source: Path) -> dict:
     source_format = source.suffix.lower()
     if source_format not in {'.csv', '.parquet'}:
         raise CoreError('unsupported_format', 'Preview requires CSV or Parquet')
+    check_rows(0)
+    check_upload_size(source.stat().st_size)
     if source.stat().st_size > MAX_BYTES:
         raise CoreError('file_too_large', 'Source exceeds 25 MiB')
     source_hash = file_hash(source)
@@ -309,6 +316,7 @@ def preview_source(source: Path) -> dict:
                     raise CoreError('invalid_schema', 'CSV headers are missing or duplicated')
                 rows = []
                 for count, row in enumerate(reader, 1):
+                    check_rows(count)
                     if count > MAX_ROWS:
                         raise CoreError('too_many_rows', 'Source exceeds one million rows')
                     if None in row or any(value is None for value in row.values()):
@@ -328,7 +336,9 @@ def preview_source(source: Path) -> dict:
                     raise CoreError('invalid_schema', 'Parquet headers are missing or duplicated')
                 declared = {column[0]: column[1] for column in description}
                 _bounded_preview(headers, declared, [], source_hash, csv_source=False)
-                if con.execute('SELECT COUNT(*) FROM read_parquet(?)', [source_name]).fetchone()[0] > MAX_ROWS:
+                count = con.execute('SELECT COUNT(*) FROM read_parquet(?)', [source_name]).fetchone()[0]
+                check_rows(count)
+                if count > MAX_ROWS:
                     raise CoreError('too_many_rows', 'Source exceeds one million rows')
                 projection = ', '.join(
                     f'LEFT(CAST({_quoted(name)} AS VARCHAR), {MAX_SAMPLE_CHARS + 1}) AS {_quoted(name)}'

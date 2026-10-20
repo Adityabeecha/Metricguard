@@ -1,7 +1,7 @@
 """Transactional application records; analytical SQL never executes here."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -584,6 +584,8 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
 
     def record_snapshot(self, name, manifest, artifact_path, project_id=None):
         pid = project_id or self.project_id
+        from packages.metricguard_core.free_tier import check_rows
+        check_rows(manifest.get('row_count', 0))
         m_hash = manifest.get('manifest_hash') or manifest.get('database_hash') or fingerprint(manifest)
         with self.engine.begin() as conn:
             existing = conn.execute(select(snapshots).where(snapshots.c.manifest_hash == m_hash, snapshots.c.project_id == pid)).mappings().first()
@@ -737,18 +739,45 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
         return output
 
     def get_run(self, ident):
-        return self._run(self._row(runs, ident))
+        run = self._run(self._row(runs, ident))
+        expired = self.evidence_context(ident, run['attempt'], kind='evidence_expired')
+        if expired:
+            run.update(evidence_state='expired', evidence_expired_at=expired['expired_at'])
+        context = self.evidence_context(ident, run['attempt'])
+        if context and context.get('status') == 'unavailable':
+            run.update(context_status='unavailable', context_unavailable_reason=context['reason'])
+        return run
 
     def queue(self, request, idempotency_key, execution_mode, project_id=None):
         pid = project_id or self.project_id
         digest = fingerprint(request)
         try:
             with self.engine.begin() as conn:
+                # Serialize admission with account deletion and other queue requests.
+                # SQLite acquires its write lock; PostgreSQL locks this workspace row.
+                conn.execute(update(projects).where(projects.c.id == pid).values(name=projects.c.name))
                 existing = conn.execute(select(runs).where(runs.c.idempotency_key == idempotency_key)).mappings().first()
                 if existing:
                     if existing['request_hash'] != digest:
                         raise DomainError('IDEMPOTENCY_CONFLICT', 'This idempotency key belongs to a different request.', 409)
                     return self._run(existing)
+                from packages.metricguard_core.free_tier import configured_limit, check_rows
+                active_limit = configured_limit('METRICGUARD_MAX_ACTIVE_RUNS_PER_WORKSPACE')
+                if active_limit and conn.execute(select(func.count()).select_from(runs).where(
+                        runs.c.project_id == pid, runs.c.state.in_(['queued', 'running']))).scalar_one() >= active_limit:
+                    message = ('One comparison at a time on the free beta. It will start when the current one finishes.'
+                               if active_limit == 1 else f'Free beta limit: {active_limit} active comparisons per workspace. Wait for a comparison to finish.')
+                    raise DomainError('FREE_TIER_ACTIVE_RUNS', message, 409)
+                daily_limit = configured_limit('METRICGUARD_MAX_RUNS_PER_DAY')
+                cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+                if daily_limit and conn.execute(select(func.count()).select_from(runs).where(
+                        runs.c.project_id == pid, runs.c.created_at >= cutoff)).scalar_one() >= daily_limit:
+                    raise DomainError('FREE_TIER_DAILY_RUNS', f'Free beta limit: {daily_limit:,} comparisons per workspace in 24 hours. Try again later.', 429)
+                if configured_limit('METRICGUARD_MAX_ROWS'):
+                    for sid in {request['snapshot_id'], request.get('target_snapshot_id')} - {None}:
+                        snap = conn.execute(select(snapshots.c.data).where(snapshots.c.id == sid)).scalar_one_or_none()
+                        if snap:
+                            check_rows(snap.get('row_count', snap.get('manifest', {}).get('row_count', 0)))
                 ident = str(uuid4())
                 conn.execute(insert(runs).values(id=ident, project_id=pid, baseline_version_id=request['baseline_version_id'],
                     target_version_id=request['target_version_id'], snapshot_id=request['snapshot_id'], idempotency_key=idempotency_key,
@@ -831,13 +860,20 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
         pid = project_id or self.project_id
         value = {**data, 'id': str(uuid4()), 'created_at': now(), 'project_id': pid}
         with self.engine.begin() as conn:
+            if kind in ('investigation', 'investigation_draft'):
+                conn.execute(update(projects).where(projects.c.id == pid).values(name=projects.c.name))
+                rid = data.get('run_id') or data.get('comparison_run_id')
+                if rid and conn.execute(select(records.c.id).where(records.c.kind == 'evidence_expired',
+                        records.c.data['run_id'].as_string() == rid)).first():
+                    raise DomainError('EVIDENCE_EXPIRED', 'Detailed records expired — rerun to see them', 410)
             conn.execute(insert(records).values(id=value['id'], project_id=pid, kind=kind, created_at=value['created_at'], data=value))
         return value
 
     def evidence_context(self, run_id: str, attempt: int, kind: str = 'evidence_context') -> dict | None:
         """The record-context (or, with kind='evidence_members', membership) file registered for one run attempt."""
         with self.engine.connect() as conn:
-            for row in conn.execute(select(records).where(records.c.kind == kind)).mappings():
+            for row in conn.execute(select(records).where(records.c.kind == kind,
+                    records.c.data['run_id'].as_string() == run_id)).mappings():
                 data = row['data']
                 if data.get('run_id') == run_id and data.get('attempt') == attempt:
                     return data
@@ -871,6 +907,14 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
             snapshot_list = [_with_flat_policy({**r['data'], 'project_id': r['project_id']}) for r in conn.execute(select(snapshots).where(snapshots.c.project_id == pid).order_by(snapshots.c.id)).mappings()]
             run_list = [self._run(r) for r in conn.execute(select(runs).where(runs.c.project_id == pid).order_by(runs.c.created_at.desc()).limit(100)).mappings()]
             all_records = list(conn.execute(select(records).where(records.c.project_id == pid).order_by(records.c.created_at.desc())).mappings())
+        expired = {r['data']['run_id']: r['data'] for r in all_records if r['kind'] == 'evidence_expired'}
+        unavailable = {r['data']['run_id']: r['data'] for r in all_records
+                       if r['kind'] == 'evidence_context' and r['data'].get('status') == 'unavailable'}
+        for run in run_list:
+            if run['id'] in unavailable:
+                run.update(context_status='unavailable', context_unavailable_reason=unavailable[run['id']]['reason'])
+            if run['id'] in expired:
+                run.update(evidence_state='expired', evidence_expired_at=expired[run['id']]['expired_at'])
         snapshot_import_list = [item for item in self.list_imports(pid) if item['metadata'].get('purpose') != 'preview']
         p_row = self.get_project(pid)
         p_name = p_row['name'] if p_row else ('Retail analytics' if pid == 'local-retail' else f"Workspace {pid}")
@@ -3637,6 +3681,7 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
 
         try:
             with self.engine.begin() as conn:
+                conn.execute(update(projects).where(projects.c.id == pid).values(name=projects.c.name))
                 conn.execute(insert(records).values(
                     id=draft_id,
                     project_id=pid,
@@ -3711,6 +3756,7 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
         }
 
         with self.engine.begin() as conn:
+            conn.execute(update(projects).where(projects.c.id == pid).values(name=projects.c.name))
             statement = update(records).where(
                 records.c.id == draft_id,
                 records.c.kind == 'investigation_draft',

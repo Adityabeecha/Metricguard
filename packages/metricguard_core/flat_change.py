@@ -13,6 +13,7 @@ from pathlib import Path
 import duckdb
 import sqlglot
 
+from .free_tier import check_rows
 from .common import CoreError, digest, file_hash
 from .flat import (FULL_EVIDENCE_ROWS, MEASURE_POLICY_V8, POLICY, _check_ir, _connect, _query,
                    amount_column, validate_contract)
@@ -136,6 +137,8 @@ def compare_snapshots(baseline_database, target_database, ir, context):
     """Evaluate one flat SUM or COUNT(*) definition on two snapshots and explain the change by record."""
     started = time.monotonic()
     baseline_manifest, target_manifest = open_snapshot(baseline_database), open_snapshot(target_database)
+    check_rows(baseline_manifest['row_count'])
+    check_rows(target_manifest['row_count'])
     contract = validate_contract(baseline_manifest['contract'])
     if validate_contract(target_manifest['contract'])['contract_hash'] != contract['contract_hash']:
         _error('snapshot_contract_mismatch',
@@ -173,6 +176,7 @@ def compare_snapshots(baseline_database, target_database, ir, context):
                 else:
                     key, (ai, ac, an), (bi, bc, bn), bp, tp = b_row[0], b_row[1], t_row[1], True, True
                     b_row, t_row = before.next(), after.next()
+                check_rows(sum(item['records'] for item in summary.values()) + 1)
                 change = classify(bp, tp, ai, bi, ac, bc, an, bn)
                 summary[change]['records'] += 1
                 summary[change]['delta'] += bc - ac

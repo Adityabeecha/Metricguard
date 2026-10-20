@@ -6,6 +6,7 @@ from pathlib import Path
 
 import duckdb
 
+from .free_tier import check_rows, check_upload_size
 from .common import CoreError, DATES, NUMERIC, SCHEMA, digest, file_hash
 from .snapshot import DEFAULT_METADATA, MAX_BYTES, NULLABLE, manifest_path
 
@@ -23,6 +24,8 @@ def ingest_parquet(source, destination, metadata=None):
         date.fromisoformat(meta['cutoff_at'][:10])
     except (ValueError, TypeError):
         raise CoreError('invalid_metadata', 'Valid extraction cutoff required')
+    check_rows(0)
+    check_upload_size(source.stat().st_size)
     if source.stat().st_size > MAX_BYTES:
         raise CoreError('file_too_large', 'Parquet exceeds 25 MiB')
     source_hash = file_hash(source)
@@ -33,9 +36,11 @@ def ingest_parquet(source, destination, metadata=None):
             columns = con.execute('DESCRIBE SELECT * FROM read_parquet(?)', [source_name]).fetchall()
             if [(item[0], item[1]) for item in columns] != list(SCHEMA.items()):
                 raise CoreError('invalid_schema', 'Parquet must have the exact ordered orders schema and types')
+            check_rows(con.execute('SELECT COUNT(*) FROM read_parquet(?)', [source_name]).fetchone()[0])
             cursor = con.execute('SELECT * FROM read_parquet(?)', [source_name])
             while rows := cursor.fetchmany(10000):
                 for row in rows:
+                    check_rows(row_count + 1)
                     if row_count >= 1000000:
                         raise CoreError('too_many_rows', 'Snapshot exceeds 1000000 rows')
                     values = dict(zip(SCHEMA, row))

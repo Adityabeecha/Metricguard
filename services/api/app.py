@@ -46,6 +46,7 @@ from services.supervisor.evidence_artifact import (
 )
 from services.supervisor.collector import CollectorError, PostgresCollector, PostgresSourceSelection
 from services import durable
+from packages.metricguard_core.free_tier import FreeTierLimit, configured_limit, check_upload_size
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -187,11 +188,28 @@ def create_app(database_url=None, data_dir=None, mode=None):
             from packages.metricguard_core.flat import MAX_FLAT_BYTES
             large = request.url.path == '/api/v1/flat/snapshots'
             limit = MAX_FLAT_BYTES + 1024 * 1024 if large else 26 * 1024 * 1024
-            if int(request.headers.get('content-length', '0')) > limit:
+            length = int(request.headers.get('content-length', '0'))
+            upload_limit = configured_limit('METRICGUARD_MAX_UPLOAD_MB')
+            if upload_limit and length > upload_limit * 1024 * 1024:
+                return JSONResponse({'error': {'code': 'FREE_TIER_UPLOAD',
+                    'message': f'Free beta limit: {upload_limit:,} MB per upload (this request has {length:,} bytes).'}}, status_code=413)
+            if length > limit:
                 return JSONResponse({'error': {'code': 'UPLOAD_LIMIT', 'message': f'Upload exceeds the {(limit // (1024 * 1024)) - 1} MiB limit.'}}, status_code=413)
         except ValueError:
             return JSONResponse({'error': {'code': 'BAD_REQUEST', 'message': 'Invalid content length.'}}, status_code=400)
-        response = await call_next(request)
+        # Cache eviction must not race a paged evidence read. The background
+        # prefetch thread and CSV generator hold their own pins as well.
+        match = re.fullmatch(r'/api/v1/comparisons/([A-Za-z0-9_-]{1,128})/(evidence[^/]*|entity-records|join-evidence)', request.url.path)
+        protected = []
+        if match and configured_limit('METRICGUARD_CACHE_MAX_MB'):
+            try:
+                run = store.get_run(match.group(1))
+                protected = [data_dir / 'evidence' / f"{run['id']}-{run['attempt']}{suffix}"
+                             for suffix in ('.jsonl', '.context.jsonl', '.members.jsonl')]
+            except DomainError:
+                pass
+        with durable.pin(protected):
+            response = await call_next(request)
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
         if request.url.path.startswith('/api/'):
@@ -204,6 +222,10 @@ def create_app(database_url=None, data_dir=None, mode=None):
         return JSONResponse({'error': {'code': error.code, 'message': error.message}}, status_code=error.status)
 
     from packages.metricguard_core.common import CoreError
+
+    @app.exception_handler(FreeTierLimit)
+    async def free_tier_error(_, error):
+        return JSONResponse({'error': {'code': error.code, 'message': error.message}}, status_code=error.status)
 
     @app.exception_handler(CoreError)
     async def core_error(_, error):
@@ -814,6 +836,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             with stage.open('xb') as output:
                 while chunk := await file.read(1024 * 1024):
                     size += len(chunk)
+                    check_upload_size(size)
                     if size > MAX_FLAT_BYTES:
                         raise DomainError('UPLOAD_LIMIT', f'Dataset must contain 1 byte to {MAX_FLAT_BYTES // (1024 * 1024)} MiB.', 413)
                     hasher.update(chunk)
@@ -890,6 +913,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         if not 1 <= len(name) <= 160:
             raise DomainError('INVALID_METADATA', 'A dataset name of 1–160 characters is required.')
         content = await file.read(25 * 1024 * 1024 + 1)
+        check_upload_size(len(content))
         if not content or len(content) > 25 * 1024 * 1024:
             raise DomainError('UPLOAD_LIMIT', 'Dataset must contain 1 byte to 25 MiB.', 413)
         store.check_storage_quota(pid, len(content), data_dir)
@@ -924,6 +948,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         if suffix not in {'.csv', '.parquet', '.xlsx'}:
             raise DomainError('UNSUPPORTED_FORMAT', 'Preview accepts CSV, Parquet or Excel (.xlsx) files.')
         content = await file.read(25 * 1024 * 1024 + 1)
+        check_upload_size(len(content))
         if not content or len(content) > 25 * 1024 * 1024:
             raise DomainError('UPLOAD_LIMIT', 'Dataset must contain 1 byte to 25 MiB.', 413)
         store.check_storage_quota(pid, len(content), data_dir)
@@ -1297,6 +1322,14 @@ def create_app(database_url=None, data_dir=None, mode=None):
             run = store.complete_demo(run['id'], result)
         return run
 
+    @app.get('/api/v1/usage')
+    def usage(request: Request):
+        auth = get_auth_context(request, store)
+        pid = resolve_project_id(request, auth, store=store)
+        verify_project_access(store, pid, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        from .usage import workspace_usage
+        return workspace_usage(store, pid, data_dir)
+
     @app.get('/api/v1/comparisons/{ident}')
     def run_detail(ident: str, request: Request):
         auth = get_auth_context(request, store)
@@ -1312,6 +1345,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
         The check itself is unchanged (every byte and row, before any page is served);
         it simply runs while the person reads the headline instead of on their first click.
         """
+        if run.get('evidence_state') == 'expired':
+            return
         if run.get('state') not in ('succeeded', 'partial') or not (run.get('result') or {}).get('evidence_artifact'):
             return
         try:
@@ -1323,7 +1358,9 @@ def create_app(database_url=None, data_dir=None, mode=None):
 
         def work():
             try:
-                evidence_cache.summary(path, key, verify_all)
+                with durable.pin([path]):
+                    durable.ensure(path, sidecar=False)
+                    evidence_cache.summary(path, key, verify_all)
             except Exception:  # a failure is reported on the next real read, with its own message
                 pass
         threading.Thread(target=work, name=f'evidence-prefetch-{run["id"]}', daemon=True).start()
@@ -1499,6 +1536,13 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 page['items'] = [{**row, 'context': evidence_cache.row_values(row, context)} for row in page['items']]
         return page
 
+    def expired_details(run):
+        if run.get('evidence_state') == 'expired':
+            from services.maintenance import EXPIRED_MESSAGE
+            return {'available': False, 'evidence_state': 'expired', 'reason': EXPIRED_MESSAGE,
+                    'items': [], 'total': 0, 'columns': []}
+        return None
+
     def run_context(run):
         """(record context or None, available column names) for one run; never raises for missing context."""
         if run.get('execution_policy') == 'relational_snapshot_v1':
@@ -1514,7 +1558,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             return None, columns
         info = store.evidence_context(run['id'], run.get('attempt', 1))
         path = data_dir / 'evidence' / f"{run['id']}-{run.get('attempt', 1)}.context.jsonl"
-        if not info or not durable.ensure(path, sidecar=False):
+        if not info or info.get('status') == 'unavailable' or not durable.ensure(path, sidecar=False):
             return None, []
         try:
             return evidence_cache.load_context(path, info), list(info.get('columns') or [])
@@ -1538,6 +1582,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        if expired_details(run):
+            return expired_details(run)
         result = run.get('result') or {}
         if not result.get('evidence_artifact'):
             return {'available': False, 'columns': [], 'reason': 'This run has no stored record evidence.'}
@@ -1550,9 +1596,16 @@ def create_app(database_url=None, data_dir=None, mode=None):
                               'distinct count would not add up to the total.'
                         for name in (info.get('excluded_columns') or {})}
         if not columns:
-            return {'available': False, 'columns': [], 'unavailable_columns': excluded,
-                    'reason': ('No column has a single value per counted item, so no exact breakdown exists.' if excluded else
-                               'This comparison was run before column breakdowns existed. Replay it to enable them.')}
+            if excluded:
+                reason = 'No column has a single value per counted item, so no exact breakdown exists.'
+            elif (run.get('context') or {}).get('comparison') == 'snapshot_change':
+                # Two-load runs never write record details (by design), so a rerun would not help.
+                reason = "Breakdowns aren't available for comparisons between two data loads yet."
+            elif (store.evidence_context(run['id'], run.get('attempt', 1)) or {}).get('status') == 'unavailable':
+                reason = "Breakdown isn't available for this run (the record details could not be saved). Rerun to try again."
+            else:
+                reason = 'This comparison was run before column breakdowns existed. Replay it to enable them.'
+            return {'available': False, 'columns': [], 'unavailable_columns': excluded, 'reason': reason}
         chosen = column or columns[0]
         if chosen not in columns:
             if chosen in excluded:
@@ -1581,6 +1634,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        if expired_details(run):
+            return expired_details(run)
         result = run.get('result') or {}
         if result.get('aggregate') != 'count_distinct':
             raise DomainError('POLICY_MISMATCH', 'Record lists are available only for distinct-count comparisons.')
@@ -1617,6 +1672,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        if expired_details(run):
+            return expired_details(run)
         result = run.get('result') or {}
         if not result:
             raise DomainError('RESULT_UNAVAILABLE', 'Complete this comparison before summarising its evidence.')
@@ -1689,11 +1746,21 @@ def create_app(database_url=None, data_dir=None, mode=None):
                     buffer.seek(0); buffer.truncate()
             yield buffer.getvalue()
 
-        return StreamingResponse(generate(), media_type='text/csv',
+        def pinned_generate():
+            paths = [data_dir / 'evidence' / f"{run['id']}-{run['attempt']}{suffix}"
+                     for suffix in ('.jsonl', '.context.jsonl', '.members.jsonl')]
+            with durable.pin(paths):
+                for path in paths:
+                    durable.ensure(path, sidecar=False)
+                yield from generate()
+
+        return StreamingResponse(pinned_generate(), media_type='text/csv',
                                  headers={'Content-Disposition': f'attachment; filename="metricguard-{ident}-records.csv"'})
 
     def evidence_access(run):
         """Artifact path, cache key and a full-verification callback for one run attempt."""
+        if expired_details(run):
+            raise DomainError('EVIDENCE_EXPIRED', expired_details(run)['reason'], 410)
         result = run.get('result') or {}
         manifest = result['evidence_artifact']
         artifact = data_dir / 'evidence' / f"{run['id']}-{run['attempt']}.jsonl"
@@ -1705,6 +1772,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
         return artifact, (str(artifact), run['id'], run['attempt'], manifest.get('sha256')), verify_all
 
     def evidence_page(run, offset, limit, *, include_join_evidence=False, changed_only=False, query='', order='file'):
+        if expired_details(run):
+            return expired_details(run)
         result = run.get('result') or {}
         manifest = result.get('evidence_artifact')
         if manifest is None:

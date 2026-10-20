@@ -1,4 +1,5 @@
 """Hosted deployment: local runner (no Docker), durable file storage, and proxy/hosting switches."""
+import gzip
 import sys
 import time
 
@@ -153,7 +154,7 @@ def test_local_runner_comparison_survives_a_redeploy(tmp_path):
         assert finished['state'] == 'succeeded', finished['error']
         assert finished['result']['delta_target_minus_baseline'] == '-6000000.00'
         evidence = data / 'evidence' / f"{queued['id']}-{finished['attempt']}.jsonl"
-        assert (bucket / 'evidence' / evidence.name).read_bytes() == evidence.read_bytes()
+        assert gzip.decompress((bucket / 'evidence' / (evidence.name + '.gz')).read_bytes()) == evidence.read_bytes()
 
         # Redeploy: the container's disk is wiped, the bucket and database remain.
         for folder in ('evidence', 'snapshots'):
@@ -254,3 +255,37 @@ def test_worker_pool_stops_its_workers():
         time.sleep(0.05)
     pool.stop(timeout=5)
     assert all(p is not None and p.poll() is not None for p in pool.processes)
+
+
+def test_engine_killed_for_memory_gets_a_clear_message(tmp_path):
+    url = f"sqlite:///{tmp_path / 'app.db'}"
+    data = tmp_path / 'data'
+    data.mkdir()
+    seed(url, data)
+    app = create_app(database_url=url, data_dir=data, mode='isolated')
+    with TestClient(app) as client:
+        boot = client.get('/api/v1/bootstrap').json()
+        context = {'start': '2026-08-01', 'end_exclusive': '2026-09-01', 'timezone': 'Asia/Kolkata',
+                   'currency': 'INR', 'unit': 'currency', 'grain': 'one_row_per_order_id',
+                   'scope': 'synthetic_retail_all_orders'}
+        body = {'baseline_version_id': boot['definitions'][0]['versions'][0]['id'],
+                'target_version_id': boot['definitions'][2]['versions'][0]['id'],
+                'snapshot_id': boot['snapshots'][0]['id'], 'context': context, 'relationship': 'expected_agreement'}
+        queued = client.post('/api/v1/comparisons', json=body, headers={'Idempotency-Key': 'oom'}).json()
+
+        class Killed:
+            def poll(self):
+                return -9
+
+            def wait(self, timeout=None):
+                return -9
+
+        class OutOfMemoryLauncher:
+            def start(self, input_dir, output_dir, command=None):
+                return Killed()
+
+        assert Supervisor(Store(url), OutOfMemoryLauncher(), tmp_path / 'jobs', 'oom-worker', data_dir=data).run_once()
+        failed = client.get(f"/api/v1/comparisons/{queued['id']}").json()
+        assert failed['state'] == 'failed'
+        assert failed['error']['code'] == 'RUNNER_OUT_OF_MEMORY'
+        assert 'ran out of memory' in failed['error']['message']

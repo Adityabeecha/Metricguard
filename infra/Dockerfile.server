@@ -23,7 +23,13 @@ ENV PYTHONPATH=/app \
     METRICGUARD_SECURE_COOKIES=true \
     METRICGUARD_WORKERS=1 \
     METRICGUARD_RUN_SECONDS=300 \
-    METRICGUARD_INGEST_SECONDS=300
+    METRICGUARD_INGEST_SECONDS=300 \
+    METRICGUARD_MAX_ROWS=50000 \
+    METRICGUARD_MAX_UPLOAD_MB=25 \
+    METRICGUARD_MAX_ACTIVE_RUNS_PER_WORKSPACE=1 \
+    METRICGUARD_MAX_RUNS_PER_DAY=30 \
+    METRICGUARD_CACHE_MAX_MB=600 \
+    METRICGUARD_UNSAVED_EVIDENCE_DAYS=7
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s CMD python -c "import os,sys,urllib.request; port=os.environ.get('PORT') or os.environ.get('METRICGUARD_PORT') or '8000'; sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/api/v1/health', timeout=4).status == 200 else 1)"

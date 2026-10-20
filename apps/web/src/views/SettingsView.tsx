@@ -4,6 +4,7 @@ import { Evaluation } from '../Evaluation';
 import { MetadataImports } from '../MetadataImports';
 import { Terminal } from 'lucide-react';
 import { ThemeSwitch } from '../ThemeSwitch';
+import { UsagePanel } from './UsagePanel';
 import { AccountSettings } from './AccountSettings';
 
 interface SettingsViewProps {
@@ -86,6 +87,7 @@ export function SettingsView({
         >
           Integrations
         </button>
+        <button type="button" className={`section-tab-button ${currentTab === 'usage' ? 'active' : ''}`} onClick={() => handleTabClick('usage')}>Usage</button>
         {developerMode && (
           <button
             type="button"
@@ -97,6 +99,7 @@ export function SettingsView({
         )}
       </div>
 
+      {currentTab === 'usage' && <UsagePanel workspaceId={data.project.id} />}
       {currentTab === 'system' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           <AccountSettings />

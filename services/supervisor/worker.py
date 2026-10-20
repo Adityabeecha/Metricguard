@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -21,9 +22,16 @@ from services import durable
 
 
 MAX_OUTPUT_BYTES = 25 * 1024 * 1024
+logger = logging.getLogger(__name__)
 # Comparisons and imports of large extracts (millions of rows) need longer than small ones.
 RUN_SECONDS = int(os.environ.get('METRICGUARD_RUN_SECONDS', '600'))
 INGEST_SECONDS = int(os.environ.get('METRICGUARD_INGEST_SECONDS', '1200'))
+
+
+def _admission_environment():
+    from packages.metricguard_core.free_tier import configured_limit
+    return {name: str(value) for name in ('METRICGUARD_MAX_ROWS', 'METRICGUARD_MAX_UPLOAD_MB')
+            if (value := configured_limit(name)) is not None}
 
 
 class IngestValidationError(ValueError):
@@ -217,6 +225,7 @@ class DockerLauncher:
             '--mount', f'type=bind,src={output_dir},dst=/job/output',
             '--mount', 'type=volume,dst=/job/scratch',
             '--env', 'TMPDIR=/job/scratch', '--env', 'SQLITE_TMPDIR=/job/scratch',
+            *(arg for name, value in _admission_environment().items() for arg in ('--env', f'{name}={value}')),
             *image_and_command,
         ]
         return args, name
@@ -230,6 +239,19 @@ class DockerLauncher:
                            stderr=subprocess.DEVNULL, timeout=5, check=False)
         process.kill()
         process.wait(timeout=5)
+
+
+OUT_OF_MEMORY_MESSAGE = ('This comparison ran out of memory on this server. Try a smaller dataset, '
+                         'fewer filter columns or a simpler calculation.')
+
+
+def killed_for_memory(exit_code):
+    """True when the engine was killed outright, which the kernel does when memory runs out.
+
+    The local launcher's child reports -9 (SIGKILL); a Docker container reports 137 (128 + 9).
+    Timeouts and cancels stop the engine through their own paths before this is checked.
+    """
+    return exit_code in (-9, 137)
 
 
 class LocalLauncher:
@@ -259,11 +281,13 @@ class LocalLauncher:
         env['PYTHONPATH'] = root + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
         env.update({'METRICGUARD_JOB_INPUT': str(input_dir), 'METRICGUARD_JOB_OUTPUT': str(output_dir),
                     'TMPDIR': str(scratch), 'SQLITE_TMPDIR': str(scratch), 'PYTHONDONTWRITEBYTECODE': '1'})
+        env.update(_admission_environment())
         return env
 
     def _limits(self):
         import resource
         os.setsid()
+        os.nice(10)
         resource.setrlimit(resource.RLIMIT_CPU, (self.cpu_seconds, self.cpu_seconds))
         if self.memory_mb > 0:
             limit = self.memory_mb * 1024 * 1024
@@ -313,6 +337,10 @@ class Supervisor:
         self.data_dir = Path(data_dir) if data_dir is not None else self.job_root.parent
 
     def run_once(self):
+        # Kept out of module imports: the fixed runner also imports this worker,
+        # but its image does not include API maintenance and retention modules.
+        from services.maintenance import maintain
+        maintain(self.store, self.data_dir)
         if hasattr(self.store, 'worker_seen'):
             self.store.worker_seen(self.worker_id)
         if hasattr(self.store, 'claim_import'):
@@ -342,10 +370,18 @@ class Supervisor:
         return True
 
     def _ingest(self, pending):
+        destination = self.data_dir / 'snapshots' / f"{pending['id']}-{pending['attempt']}.duckdb"
+        with durable.pin([pending['source_path'], destination,
+                          destination.with_name(destination.name + '.manifest.json')]):
+            return self._ingest_pinned(pending)
+
+    def _ingest_pinned(self, pending):
+        from packages.metricguard_core.free_tier import FreeTierLimit, check_upload_size
         ident, attempt = pending['id'], pending['attempt']
         source = Path(pending['source_path'])
         destination = self.data_dir / 'snapshots' / f'{ident}-{attempt}.duckdb'
         try:
+            check_upload_size(source.stat().st_size)
             if file_hash(source) != pending['data']['source_hash']:
                 raise ValueError('SOURCE_HASH_MISMATCH')
             def progress():
@@ -360,7 +396,7 @@ class Supervisor:
             code = str(exc) if isinstance(exc, ValueError) and str(exc) in {
                 'SOURCE_HASH_MISMATCH', 'INGEST_TIMEOUT', 'INGEST_LEASE_LOST', 'INGEST_OUTPUT_INVALID',
                 'INGEST_HASH_MISMATCH', 'INGEST_MANIFEST_MISMATCH'} else 'INGEST_FAILED'
-            if isinstance(exc, IngestValidationError):
+            if isinstance(exc, (IngestValidationError, FreeTierLimit)):
                 code, message = exc.code, exc.message
             else:
                 message = ('Relational import failed. Check both CSV files, registered keys, decimal measure and NULL policy.'
@@ -378,9 +414,15 @@ class Supervisor:
             durable.remove(destination)
 
     def _preview(self, pending):
+        with durable.pin([pending['source_path']]):
+            return self._preview_pinned(pending)
+
+    def _preview_pinned(self, pending):
+        from packages.metricguard_core.free_tier import FreeTierLimit, check_upload_size
         ident, attempt = pending['id'], pending['attempt']
         source = Path(pending['source_path'])
         try:
+            check_upload_size(source.stat().st_size)
             expected = pending['data']['source_hash']
             if file_hash(source) != expected:
                 raise ValueError('SOURCE_HASH_MISMATCH')
@@ -410,7 +452,7 @@ class Supervisor:
                     error_path = output_dir / 'error.json'
                     if error_path.is_file() and error_path.stat().st_size <= 8192:
                         detail = json.loads(error_path.read_text(encoding='utf-8'))
-                        if (detail.get('code') in {'invalid_schema', 'invalid_row', 'invalid_csv', 'invalid_xlsx',
+                        if (detail.get('code') in {'FREE_TIER_ROWS', 'FREE_TIER_UPLOAD', 'invalid_schema', 'invalid_row', 'invalid_csv', 'invalid_xlsx',
                                 'invalid_parquet', 'too_many_rows', 'file_too_large', 'preview_too_large'} and
                                 isinstance(detail.get('message'), str) and len(detail['message']) <= 500):
                             raise IngestValidationError(detail['code'].upper(), detail['message'])
@@ -427,11 +469,11 @@ class Supervisor:
                     raise ValueError('PREVIEW_OUTPUT_INVALID')
             finished = self.store.finish_preview(ident, self.worker_id, attempt, preview=preview)
         except Exception as exc:
-            code = exc.code if isinstance(exc, IngestValidationError) else (
+            code = exc.code if isinstance(exc, (IngestValidationError, FreeTierLimit)) else (
                 str(exc) if isinstance(exc, ValueError) and str(exc) in {
                     'SOURCE_HASH_MISMATCH', 'PREVIEW_LEASE_LOST', 'PREVIEW_TIMEOUT',
                     'PREVIEW_OUTPUT_INVALID'} else 'PREVIEW_FAILED')
-            message = exc.message if isinstance(exc, IngestValidationError) else 'Isolated source preview failed.'
+            message = exc.message if isinstance(exc, (IngestValidationError, FreeTierLimit)) else 'Isolated source preview failed.'
             finished = self.store.finish_preview(ident, self.worker_id, attempt,
                                                  error={'code': code, 'message': message})
         if finished:
@@ -460,29 +502,61 @@ class Supervisor:
 
     def _publish_context(self, output_dir, published_evidence, contract, evidence_dir, run_id, attempt):
         """Validate and publish the optional record-context file; never fails the run."""
+        from services.supervisor.row_context import unavailable_context, validate_context
         source = output_dir / 'context.jsonl'
-        if not source.is_file():
-            return None
         target = evidence_dir / f'{run_id}-{attempt}.context.jsonl'
+        staged = evidence_dir / f'.{run_id}-{attempt}-{uuid.uuid4().hex}.context.tmp'
+        code = 'CONTEXT_MISSING'
         try:
-            from services.supervisor.row_context import validate_context
+            if not source.is_file():
+                metadata_path = output_dir / 'context.json'
+                if metadata_path.is_file() and metadata_path.stat().st_size <= 64 * 1024:
+                    metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+                    if isinstance(metadata, dict) and metadata.get('status') == 'unavailable':
+                        code = unavailable_context(metadata.get('code'))['code']
+                raise ValueError(code)
+            code = 'CONTEXT_INVALID'
             info = validate_context(source, published_evidence, list(contract.get('categories', [])))
             entity = self._entity_context(output_dir, contract)
             if entity is not None:
                 columns, excluded = entity
                 info = {**info, 'columns': columns, 'excluded_columns': excluded}
-            staged = evidence_dir / f'.{run_id}-{attempt}-{uuid.uuid4().hex}.context.tmp'
+            code = 'CONTEXT_PUBLISH_FAILED'
             shutil.copyfile(source, staged)
-            if file_hash(staged) != info['sha256']:
-                staged.unlink(missing_ok=True)
-                return None
+            if file_hash(staged) != info['sha256'] or staged.stat().st_size != info['byte_count']:
+                code = 'CONTEXT_INVALID'
+                raise ValueError(code)
             os.replace(staged, target)
-            return info
+            return {**info, 'status': 'available'}
         except Exception:
-            target.unlink(missing_ok=True)
-            return None
+            info = unavailable_context(code)
+            logger.warning('Column context unavailable for run %s attempt %s: %s (%s)',
+                           run_id, attempt, info['reason'], info['code'])
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                logger.warning('Unable to remove rejected column context for run %s attempt %s', run_id, attempt)
+            return info
+        finally:
+            try:
+                staged.unlink(missing_ok=True)
+            except OSError:
+                logger.warning('Unable to remove staged column context for run %s attempt %s', run_id, attempt)
 
     def _execute(self, run):
+        snapshots = [self.store.snapshot(run['snapshot_id'])]
+        if (run.get('context') or {}).get('comparison') == 'snapshot_change':
+            snapshots.append(self.store.snapshot(run['target_snapshot_id']))
+        paths = []
+        for snapshot in snapshots:
+            source = Path(snapshot['artifact_path'])
+            paths.extend([source, source.with_name(source.name + '.manifest.json')])
+        paths.extend(self.data_dir / 'evidence' / f"{run['id']}-{run['attempt']}{suffix}"
+                     for suffix in ('.jsonl', '.members.jsonl', '.context.jsonl'))
+        with durable.pin(paths):
+            return self._execute_pinned(run)
+
+    def _execute_pinned(self, run):
         run_id, attempt = run['id'], run['attempt']
         snapshot = self.store.snapshot(run['snapshot_id'])
         durable.ensure(snapshot['artifact_path'])
@@ -574,7 +648,8 @@ class Supervisor:
                     self.launcher.stop(process)
                     raise ValueError('RUN_TIMEOUT')
                 time.sleep(0.1)
-            if process.wait(timeout=5) != 0:
+            exit_code = process.wait(timeout=5)
+            if exit_code != 0:
                 error_path = output_dir / 'error.json'
                 if error_path.is_file() and error_path.stat().st_size <= 8192:
                     try:
@@ -583,6 +658,8 @@ class Supervisor:
                             raise IngestValidationError(detail['code'].upper(), detail['message'])
                     except (OSError, UnicodeError, json.JSONDecodeError):
                         pass
+                if killed_for_memory(exit_code):
+                    raise IngestValidationError('RUNNER_OUT_OF_MEMORY', OUT_OF_MEMORY_MESSAGE)
                 raise ValueError('RUNNER_FAILED')
             output = output_dir / 'result.json'
             if not output.is_file() or output.stat().st_size > MAX_OUTPUT_BYTES:
@@ -654,10 +731,11 @@ class Supervisor:
                     if file_hash(staged) != members_info['sha256']:
                         raise ValueError('RUNNER_OUTPUT_INVALID')
                     os.replace(staged, members_path)
-                context_info = self._publish_context(output_dir, published, contract, evidence_dir, run_id, attempt)
+                context_info = (self._publish_context(output_dir, published, contract, evidence_dir, run_id, attempt)
+                                if run.get('execution_policy') == 'flat_snapshot_v1' and not snapshot_change else None)
                 context_path = evidence_dir / f'{run_id}-{attempt}.context.jsonl'
                 durable_files = [published, *([members_path] if members_path is not None else []),
-                                 *([context_path] if context_info is not None else [])]
+                                 *([context_path] if context_info is not None and context_info['status'] == 'available' else [])]
                 for path in durable_files:
                     durable.push(path, sidecar=False)
                 if not self.store.finish(run_id, self.worker_id, attempt, result=result):
@@ -670,10 +748,14 @@ class Supervisor:
                             self.store.record('evidence_members', {'run_id': run_id, 'attempt': attempt, **members_info},
                                               project_id=run.get('project_id'))
                         if context_info is not None:
-                            self.store.record('evidence_context', {'run_id': run_id, 'attempt': attempt, **context_info},
-                                              project_id=run.get('project_id'))
+                            if hasattr(self.store, 'set_evidence_context'):
+                                self.store.set_evidence_context(run_id, attempt, context_info)
+                            else:
+                                self.store.record('evidence_context', {'run_id': run_id, 'attempt': attempt, **context_info},
+                                                  project_id=run.get('project_id'))
                     except Exception:
-                        pass
+                        logger.warning('Unable to record evidence metadata for run %s attempt %s', run_id, attempt,
+                                       exc_info=True)
             except Exception:
                 if did_publish:
                     for name in (f'{run_id}-{attempt}.jsonl', f'{run_id}-{attempt}.members.jsonl',
@@ -688,8 +770,16 @@ class Supervisor:
 
 
 def isolated_ingest(source, destination, metadata, launcher=None, job_root=Path('./data/jobs'), progress=None):
+    destination = Path(destination)
+    with durable.pin([source, destination, destination.with_name(destination.name + '.manifest.json')]):
+        return _isolated_ingest_pinned(source, destination, metadata, launcher, job_root, progress)
+
+
+def _isolated_ingest_pinned(source, destination, metadata, launcher=None, job_root=Path('./data/jobs'), progress=None):
     from packages.metricguard_core.common import SCHEMA, digest
+    from packages.metricguard_core.free_tier import check_upload_size
     source, destination, job_root = Path(source), Path(destination), Path(job_root)
+    check_upload_size(source.stat().st_size)
     suffix = source.suffix.lower()
     relational = 'relational_contract' in metadata
     allowed = {'.zip'} if relational else {'.csv', '.parquet', '.xlsx'} if 'flat_contract' in metadata else {'.csv', '.parquet'}
@@ -738,7 +828,7 @@ def isolated_ingest(source, destination, metadata, launcher=None, job_root=Path(
             if error_path.is_file() and error_path.stat().st_size <= 8192:
                 try:
                     detail = json.loads(error_path.read_text(encoding='utf-8'))
-                    if detail.get('code') in {'invalid_schema', 'invalid_row', 'invalid_csv', 'invalid_xlsx', 'invalid_parquet',
+                    if detail.get('code') in {'FREE_TIER_ROWS', 'FREE_TIER_UPLOAD', 'invalid_schema', 'invalid_row', 'invalid_csv', 'invalid_xlsx', 'invalid_parquet',
                             'too_many_rows', 'invalid_metadata', 'invalid_contract', 'invalid_mapping',
                             'file_too_large', 'unsupported_format', 'scale_mismatch', 'unsupported_precision',
                             'identical_operands', 'arithmetic_overflow', 'invalid_bundle', 'invalid_keys',
@@ -747,6 +837,8 @@ def isolated_ingest(source, destination, metadata, launcher=None, job_root=Path(
                         raise IngestValidationError(detail['code'].upper(), detail['message'])
                 except (OSError, UnicodeError, json.JSONDecodeError, AttributeError):
                     pass
+            if killed_for_memory(code):
+                raise IngestValidationError('INGEST_OUT_OF_MEMORY', OUT_OF_MEMORY_MESSAGE.replace('This comparison', 'This import'))
             raise ValueError('INGEST_FAILED')
         manifest_path, artifact = output_dir / 'manifest.json', output_dir / 'snapshot.duckdb'
         sidecar = output_dir / 'snapshot.duckdb.manifest.json'

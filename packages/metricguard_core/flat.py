@@ -15,6 +15,7 @@ import duckdb
 import sqlglot
 from sqlglot import exp
 
+from .free_tier import check_rows, check_upload_size
 from .common import CoreError, digest, file_hash
 from .flat_boolean import PREDICATE_POLICY, lower_boolean, validate_boolean, compile_boolean
 from .numeric import ScaledInteger
@@ -373,6 +374,7 @@ class _RowSink:
         return False
 
     def append(self, row):
+        check_rows(self.count + 1)
         if self.nullable is not None:
             for name, value in zip(self.categories, row[self.cat_offset:]):
                 if value is None and name not in self.nullable:
@@ -405,6 +407,8 @@ def _ingest_flat(source, destination, contract, preparation, folder, sinks):
     source, destination = Path(source), Path(destination)
     if destination.exists() or manifest_path(destination).exists():
         _error('immutable_snapshot', 'Snapshot destination already exists')
+    check_rows(0)
+    check_upload_size(source.stat().st_size)
     if source.stat().st_size > MAX_FLAT_BYTES:
         _error('file_too_large', f'Extract exceeds {MAX_FLAT_BYTES // (1024 * 1024)} MiB')
     uploaded, source_hash = source, file_hash(source)  # the uploaded file itself, also for Excel
@@ -470,6 +474,7 @@ def _ingest_flat(source, destination, contract, preparation, folder, sinks):
         if contract['null_policy'] != 'native_null': _error('invalid_contract', 'Parquet requires native NULL policy')
         with duckdb.connect(':memory:', config={'memory_limit': '512MB', 'threads': '1',
                                               'temp_directory': str(folder / 'duckdb-tmp')}) as con:
+            check_rows(con.execute('SELECT COUNT(*) FROM read_parquet(?)', [str(source.resolve())]).fetchone()[0])
             schema_raw = {r[0]: r[1] for r in con.execute('DESCRIBE SELECT * FROM read_parquet(?)', [str(source.resolve())]).fetchall()}
             if ver in (6, 8):
                 TYPE_MAP = {'string': 'VARCHAR', 'boolean': 'BOOLEAN', 'date': 'DATE', 'timestamp': 'TIMESTAMP'}
@@ -1229,6 +1234,7 @@ def compare_flat(database, baseline_ir, target_ir, context):
         _error('not_comparable', 'Whole-snapshot comparison context differs from contract')
     for key in ('source_hash', 'manifest_hash'):
         if context.get(key) and context[key] != manifest[key]: _error('snapshot_integrity', f'{key} differs from frozen snapshot')
+    check_rows(manifest['row_count'])
     if manifest['row_count'] > MAX_FLAT_ROWS:
         _error('too_many_rows', 'Flat snapshot exceeds the supported row bound')
     if baseline_ir['aggregate'] in ('count_distinct', 'ratio'):

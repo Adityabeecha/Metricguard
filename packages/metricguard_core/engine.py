@@ -6,6 +6,7 @@ import threading
 import time
 import duckdb
 import sqlglot
+from .free_tier import check_rows
 from .common import CoreError, digest
 from .parser import revalidate, render_expression
 from .snapshot import inspect_snapshot
@@ -18,6 +19,7 @@ def number(value): return None if value is None else format(value,'f')
 def validate_context(database,baseline,target,context):
     baseline,target=revalidate(baseline),revalidate(target)
     manifest=inspect_snapshot(database)
+    check_rows(manifest["row_count"])
     required={'start','end_exclusive','timezone','currency','unit','grain','scope'}
     if not isinstance(context,dict) or any(not context.get(k) for k in required): raise CoreError('needs_context','Period, timezone, currency, unit, grain and scope are required')
     try:

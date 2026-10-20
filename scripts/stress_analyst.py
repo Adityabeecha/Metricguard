@@ -194,7 +194,9 @@ class Harness:
         for r in data:
             if r[1] is not None and BASE(r) and not paid(r):
                 exp_split[r[4]] = exp_split.get(r[4], 0) - r[1]
-        got = {g['value']: cents(g['change']) for g in split.get('groups', [])}
+        # The API lists every group, including those whose change is 0; compare the groups that moved.
+        got = {g['value']: cents(g['change']) for g in split.get('groups', []) if cents(g['change'])}
+        exp_split = {value: change for value, change in exp_split.items() if change}
         self.record('sum_breakdown_by_region_exact', got == exp_split, seconds=round(time.monotonic() - t0, 1))
         t0 = time.monotonic()
         lat = []
