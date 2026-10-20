@@ -16,6 +16,7 @@ from .models import FlatDefinitionInput, RelationalContractInput, RelationalComp
 from .store import DomainError
 from packages.metricguard_core.relational import EXECUTION_POLICY, MAX_BYTES, context_for, validate_ir
 from packages.metricguard_core.relational_snapshot import validate_manifest
+from services import durable
 
 
 def clean_contract(record):
@@ -62,7 +63,7 @@ def validate_comparison(store, body, auth, pid):
         validate_ir(version['ir'], contract)
     if payload['context'] != context_for(contract):
         raise DomainError('NOT_COMPARABLE', 'Context must match the frozen whole-snapshot scope and declared unit.')
-    if not Path(snapshot['artifact_path']).is_file():
+    if not durable.ensure(snapshot['artifact_path']):
         raise DomainError('SNAPSHOT_MISSING', 'Stored results remain readable, but this snapshot is unavailable for replay.')
     payload.update(baseline_ir_hash=a['ir_hash'], target_ir_hash=b['ir_hash'], snapshot_manifest_hash=snapshot['manifest_hash'])
     return payload
@@ -150,7 +151,7 @@ def install_relational_routes(app, store, data_dir, execution_mode, resolve_proj
                 store.check_storage_quota(pid, total + 4096 * len(paths), data_dir)
                 for existing in store.bootstrap(pid)['snapshots']:
                     if (existing.get('execution_policy') == EXECUTION_POLICY and existing.get('contract_hash') == contract['contract_hash'] and
-                            existing.get('manifest', {}).get('source_hashes') == hashes and Path(existing['artifact_path']).is_file()):
+                            existing.get('manifest', {}).get('source_hashes') == hashes and durable.ensure(existing['artifact_path'])):
                         from .app import public_snapshot
                         return public_snapshot(existing)
                 with zipfile.ZipFile(stage, 'x', compression=zipfile.ZIP_STORED) as bundle:
@@ -182,6 +183,8 @@ def install_relational_routes(app, store, data_dir, execution_mode, resolve_proj
         isolated()
         if source.get('execution_policy') != EXECUTION_POLICY:
             raise DomainError('POLICY_MISMATCH', 'Select a validated relational snapshot.')
+        if not durable.ensure(source['artifact_path']):
+            raise DomainError('SNAPSHOT_MISSING', 'This dataset is missing and cannot be prepared.')
         c, manifest = open_snapshot(source['artifact_path'])
         if manifest != source['manifest']:
             raise DomainError('SNAPSHOT_INTEGRITY', 'Stored relational source differs from its frozen manifest.')
@@ -193,15 +196,22 @@ def install_relational_routes(app, store, data_dir, execution_mode, resolve_proj
             flat, prepared = prepare(source['artifact_path'], destination,
                 selected_columns=body.selected_columns, joins=body.joins, name=body.name)
             store.check_storage_quota(pid, 0, data_dir)
+            durable.push(destination)
+            lineage_file = destination.with_suffix('.lineage.jsonl')
+            if lineage_file.is_file():
+                durable.push(lineage_file, sidecar=False)
             registered = store.record_flat_contract(flat, project_id=pid)
             snapshot = store.record_snapshot(body.name, prepared, destination, project_id=pid)
             lineage = prepared['relational_preparation']
             return {'contract': registered, 'snapshot': public_snapshot(snapshot),
                     'column_mapping': lineage['column_mapping'], 'lineage': lineage}
         except Exception:
-            destination.unlink(missing_ok=True)
+            for leftover, sidecar in ((destination, True), (destination.with_suffix('.lineage.jsonl'), False)):
+                try:
+                    durable.remove(leftover, sidecar=sidecar)
+                except Exception:
+                    leftover.unlink(missing_ok=True)
             manifest_path(destination).unlink(missing_ok=True)
-            destination.with_suffix('.lineage.jsonl').unlink(missing_ok=True)
             raise
 
     @app.post('/api/v1/relational/comparisons/validate')

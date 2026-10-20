@@ -21,11 +21,15 @@ def seed(database_url=None, data_dir=None):
     store = Store(database_url or os.environ.get('METRICGUARD_DATABASE_URL', f"sqlite:///{data_dir / 'metricguard.db'}"))
     fixtures = ROOT / 'MetricGuard_Planning_Pack/examples'
     database = data_dir / 'snapshots/golden.duckdb'
-    if database.exists():
+    # Hosted: reuse the demo dataset kept in durable storage, so a redeploy keeps the same hashes.
+    from services.durable import from_environment
+    storage = from_environment(data_dir)
+    if storage.ensure(database):
         from packages.metricguard_core import inspect_snapshot
         manifest = inspect_snapshot(database)
     else:
         manifest = ingest_csv(fixtures / 'orders_golden.csv', database, {**CONTEXT, 'cutoff_at': '2026-09-02'})
+        storage.push(database)
     snapshot = store.record_snapshot('August 2026 · synthetic orders', manifest, str(database))
     existing = store.bootstrap()['definitions']
     demo_definitions = []

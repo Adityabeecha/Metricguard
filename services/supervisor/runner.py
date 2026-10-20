@@ -1,14 +1,24 @@
-"""Entrypoint executed only inside the fixed analytical runner image."""
+"""Entrypoint executed only inside the fixed analytical runner image.
+
+The Docker launcher mounts the job at /job/input and /job/output. The local launcher (hosts
+without Docker) runs this module as a child process and passes its folders in
+METRICGUARD_JOB_INPUT and METRICGUARD_JOB_OUTPUT instead.
+"""
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
 from services.supervisor.evidence_artifact import aggregate_contexts, write_artifact
 from services.supervisor.worker import MAX_OUTPUT_BYTES, file_hash, validate_result
 
+JOB_INPUT = Path(os.environ.get('METRICGUARD_JOB_INPUT', '/job/input'))
+JOB_OUTPUT = Path(os.environ.get('METRICGUARD_JOB_OUTPUT', '/job/output'))
 
-def run_job(input_dir=Path('/job/input'), output_dir=Path('/job/output')):
+
+def run_job(input_dir=None, output_dir=None):
+    input_dir, output_dir = Path(input_dir or JOB_INPUT), Path(output_dir or JOB_OUTPUT)
     from packages.metricguard_core import compare
     from packages.metricguard_core.flat import compare_flat
 
@@ -107,7 +117,8 @@ def run_job(input_dir=Path('/job/input'), output_dir=Path('/job/output')):
     (output_dir / 'result.json').write_bytes(encoded)
 
 
-def ingest_job(input_dir=Path('/job/input'), output_dir=Path('/job/output')):
+def ingest_job(input_dir=None, output_dir=None):
+    input_dir, output_dir = Path(input_dir or JOB_INPUT), Path(output_dir or JOB_OUTPUT)
     from packages.metricguard_core import ingest_csv, ingest_parquet
     from packages.metricguard_core.v2_contract import ingest_mapped
     from packages.metricguard_core.flat import ingest_flat
@@ -150,7 +161,8 @@ def ingest_job(input_dir=Path('/job/input'), output_dir=Path('/job/output')):
     return manifest
 
 
-def preview_job(input_dir=Path('/job/input'), output_dir=Path('/job/output')):
+def preview_job(input_dir=None, output_dir=None):
+    input_dir, output_dir = Path(input_dir or JOB_INPUT), Path(output_dir or JOB_OUTPUT)
     from packages.metricguard_core.v2_contract import preview_source
 
     input_dir, output_dir = Path(input_dir), Path(output_dir)
@@ -182,7 +194,7 @@ def preview_job(input_dir=Path('/job/input'), output_dir=Path('/job/output')):
 
 if __name__ == '__main__':
     import sys
-    output = Path('/job/output')
+    output = JOB_OUTPUT
     if len(sys.argv) > 1 and sys.argv[1] in {'ingest', 'preview'}:
         from packages.metricguard_core import CoreError
         try:

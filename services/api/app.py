@@ -44,6 +44,7 @@ from services.supervisor.evidence_artifact import (
     aggregate_contexts, expected_artifact_delta, explain_row, verify_artifact,
 )
 from services.supervisor.collector import CollectorError, PostgresCollector, PostgresSourceSelection
+from services import durable
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -129,6 +130,22 @@ def public_snapshot(snapshot):
     return public
 
 
+def hosting_settings(environ=None):
+    """Settings for running behind a public proxy; all empty/off for local use.
+
+    METRICGUARD_ALLOWED_HOSTS    extra Host names the API answers (e.g. the Northflank address)
+    METRICGUARD_PUBLIC_ORIGINS   browser origins allowed to change data (e.g. https://metricguard.vercel.app)
+    METRICGUARD_ORIGIN_SECRET    shared secret the proxy adds as x-origin-secret on every request
+    METRICGUARD_SECURE_COOKIES   true to mark the session cookie Secure (HTTPS only)
+    """
+    env = os.environ if environ is None else environ
+    split = lambda name: [item.strip() for item in env.get(name, '').split(',') if item.strip()]
+    return {'hosts': split('METRICGUARD_ALLOWED_HOSTS'),
+            'origins': {origin.rstrip('/') for origin in split('METRICGUARD_PUBLIC_ORIGINS')},
+            'origin_secret': env.get('METRICGUARD_ORIGIN_SECRET', ''),
+            'secure_cookies': env.get('METRICGUARD_SECURE_COOKIES', '').strip().lower() in ('1', 'true', 'yes', 'on')}
+
+
 def create_app(database_url=None, data_dir=None, mode=None):
     data_dir = Path(data_dir or os.environ.get('METRICGUARD_DATA_DIR', ROOT / 'data')).resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -142,17 +159,26 @@ def create_app(database_url=None, data_dir=None, mode=None):
         raise ValueError('METRICGUARD_MODE must be demo or isolated')
     app = FastAPI(title='MetricGuard', version='1.0.0')
     app.state.store = store
+    # Frozen datasets and evidence are mirrored to durable storage when METRICGUARD_STORAGE is set.
+    durable.configure(durable.from_environment(data_dir))
     from .relational_routes import install_relational_routes
     install_relational_routes(app, store, data_dir, execution_mode, resolve_project_id)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=['localhost', '127.0.0.1', '[::1]', 'testserver', 'api'])
+    hosting = hosting_settings()
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=['localhost', '127.0.0.1', '[::1]', 'testserver', 'api', *hosting['hosts']])
 
     @app.middleware('http')
     async def local_origin_and_limits(request: Request, call_next):
+        # Hosted behind a proxy (Vercel): only requests carrying the proxy's shared secret reach the
+        # API, so nobody can bypass the proxy and call the backend address directly.
+        if hosting['origin_secret'] and request.url.path != '/api/v1/health':
+            import hmac
+            if not hmac.compare_digest(request.headers.get('x-origin-secret', ''), hosting['origin_secret']):
+                return JSONResponse({'error': {'code': 'FORBIDDEN', 'message': 'Requests must come through the MetricGuard website.'}}, status_code=403)
         origin = request.headers.get('origin')
         if request.method not in ('GET', 'HEAD', 'OPTIONS') and origin:
             from urllib.parse import urlparse
-            if urlparse(origin).hostname not in ('localhost', '127.0.0.1', '::1'):
-                return JSONResponse({'error': {'code': 'LOCAL_ONLY', 'message': 'MetricGuard accepts local browser requests only.'}}, status_code=403)
+            if urlparse(origin).hostname not in ('localhost', '127.0.0.1', '::1') and origin.rstrip('/') not in hosting['origins']:
+                return JSONResponse({'error': {'code': 'LOCAL_ONLY', 'message': 'MetricGuard accepts requests from its own website only.'}}, status_code=403)
         try:
             # Single-table extracts may be large (streamed to disk); every other request stays small.
             from packages.metricguard_core.flat import MAX_FLAT_BYTES
@@ -165,6 +191,9 @@ def create_app(database_url=None, data_dir=None, mode=None):
         response = await call_next(request)
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
+        if request.url.path.startswith('/api/'):
+            # Never cache workspace data on a CDN or shared proxy (Vercel honours upstream cache headers).
+            response.headers['Cache-Control'] = 'no-store'
         return response
 
     @app.exception_handler(DomainError)
@@ -698,7 +727,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         verify_object_access(store, item, auth, allowed_roles=('owner', 'analyst', 'reader'))
         if item.get('execution_policy') != 'flat_snapshot_v1':
             raise DomainError('POLICY_MISMATCH', 'Value look-ups are available for single-table datasets.')
-        if not Path(item['artifact_path']).is_file():
+        if not durable.ensure(item['artifact_path']):
             raise DomainError('SNAPSHOT_MISSING', 'This snapshot is missing.')
         return item
 
@@ -1016,7 +1045,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         for version in (a, b):
             if version['ir'].get('period') and version['ir']['period'] != {k: context[k] for k in ('start', 'end_exclusive')}:
                 raise DomainError('PERIOD_CONFLICT', 'The SQL literal period differs from the selected reporting window.')
-        if not Path(snapshot['artifact_path']).is_file():
+        if not durable.ensure(snapshot['artifact_path']):
             raise DomainError('SNAPSHOT_MISSING', 'Historical results remain available, but this snapshot is missing and cannot be replayed.')
         return payload, a, b, snapshot
 
@@ -1083,7 +1112,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         if (payload['context']['unit_label'] != snapshot['manifest']['unit_label'] or
                 payload['context']['scope'] != snapshot['scope']):
             raise DomainError('NOT_COMPARABLE', 'Unit or whole-snapshot scope differs from the frozen contract.')
-        if not Path(snapshot['artifact_path']).is_file():
+        if not durable.ensure(snapshot['artifact_path']):
             raise DomainError('SNAPSHOT_MISSING', 'This snapshot is missing and cannot be replayed.')
         return payload, a, b, snapshot
 
@@ -1152,7 +1181,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         if body.context.unit_label != before['manifest']['unit_label'] or body.context.scope != before['scope']:
             raise DomainError('NOT_COMPARABLE', 'Unit or whole-snapshot scope differs from the frozen contract.')
         for item in (before, after):
-            if not Path(item['artifact_path']).is_file():
+            if not durable.ensure(item['artifact_path']):
                 raise DomainError('SNAPSHOT_MISSING', 'One of these snapshots is missing and cannot be replayed.')
         context = {**body.context.model_dump(mode='json'), 'comparison': 'snapshot_change',
                    'manifest_hash': before['manifest']['manifest_hash'],
@@ -1360,7 +1389,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 replay_available = False
                 if snapshot and snapshot.get('artifact_path'):
                     try:
-                        replay_available = Path(snapshot['artifact_path']).is_file()
+                        replay_available = durable.ensure(snapshot['artifact_path'])
                     except Exception:
                         replay_available = False
                 return {
@@ -1382,7 +1411,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         return {**item, 'record_type': 'investigation', 'is_draft': False, 'snapshot': public_snapshot(snapshot), 'run': run,
                 'baseline_version': store.version(item['baseline_version_id']),
                 'target_version': store.version(item['target_version_id']),
-                'replay_available': Path(snapshot['artifact_path']).is_file()}
+                'replay_available': durable.ensure(snapshot['artifact_path'])}
 
     @app.post('/api/v1/investigations/{ident}/replays', status_code=202)
     def investigation_replay(ident: str, request: Request,
@@ -1482,7 +1511,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             return None, columns
         info = store.evidence_context(run['id'], run.get('attempt', 1))
         path = data_dir / 'evidence' / f"{run['id']}-{run.get('attempt', 1)}.context.jsonl"
-        if not info or not path.is_file():
+        if not info or not durable.ensure(path, sidecar=False):
             return None, []
         try:
             return evidence_cache.load_context(path, info), list(info.get('columns') or [])
@@ -1554,7 +1583,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             raise DomainError('POLICY_MISMATCH', 'Record lists are available only for distinct-count comparisons.')
         info = store.evidence_context(run['id'], run.get('attempt', 1), kind='evidence_members')
         path = data_dir / 'evidence' / f"{run['id']}-{run.get('attempt', 1)}.members.jsonl"
-        if not info or not path.is_file():
+        if not info or not durable.ensure(path, sidecar=False):
             raise DomainError('EVIDENCE_UNAVAILABLE', 'This comparison has no stored record list.')
         try:
             page = evidence_cache.entity_records_page(path, info, entity, offset, limit)
@@ -1665,6 +1694,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         result = run.get('result') or {}
         manifest = result['evidence_artifact']
         artifact = data_dir / 'evidence' / f"{run['id']}-{run['attempt']}.jsonl"
+        durable.ensure(artifact, sidecar=False)
 
         def verify_all():
             evidence_verify(run, manifest, artifact, 0, 0)
@@ -1686,6 +1716,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 rows.sort(key=lambda r: -evidence_cache._magnitude(r.get('delta')))
             return {'items': rows[offset:offset + limit], 'total': len(rows)}
         artifact = data_dir / 'evidence' / f"{run['id']}-{run['attempt']}.jsonl"
+        durable.ensure(artifact, sidecar=False)
         if not include_join_evidence:
             path, key, verify_all = evidence_access(run)
             try:
@@ -1849,7 +1880,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
             raise DomainError('UNAUTHORIZED', 'Send your API key to start a session.', 401)
         token = store.create_session(auth['user']['id'], SESSION_SECONDS)
         response = JSONResponse({'signed_in': True, 'expires_in_seconds': SESSION_SECONDS})
-        response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_SECONDS, httponly=True, samesite='strict', path='/api')
+        response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_SECONDS, httponly=True, samesite='strict', path='/api',
+                            secure=hosting['secure_cookies'])
         return response
 
     @app.delete('/api/v1/auth/session')
@@ -1858,7 +1890,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         if token:
             store.revoke_session(token)
         response = JSONResponse({'signed_in': False})
-        response.delete_cookie(SESSION_COOKIE, path='/api')
+        response.delete_cookie(SESSION_COOKIE, path='/api', secure=hosting['secure_cookies'], httponly=True, samesite='strict')
         return response
 
     @app.get('/api/v1/auth/identity')

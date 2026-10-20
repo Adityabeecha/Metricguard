@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .metric_contracts import MetricContractStoreMixin
 from .relational_store import RelationalStoreMixin
+from services import durable
 
 
 class DomainError(Exception):
@@ -2599,6 +2600,7 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
 
         full_ctx = self._build_impact_context(snapshot_manifest, context, b_ir, t_ir)
         artifact_path = snapshot_row['data']['artifact_path']
+        durable.ensure(artifact_path)
 
         try:
             validate_context(artifact_path, b_ir, t_ir, full_ctx)
@@ -2744,7 +2746,7 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                 raise DomainError('NOT_FOUND', f"Snapshot '{snapshot_id}' not found in project '{pid}'.", 404)
 
             artifact_path = snap_row['data'].get('artifact_path')
-            if not artifact_path or not Path(artifact_path).is_file():
+            if not durable.ensure(artifact_path):
                 raise DomainError('SNAPSHOT_MISSING', f"Snapshot file for '{snapshot_id}' is missing.", 404)
 
             try:
@@ -3330,7 +3332,7 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                 raise DomainError('NOT_FOUND', f"Snapshot '{snapshot_id}' not found in project '{pid}'.", 404)
 
             artifact_path = snap_row['data'].get('artifact_path')
-            if not artifact_path or not Path(artifact_path).is_file():
+            if not durable.ensure(artifact_path):
                 raise DomainError('SNAPSHOT_MISSING', f"Snapshot file for '{snapshot_id}' is missing.", 404)
 
             try:

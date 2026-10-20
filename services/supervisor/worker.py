@@ -17,6 +17,7 @@ from services.supervisor.evidence_artifact import (
     aggregate_contexts, expected_artifact_delta, verify_artifact, _row_delta,
 )
 from packages.metricguard_core.flat_case_evidence import CaseEvidenceValidator, validate_case_result
+from services import durable
 
 
 MAX_OUTPUT_BYTES = 25 * 1024 * 1024
@@ -231,6 +232,78 @@ class DockerLauncher:
         process.wait(timeout=5)
 
 
+class LocalLauncher:
+    """Runs the engine as a child process, for hosts with no Docker daemon (hosted containers).
+
+    The child gets the same job folders, a private scratch folder and a minimal environment:
+    no database URL, storage keys or other secrets are passed to it. On Linux it also runs with
+    CPU-time and file-size limits, plus an optional address-space cap
+    (METRICGUARD_LOCAL_MEMORY_MB; off by default because the engine reserves far more address
+    space than it uses; rely on the container's memory limit). Unlike DockerLauncher it shares the host's
+    network and file system, so it is meant for trusted, invite-only use; see
+    docs/deployment-plan.md.
+    """
+
+    #: Environment variables passed through to the engine; everything else is dropped.
+    PASSTHROUGH = ('PATH', 'PYTHONPATH', 'LANG', 'LC_ALL', 'TZ', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP')
+
+    def __init__(self, memory_mb=None, cpu_seconds=None):
+        self.memory_mb = int(memory_mb if memory_mb is not None else os.environ.get('METRICGUARD_LOCAL_MEMORY_MB', '0'))
+        # CPU time adds up across the engine's threads; the worker's wall-clock timeout is the real cap,
+        # this only stops a runaway process that escaped it.
+        self.cpu_seconds = int(cpu_seconds if cpu_seconds is not None else (max(RUN_SECONDS, INGEST_SECONDS) + 30) * 8)
+
+    def environment(self, input_dir, output_dir, scratch):
+        env = {key: os.environ[key] for key in self.PASSTHROUGH if key in os.environ}
+        root = str(Path(__file__).resolve().parents[2])
+        env['PYTHONPATH'] = root + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
+        env.update({'METRICGUARD_JOB_INPUT': str(input_dir), 'METRICGUARD_JOB_OUTPUT': str(output_dir),
+                    'TMPDIR': str(scratch), 'SQLITE_TMPDIR': str(scratch), 'PYTHONDONTWRITEBYTECODE': '1'})
+        return env
+
+    def _limits(self):
+        import resource
+        os.setsid()
+        resource.setrlimit(resource.RLIMIT_CPU, (self.cpu_seconds, self.cpu_seconds))
+        if self.memory_mb > 0:
+            limit = self.memory_mb * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_DATA, (limit, limit))
+        size = 8 * 1024 ** 3
+        resource.setrlimit(resource.RLIMIT_FSIZE, (size, size))
+
+    def start(self, input_dir, output_dir, command=None):
+        input_dir, output_dir = Path(input_dir).resolve(), Path(output_dir).resolve()
+        scratch = output_dir.parent / 'scratch'
+        scratch.mkdir(exist_ok=True)
+        args = [sys.executable, '-m', 'services.supervisor.runner', *([] if command is None else [command])]
+        process = subprocess.Popen(args, cwd=str(scratch), env=self.environment(input_dir, output_dir, scratch),
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   preexec_fn=self._limits if os.name == 'posix' else None)
+        process.scratch_dir = scratch
+        return process
+
+    def stop(self, process):
+        try:
+            if os.name == 'posix':
+                import signal
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        process.wait(timeout=5)
+
+
+def launcher_from_environment():
+    """``METRICGUARD_RUNNER=local`` runs the engine as a child process; anything else uses Docker."""
+    kind = (os.environ.get('METRICGUARD_RUNNER') or 'docker').strip().lower()
+    if kind == 'local':
+        return LocalLauncher()
+    if kind == 'docker':
+        return DockerLauncher()
+    raise ValueError(f'Unknown METRICGUARD_RUNNER {kind!r}: use docker or local.')
+
+
 class Supervisor:
     def __init__(self, store, launcher, job_root, worker_id, data_dir=None):
         self.store = store
@@ -281,6 +354,7 @@ class Supervisor:
             manifest = isolated_ingest(source, destination, pending['data']['metadata'], self.launcher, self.job_root, progress)
             if manifest['source_hash'] != pending['data']['source_hash']:
                 raise ValueError('SOURCE_HASH_MISMATCH')
+            durable.push(destination)  # a durable copy exists before the import is recorded
             finished = self.store.finish_import(ident, self.worker_id, attempt, manifest=manifest, artifact_path=destination)
         except Exception as exc:
             code = str(exc) if isinstance(exc, ValueError) and str(exc) in {
@@ -301,8 +375,7 @@ class Supervisor:
         if finished:
             source.unlink(missing_ok=True)
         else:
-            destination.unlink(missing_ok=True)
-            destination.with_name(destination.name + '.manifest.json').unlink(missing_ok=True)
+            durable.remove(destination)
 
     def _preview(self, pending):
         ident, attempt = pending['id'], pending['attempt']
@@ -412,6 +485,7 @@ class Supervisor:
     def _execute(self, run):
         run_id, attempt = run['id'], run['attempt']
         snapshot = self.store.snapshot(run['snapshot_id'])
+        durable.ensure(snapshot['artifact_path'])
         source = Path(snapshot['artifact_path']).resolve(strict=True)
         expected = snapshot['manifest']['database_hash']
         if file_hash(source) != expected:
@@ -438,6 +512,7 @@ class Supervisor:
             if snapshot_change:
                 # Two data loads of one dataset: the target load travels as a second, hash-checked file.
                 target_snapshot = self.store.snapshot(run['target_snapshot_id'])
+                durable.ensure(target_snapshot['artifact_path'])
                 target_source = Path(target_snapshot['artifact_path']).resolve(strict=True)
                 target_expected = target_snapshot['manifest']['database_hash']
                 if (run.get('execution_policy') != 'flat_snapshot_v1' or
@@ -580,10 +655,14 @@ class Supervisor:
                         raise ValueError('RUNNER_OUTPUT_INVALID')
                     os.replace(staged, members_path)
                 context_info = self._publish_context(output_dir, published, contract, evidence_dir, run_id, attempt)
+                context_path = evidence_dir / f'{run_id}-{attempt}.context.jsonl'
+                durable_files = [published, *([members_path] if members_path is not None else []),
+                                 *([context_path] if context_info is not None else [])]
+                for path in durable_files:
+                    durable.push(path, sidecar=False)
                 if not self.store.finish(run_id, self.worker_id, attempt, result=result):
-                    published.unlink(missing_ok=True)
-                    if members_path is not None:
-                        members_path.unlink(missing_ok=True)
+                    for path in durable_files:
+                        durable.remove(path, sidecar=False)
                     did_publish = False
                 elif hasattr(self.store, 'record'):
                     try:
@@ -597,8 +676,12 @@ class Supervisor:
                         pass
             except Exception:
                 if did_publish:
-                    published.unlink(missing_ok=True)
-                    (evidence_dir / f'{run_id}-{attempt}.members.jsonl').unlink(missing_ok=True)
+                    for name in (f'{run_id}-{attempt}.jsonl', f'{run_id}-{attempt}.members.jsonl',
+                                 f'{run_id}-{attempt}.context.jsonl'):
+                        try:
+                            durable.remove(evidence_dir / name, sidecar=False)
+                        except Exception:
+                            (evidence_dir / name).unlink(missing_ok=True)
                 raise
             finally:
                 staged.unlink(missing_ok=True)
@@ -619,7 +702,7 @@ def isolated_ingest(source, destination, metadata, launcher=None, job_root=Path(
     byte_limit = MAX_FLAT_BYTES if 'flat_contract' in metadata else 25 * 1024 * 1024 + (4096 * 5 if relational else 0)
     if source.stat().st_size > byte_limit:
         raise ValueError('UPLOAD_TOO_LARGE')
-    launcher = launcher or DockerLauncher()
+    launcher = launcher or launcher_from_environment()
     job_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='metricguard-ingest-', dir=job_root) as workspace:
         input_dir, output_dir = Path(workspace) / 'input', Path(workspace) / 'output'
@@ -719,13 +802,16 @@ def isolated_ingest(source, destination, metadata, launcher=None, job_root=Path(
 
 def main():
     from services.api.store import Store
-    database_url = os.environ.get('METRICGUARD_DATABASE_URL', 'sqlite:///data/metricguard.db')
     data_dir = Path(os.environ.get('METRICGUARD_DATA_DIR', './data'))
+    # Same default as the API (services.api.app.create_app): the database sits in the data folder.
+    database_url = os.environ.get('METRICGUARD_DATABASE_URL') or f"sqlite:///{data_dir.resolve() / 'metricguard.db'}"
     # Temporary job folders can live outside synced folders (e.g. OneDrive), which
     # makes the Docker bind-mount traffic much faster. Results still go to data_dir.
     job_root = Path(os.environ.get('METRICGUARD_JOB_DIR') or data_dir / 'jobs')
     store = Store(database_url)
-    supervisor = Supervisor(store, DockerLauncher(), job_root,
+    from services import durable
+    durable.configure(durable.from_environment(data_dir))
+    supervisor = Supervisor(store, launcher_from_environment(), job_root,
                             worker_id=f'local-{os.getpid()}', data_dir=data_dir)
     from sqlalchemy.exc import OperationalError
     while True:
