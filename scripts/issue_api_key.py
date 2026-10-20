@@ -7,6 +7,11 @@ once and never stored (only its SHA-256 hash is kept); hand it to the person dir
     .venv\\Scripts\\python -m scripts.issue_api_key --name "Asha" --email asha@example.com \\
         --workspace local-retail:analyst --workspace demo:reader
 
+For a reviewer who should not see anyone's data, give the key its own empty workspace:
+
+    .venv\\Scripts\\python -m scripts.issue_api_key --name "Reviewer" --email reviewer@example.com \\
+        --new-workspace "Reviewer sandbox"
+
 To retire a key that was shared too widely, deactivate it and issue a new one:
 
     .venv\\Scripts\\python -m scripts.issue_api_key --deactivate asha@example.com
@@ -36,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--email')
     parser.add_argument('--workspace', action='append', default=[], metavar='ID:ROLE',
                         help='Grant a role (owner, analyst or reader) in a workspace; repeatable.')
+    parser.add_argument('--new-workspace', metavar='NAME',
+                        help='Create a new, empty workspace with this name and make the person its owner.')
     parser.add_argument('--deactivate', metavar='EMAIL', help='Deactivate every key issued to EMAIL instead of issuing one.')
     parser.add_argument('--data-dir', help=r'Data directory of the running app (scripts\mg.ps1 uses data\demo-app).')
     args = parser.parse_args(argv)
@@ -64,6 +71,9 @@ def main(argv: list[str] | None = None) -> int:
         user, raw_key = store.create_user(args.name, args.email)
         for workspace_id, role in grants:
             store.add_project_member(workspace_id, user['id'], role)
+        if args.new_workspace:
+            sandbox = store.create_project(args.new_workspace, user['id'])
+            grants.append((sandbox['id'], 'owner'))
     except DomainError as error:
         print(f'{error.code}: {error.message}', file=sys.stderr)
         return 2

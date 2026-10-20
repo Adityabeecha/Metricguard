@@ -5,7 +5,7 @@ export async function loadAuthProviders(): Promise<AuthProviders> {
   const response = await apiFetch('/auth/providers');
   if (!response.ok) throw new Error('Sign-in options could not be loaded. Please try again.');
   const value = await response.json();
-  return { providers: configuredProviders(value), signup_mode: value.signup_mode === 'open' ? 'open' : 'invite', auth_required: value.auth_required !== false };
+  return { providers: configuredProviders(value), signup_mode: value.signup_mode === 'open' ? 'open' : 'invite', auth_required: value.auth_required !== false, key_signin: value.key_signin === true };
 }
 
 export async function deleteAccount(): Promise<void> {
