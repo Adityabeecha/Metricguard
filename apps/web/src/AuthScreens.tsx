@@ -39,8 +39,7 @@ export async function restoreSession() {
   } catch { /* no session: stay signed out */ }
 }
 
-export function KeyHelp({ local = true }: { local?: boolean }) {
-  if (!local) return <p className="gate-help">Ask your workspace owner for a key. Each key belongs to one person and can be revoked.</p>;
+export function KeyHelp() {
   return (
     <details className="gate-help">
       <summary>Where do I get an API key?</summary>

@@ -3,7 +3,7 @@ import { ArrowRight, Github, RefreshCw } from 'lucide-react';
 import { api, ApiError, hasApiCredential, setSessionSignedIn } from './api';
 import { ConnectForm, KeyHelp } from './AuthScreens';
 import { loadAuthProviders, requestAccess } from './authApi';
-import { authPageTitle, keySignInAllowed, localKeyAccess, oauthErrorMessage, safeWorkspaceReturn, type AuthProviders } from './authFlow';
+import { authPageTitle, localKeyAccess, oauthErrorMessage, safeWorkspaceReturn, type AuthProviders } from './authFlow';
 import { useIdentityEpoch } from './identity';
 import { Logo } from './Logo';
 import { ThemeSwitch } from './ThemeSwitch';
@@ -21,7 +21,7 @@ export function SignInScreen({ mode }: { mode: 'signin' | 'signup' }) {
   const epoch = useIdentityEpoch();
   const callbackMessage = oauthErrorMessage(params.get('error'));
   const returnTo = safeWorkspaceReturn(params.get('return_to'));
-  const showKeyForm = useKey && keySignInAllowed(providers);
+  const showKeyForm = useKey && localKeyAccess(providers?.auth_required);
 
   useEffect(() => {
     const title = authPageTitle(mode);
@@ -83,7 +83,7 @@ export function SignInScreen({ mode }: { mode: 'signin' | 'signup' }) {
           {showKeyForm ? (
             <>
               <ConnectForm submitLabel={connecting ? 'Connecting…' : 'Connect to workspace'} onSubmitted={() => { setProblem(''); setConnecting(true); }} />
-              <KeyHelp local={localKeyAccess(providers?.auth_required)} />
+              <KeyHelp />
               <button type="button" className="auth-text-button" onClick={() => setUseKey(false)}>Back to sign in</button>
             </>
           ) : (
@@ -106,7 +106,7 @@ export function SignInScreen({ mode }: { mode: 'signin' | 'signup' }) {
                 <RequestAccess />
               </>}
               <p className="auth-alternate">{mode === 'signup' ? 'Already have an account?' : 'New to MetricGuard?'} <a href={alternateUrl}>{mode === 'signup' ? 'Sign in' : 'Create an account'}</a></p>
-              {keySignInAllowed(providers) && <button type="button" className="auth-text-button" onClick={() => { setUseKey(true); setProblem(''); }}>Use an API key instead</button>}
+              {localKeyAccess(providers?.auth_required) && <button type="button" className="auth-text-button" onClick={() => { setUseKey(true); setProblem(''); }}>Use an API key instead</button>}
             </>
           )}
         </section>

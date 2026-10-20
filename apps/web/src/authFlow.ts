@@ -1,12 +1,7 @@
 import type { GateState } from './authState';
 
 export type OAuthProvider = 'google' | 'github';
-export type AuthProviders = { providers: OAuthProvider[]; signup_mode: 'invite' | 'open'; auth_required: boolean; key_signin?: boolean };
-
-/** The sign-in page offers an API key locally, or on a hosted server that explicitly enabled key sign-in. */
-export function keySignInAllowed(providers: AuthProviders | null | undefined): boolean {
-  return Boolean(providers && (localKeyAccess(providers.auth_required) || providers.key_signin === true));
-}
+export type AuthProviders = { providers: OAuthProvider[]; signup_mode: 'invite' | 'open'; auth_required: boolean };
 
 /** Only an explicit server capability enables the local key workflow. */
 export function localKeyAccess(authRequired: boolean | null | undefined): boolean {

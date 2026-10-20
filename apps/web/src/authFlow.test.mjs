@@ -108,12 +108,3 @@ test('hosted signed-out gates redirect while local access and invalid keys retai
   assert.equal(shouldRedirectToSignIn(required, true, true), false);
   assert.equal(shouldRedirectToSignIn({ kind: 'denied' }, true, false), false);
 });
-
-test('hosted sign-in offers an API key only when the server enables key sign-in', async () => {
-  const { keySignInAllowed } = await import('./authFlow.ts');
-  assert.equal(keySignInAllowed(null), false);
-  assert.equal(keySignInAllowed({ providers: ['google'], signup_mode: 'invite', auth_required: true }), false);
-  assert.equal(keySignInAllowed({ providers: ['google'], signup_mode: 'invite', auth_required: true, key_signin: false }), false);
-  assert.equal(keySignInAllowed({ providers: ['google'], signup_mode: 'invite', auth_required: true, key_signin: true }), true);
-  assert.equal(keySignInAllowed({ providers: [], signup_mode: 'invite', auth_required: false }), true);
-});

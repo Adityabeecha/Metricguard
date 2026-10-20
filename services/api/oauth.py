@@ -139,10 +139,7 @@ def install_oauth_routes(app, store, data_dir, secure_cookies=False):
     def providers():
         config = settings()
         return {'providers': list(config['providers']), 'signup_mode': config['signup_mode'],
-                'auth_required': os.environ.get('METRICGUARD_ALLOW_UNVERIFIED_LOCAL', 'true').lower() in ('false', '0', 'no', 'off'),
-                # Off by default: lets an issued API key sign in on the hosted site (e.g. a reviewer's
-                # browser that cannot use Google/GitHub). Keys are only issued by the owner's script.
-                'key_signin': os.environ.get('METRICGUARD_KEY_SIGNIN', '').strip().lower() in ('true', '1', 'yes', 'on')}
+                'auth_required': os.environ.get('METRICGUARD_ALLOW_UNVERIFIED_LOCAL', 'true').lower() in ('false', '0', 'no', 'off')}
 
     request_times: dict[str, deque] = {}
     request_lock = threading.Lock()
