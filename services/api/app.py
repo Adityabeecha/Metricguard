@@ -164,6 +164,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
     from .relational_routes import install_relational_routes
     install_relational_routes(app, store, data_dir, execution_mode, resolve_project_id)
     hosting = hosting_settings()
+    from .oauth import install_oauth_routes
+    install_oauth_routes(app, store, data_dir, secure_cookies=hosting['secure_cookies'])
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=['localhost', '127.0.0.1', '[::1]', 'testserver', 'api', *hosting['hosts']])
 
     @app.middleware('http')
@@ -1887,6 +1889,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
     @app.delete('/api/v1/auth/session')
     def delete_session_route(request: Request):
         token = request.cookies.get(SESSION_COOKIE)
+        if token and store.get_user_by_session(token) and request.headers.get('x-metricguard-client') != 'web':
+            raise DomainError('FORBIDDEN', 'Session requests must come from the MetricGuard web app.', 403)
         if token:
             store.revoke_session(token)
         response = JSONResponse({'signed_in': False})
@@ -2226,6 +2230,11 @@ def create_app(database_url=None, data_dir=None, mode=None):
     web_dist = ROOT / 'apps/web/dist'
     if web_dist.is_dir():
         index_file = web_dist / 'index.html'
+
+        @app.get('/signin')
+        @app.get('/signup')
+        def auth_spa_fallback():
+            return FileResponse(index_file)
 
         @app.get('/w/{path:path}')
         def spa_fallback(path: str):

@@ -30,6 +30,9 @@ import { MetricsView } from './views/MetricsView';
 import { SettingsView } from './views/SettingsView';
 import { StartComparison } from './views/StartComparison';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
+import { SignInScreen } from './SignInScreen';
+import { loadAuthProviders } from './authApi';
+import { authPage, shouldRedirectToSignIn } from './authFlow';
 
 
 const NAV_ITEMS: Array<{ id: Page; label: string; icon: React.ReactNode }> = [
@@ -41,6 +44,17 @@ const NAV_ITEMS: Array<{ id: Page; label: string; icon: React.ReactNode }> = [
 ];
 
 export function App() {
+  const [pathname, setPathname] = useState(window.location.pathname);
+  useEffect(() => {
+    const sync = () => setPathname(window.location.pathname);
+    window.addEventListener('popstate', sync);
+    return () => window.removeEventListener('popstate', sync);
+  }, []);
+  const publicPage = authPage(pathname);
+  return publicPage ? <SignInScreen mode={publicPage} /> : <WorkspaceApp />;
+}
+
+function WorkspaceApp() {
   const [route, setRoute] = useState<RouteState>(() => {
     const initial = parseRoute(window.location.pathname, window.location.search);
     api.setActiveWorkspace(initial.workspaceId);
@@ -55,6 +69,19 @@ export function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const prevWorkspaceRef = useRef(route.workspaceId);
   const identityEpoch = useIdentityEpoch();
+  const [authRequired, setAuthRequired] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    loadAuthProviders().then(value => { if (active) setAuthRequired(value.auth_required); }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!shouldRedirectToSignIn(gate, authRequired, hasApiCredential())) return;
+    const returnTo = window.location.pathname + window.location.search;
+    window.location.replace(`/signin?return_to=${encodeURIComponent(returnTo)}`);
+  }, [gate, authRequired, identityEpoch]);
 
   // Synchronize route with browser history
   const navigate = (

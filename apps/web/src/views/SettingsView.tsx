@@ -4,6 +4,7 @@ import { Evaluation } from '../Evaluation';
 import { MetadataImports } from '../MetadataImports';
 import { Terminal } from 'lucide-react';
 import { ThemeSwitch } from '../ThemeSwitch';
+import { AccountSettings } from './AccountSettings';
 
 interface SettingsViewProps {
   data: Bootstrap;
@@ -98,6 +99,7 @@ export function SettingsView({
 
       {currentTab === 'system' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <AccountSettings />
           <section className="panel">
             <div className="panel-header">
               <h2>Appearance</h2>

@@ -21,6 +21,11 @@ export function connectWithKey(raw: string, remember = false) {
 
 export async function disconnectKey() {
   try { await api.endSession(); } catch { /* signing out locally still proceeds */ }
+  clearConnectedIdentity();
+}
+
+/** Invalidate all identity-bound views using the existing identity epoch. */
+export function clearConnectedIdentity() {
   setSessionSignedIn(false);
   setApiCredential(null);
   writeConnectedMarker(sessionStore(), false);
@@ -34,7 +39,7 @@ export async function restoreSession() {
   } catch { /* no session: stay signed out */ }
 }
 
-function KeyHelp() {
+export function KeyHelp() {
   return (
     <details className="gate-help">
       <summary>Where do I get an API key?</summary>

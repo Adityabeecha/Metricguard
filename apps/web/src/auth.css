@@ -1,0 +1,31 @@
+.auth-page { min-height: 100dvh; background: var(--ground); color: var(--ink); }
+.auth-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px 32px; }
+.auth-brand { display: inline-flex; gap: 9px; align-items: center; color: var(--ink); text-decoration: none; font-size: 18px; }
+.auth-main { display: grid; place-items: start center; padding: clamp(24px, 9vh, 96px) 16px 48px; }
+.auth-card { width: min(100%, 440px); padding: 32px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.auth-card h1 { margin: 0 0 10px; font: 700 28px/1.15 var(--font-ui); letter-spacing: -.02em; }
+.auth-purpose { margin: 0 0 28px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.auth-providers { display: grid; gap: 10px; }
+.auth-provider { width: 100%; min-height: 40px; justify-content: center; text-decoration: none; }
+.auth-google-mark { font-weight: 700; font-size: 18px; line-height: 1; }
+.auth-invite, .auth-empty { font-size: 13px; line-height: 1.5; color: var(--muted); }
+.auth-invite { margin: 16px 0 0; }
+.auth-alternate { padding-top: 20px; margin: 24px 0 14px; border-top: 1px solid var(--line); font-size: 13px; color: var(--text-2); }
+.auth-alternate a, .account-body p a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.auth-text-button { appearance: none; border: 0; padding: 0; background: transparent; color: var(--link); font: inherit; font-size: 12px; cursor: pointer; text-align: left; }
+.auth-text-button:hover { color: var(--link-strong); text-decoration: underline; }
+.auth-message { padding: 12px; border: 1px solid; border-radius: 6px; font-size: 13px; line-height: 1.5; margin: 0 0 20px; overflow-wrap: anywhere; }
+.auth-message p { margin: 0 0 10px; }
+.auth-message.error { color: var(--danger); background: var(--danger-tint); border-color: var(--danger-line); }
+.auth-message.notice { color: var(--warn); background: var(--warn-tint); border-color: var(--warn-line); }
+.auth-card .gate-form { margin: 0 0 20px; }
+.auth-card .gate-form .button { width: 100%; justify-content: center; }
+.auth-card .gate-command { overflow-wrap: anywhere; white-space: pre-wrap; }
+.account-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.account-body { padding: 16px 20px; display: grid; gap: 16px; }
+.account-body p { margin: 0; color: var(--text-2); font-size: 13px; line-height: 1.5; }
+.account-delete-label { display: grid; gap: 8px; }
+.account-delete-warning { color: var(--danger); }
+.button.account-delete { color: var(--danger); background: var(--danger-tint); border: 1px solid var(--danger-line); }
+.button.account-delete:hover { border-color: var(--danger); }
+@media (max-width: 480px) { .auth-header { padding: 20px 16px; } .auth-card { padding: 24px 20px; } .auth-card h1 { font-size: 25px; } }

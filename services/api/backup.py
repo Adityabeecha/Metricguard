@@ -37,6 +37,30 @@ def _file_hash(path: Path) -> str:
 
 
 def backup_project(store: Store, project_id: str, data_dir: Path, output_archive: Path) -> dict[str, Any]:
+    """Hold the workspace lock until its backup archive has been published.
+
+    Account deletion takes the same lock before scanning owned backup files. A
+    backup cannot publish detached, staged private metadata after that scan.
+    The implementation below only reads through its separate DB connection.
+    """
+    with store.engine.connect() as conn:
+        if conn.dialect.name == 'sqlite':
+            conn.exec_driver_sql('BEGIN IMMEDIATE')
+        else:
+            conn.begin()
+        try:
+            project = conn.execute(select(projects.c.id).where(projects.c.id == project_id).with_for_update()).first()
+            if not project:
+                raise DomainError('NOT_FOUND', f"Project '{project_id}' not found.", 404)
+            result = _backup_project(store, project_id, data_dir, output_archive)
+            conn.commit()
+            return result
+        except BaseException:
+            conn.rollback()
+            raise
+
+
+def _backup_project(store: Store, project_id: str, data_dir: Path, output_archive: Path) -> dict[str, Any]:
     """Create a complete backup archive of project metadata, snapshots, and evidence artifacts."""
     output_archive = Path(output_archive)
     output_archive.parent.mkdir(parents=True, exist_ok=True)

@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from sqlalchemy import (JSON, Boolean, Column, Float, ForeignKey, Integer, MetaData,
                         String, Table, UniqueConstraint, and_, create_engine, delete, event,
-                        insert, or_, select, update)
+                        insert, or_, select, update, func)
 from sqlalchemy.exc import IntegrityError
 
 from .metric_contracts import MetricContractStoreMixin
@@ -87,6 +87,12 @@ auth_sessions = Table('auth_sessions', metadata,
     Column('user_id', ForeignKey('users.id'), nullable=False),
     Column('created_at', Float, nullable=False),
     Column('expires_at', Float, nullable=False))
+
+oauth_identities = Table('oauth_identities', metadata,
+    Column('provider', String, primary_key=True), Column('subject', String, primary_key=True),
+    Column('user_id', ForeignKey('users.id'), nullable=False))
+oauth_states = Table('oauth_states', metadata,
+    Column('nonce_hash', String, primary_key=True), Column('expires_at', Float, nullable=False))
 
 project_members = Table('project_members', metadata,
     Column('id', String, primary_key=True),
@@ -929,6 +935,62 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
     def revoke_session(self, token: str) -> None:
         with self.engine.begin() as conn:
             conn.execute(delete(auth_sessions).where(auth_sessions.c.token_hash == hashlib.sha256(token.encode()).hexdigest()))
+
+    def start_oauth_state(self, state: str, seconds: int = 600) -> None:
+        moment = time.time()
+        with self.engine.begin() as conn:
+            conn.execute(delete(oauth_states).where(oauth_states.c.expires_at < moment))
+            conn.execute(insert(oauth_states).values(nonce_hash=hashlib.sha256(state.encode()).hexdigest(),
+                                                   expires_at=moment + seconds))
+
+    def consume_oauth_state(self, state: str) -> bool:
+        with self.engine.begin() as conn:
+            changed = conn.execute(delete(oauth_states).where(
+                oauth_states.c.nonce_hash == hashlib.sha256(state.encode()).hexdigest(),
+                oauth_states.c.expires_at > time.time()))
+            return changed.rowcount == 1
+
+    def oauth_sign_in(self, provider: str, subject: str, email: str, name: str,
+                      signup_mode: str, invited: set[str]) -> tuple[dict, str]:
+        """Atomically link a verified identity and create its personal workspace once."""
+        import secrets
+        email = email.strip().casefold()
+        for attempt in range(3):
+            try:
+                with self.engine.begin() as conn:
+                    identity = conn.execute(select(oauth_identities.c.user_id).where(
+                        oauth_identities.c.provider == provider, oauth_identities.c.subject == subject)).scalar_one_or_none()
+                    matches = conn.execute(select(users).where(users.c.id == identity) if identity else
+                                           select(users).where(func.lower(users.c.email) == email)).mappings().all()
+                    if len(matches) > 1 or (matches and not matches[0]['is_active']):
+                        raise DomainError('OAUTH_FAILED', 'This account cannot sign in.', 403)
+                    if matches:
+                        user = dict(matches[0])
+                    else:
+                        if signup_mode != 'open' and email not in invited:
+                            raise DomainError('OAUTH_WAITLIST', 'An invitation is required.', 403)
+                        user = {'id': str(uuid4()), 'name': name[:160] or 'Analyst', 'email': email,
+                                'api_key_hash': hashlib.sha256(secrets.token_urlsafe(48).encode()).hexdigest(),
+                                'is_active': True, 'created_at': now()}
+                        conn.execute(insert(users).values(**user))
+                    if not identity:
+                        conn.execute(insert(oauth_identities).values(provider=provider, subject=subject, user_id=user['id']))
+                    pid = 'personal-' + user['id']
+                    if not conn.execute(select(projects.c.id).where(projects.c.id == pid)).first():
+                        conn.execute(insert(projects).values(id=pid, name=f"{user['name']}'s workspace"))
+                        conn.execute(insert(project_members).values(id=str(uuid4()), project_id=pid,
+                            user_id=user['id'], role='owner', created_at=now(), revoked_at=None))
+                    else:
+                        member = conn.execute(select(project_members).where(project_members.c.project_id == pid,
+                            project_members.c.user_id == user['id'], project_members.c.role == 'owner',
+                            project_members.c.revoked_at.is_(None))).first()
+                        if member is None:
+                            raise DomainError('OAUTH_FAILED', 'Personal workspace access is unavailable.', 403)
+                return {key: value for key, value in user.items() if key != 'api_key_hash'}, pid
+            except IntegrityError:
+                if attempt == 2:
+                    raise DomainError('OAUTH_FAILED', 'Account sign-in conflicted. Start sign-in again.', 409)
+        raise AssertionError('unreachable')
 
     def get_user(self, user_id: str) -> dict:
         with self.engine.connect() as conn:

@@ -1,7 +1,7 @@
 # MetricGuard online: free-tier deployment plan
 
 **Goal:** run MetricGuard on the internet for $0 a month: the backend on Northflank, the website on Vercel, with a public homepage and sign up / sign in.
-**Status:** steps 1–3 (backend) are built and tested; nothing is deployed yet. Written 2026-10-20.
+**Status:** steps 1–4 are implemented and locally verified, including mocked OAuth and browser account controls; real provider sign-in and deployed PostgreSQL/R2 account erasure remain unverified. Nothing is deployed yet. Written 2026-10-20.
 **Bottom line:** a free launch is possible as an **invite-only beta for small datasets**. Five things in today's code must change first, and two free-tier rules limit what you can do (no commercial use on Vercel's free plan, and very small free compute on Northflank).
 
 ---
@@ -93,7 +93,12 @@ Build from GitHub with **`infra/Dockerfile.server`** (port 8000; the image honou
 | `METRICGUARD_RUN_SECONDS` / `METRICGUARD_INGEST_SECONDS` | `300` / `300` *(image)* | lower than local 600 / 1200 |
 | `METRICGUARD_SEED_DEMO` | `false` (default) | `true` loads the demo workspace on start |
 | `METRICGUARD_LOCAL_MEMORY_MB` | unset | optional address-space cap for the engine; leave off and rely on the plan's memory |
-| *Later steps:* `GOOGLE_CLIENT_ID`/`_SECRET`, `GITHUB_CLIENT_ID`/`_SECRET`, `METRICGUARD_SIGNUP`, `METRICGUARD_INVITE_EMAILS`, `METRICGUARD_FREE_MAX_ROWS`, `METRICGUARD_FREE_MAX_UPLOAD_MB`, `SENTRY_DSN` | | steps 4, 6, 8 (not built yet) |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth web client credentials | secret; both required to offer Google |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth App credentials | secret; both required to offer GitHub |
+| `METRICGUARD_SESSION_SECRET` | at least 32 random bytes/characters, stable across API replicas | secret; signs 10-minute OAuth state cookies; generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| `METRICGUARD_SIGNUP` | `invite` (default) or `open` | unknown values fail closed to invite |
+| `METRICGUARD_INVITE_EMAILS` | comma-separated invited email addresses | case-insensitive; existing active users can sign in regardless |
+| *Later steps:* `METRICGUARD_FREE_MAX_ROWS`, `METRICGUARD_FREE_MAX_UPLOAD_MB`, `SENTRY_DSN` | | steps 6, 8 (not built yet) |
 
 Check the bucket before the first deploy: with the same `METRICGUARD_STORAGE`/`METRICGUARD_S3_*` values set in a terminal, `python -m scripts.check_storage` uploads, reads back and deletes one small file.
 
@@ -120,9 +125,39 @@ Check the bucket before the first deploy: with the same `METRICGUARD_STORAGE`/`M
 ```
 Vercel now honours upstream cache headers on external rewrites by default, so the API must send `Cache-Control: no-store` on every `/api` response (step 3), and no user's data can ever be cached on the CDN. (`routes` cannot be combined with a `headers` block in `vercel.json`, so this is set at the API.)
 
-### OAuth apps
-- Google: authorised redirect URI `https://metricguard.vercel.app/api/v1/auth/oauth/google/callback`. Publishing the consent screen needs a privacy policy URL and a homepage URL.
-- GitHub: callback `https://metricguard.vercel.app/api/v1/auth/oauth/github/callback`.
+### OAuth apps (step 4)
+
+All callback URLs use `METRICGUARD_APP_URL`, never an untrusted Host header. Set it to the public HTTPS origin, without a path, query or fragment. Local development allows `http://127.0.0.1:8000` or `http://localhost:8000`; HTTP is refused for other hosts. Providers are hidden until both their credentials and a session secret of at least 32 bytes are configured. No provider access/refresh tokens are stored or returned to the browser.
+
+**Google:**
+1. Open Google Cloud Console → Google Auth Platform (or APIs & Services → OAuth consent screen), select/create the project, and configure the app branding, homepage, privacy-policy URL and audience. While testing, add the invited Google accounts as test users.
+2. Create an OAuth client of type **Web application**. Add the exact authorised redirect URI `https://metricguard.vercel.app/api/v1/auth/oauth/google/callback` (replace the origin with your `METRICGUARD_APP_URL`). For a separate local test client, use `http://127.0.0.1:8000/api/v1/auth/oauth/google/callback`.
+3. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `METRICGUARD_SESSION_SECRET` in the API environment. Requested scopes are `openid email profile`; the code uses S256 PKCE and accepts only userinfo with `email_verified=true`.
+
+**GitHub:**
+1. Open GitHub Settings → Developer settings → OAuth Apps → New OAuth App.
+2. Set the Homepage URL to your public app origin and Authorization callback URL to `https://metricguard.vercel.app/api/v1/auth/oauth/github/callback`. Use a separate OAuth App for the local callback `http://127.0.0.1:8000/api/v1/auth/oauth/github/callback`.
+3. Set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and the same API session secret. Requested scopes are `read:user user:email`; only the primary verified address from `/user/emails` is accepted, including private primary emails.
+
+Set `METRICGUARD_SIGNUP=invite` and `METRICGUARD_INVITE_EMAILS` before the beta. Visit `/signin` or `/signup`; only configured provider buttons appear. The API-key alternative remains available. A new identity gets one empty personal workspace and the existing HttpOnly, SameSite=Strict `/api` session cookie. OAuth state uses a separate signed HttpOnly, SameSite=Lax cookie for the cross-site callback and an atomically consumed nonce. The beta waitlist message does not send mail; invitations and email follow-up remain manual.
+
+Settings offers sign-out and account deletion with a typed `DELETE` confirmation. Deletion requires a valid browser session plus `x-metricguard-client: web`; an API key alone cannot erase an account. Sole-owner workspaces with no other unrevoked memberships are erased through local/R2-aware `durable.remove`. Shared workspaces and their records remain; only the departing membership is removed, and required audit attribution is anonymised. Active work returns 409; cleanup failure returns 503 and keeps retry metadata. Recently cancelled worker attempts also require a drain interval based on execution timeout plus grace; this is not a positive worker-stop acknowledgement. Live PostgreSQL/R2 deletion and real provider redirects require deployed verification.
+
+References: [Google web-server OAuth](https://developers.google.com/identity/protocols/oauth2/web-server), [GitHub OAuth flow](https://docs.github.com/en/apps/oauth-apps/using-oauth-apps/authorizing-oauth-apps), [GitHub verified emails](https://docs.github.com/en/rest/users/emails).
+
+**R2 bucket verified with scripts/check_storage.py (2026-10-20).** The owner confirmed the separate upload/read/delete probe succeeded. It was not rerun in this OAuth implementation environment, which has no R2 credentials; live account erasure and deployed replay against R2 remain unverified.
+
+### Step 4 local verification (2026-10-20)
+
+| Command / exercised path | Actual result |
+|---|---|
+| `.venv\Scripts\python -m pytest -q --basetemp .test-tmp/full` | Exit 0: **750 passed, 47 skipped**, 5 warnings, 392.64 seconds. Skips include PostgreSQL-dependent tests when the test database is unavailable; these are not passing receipts. Warnings include existing dependency deprecations and an unwritable pytest cache. |
+| `.venv\Scripts\python -m pytest -q tests/test_oauth.py tests/test_account_deletion.py tests/test_v3_backup_restore.py tests/test_v3_adversarial_backup_quotas_and_logs.py --basetemp .test-tmp/oauth-release -p no:cacheprovider` | Exit 0: **42 passed**, 4 warnings. Mocked providers, invite checks, state/PKCE, session/header boundaries, SQLite/local and folder-backed durable deletion, shared-record preservation, lineage cleanup, retry and backup/deletion ordering. |
+| `npm test --prefix apps/web` | Exit 0: **95 executed tests passed**, no failures. |
+| `npm run build --prefix apps/web` | Exit 0: TypeScript and Vite build passed; existing >500 kB bundle warning remains. |
+| Local Playwright walkthrough at 1366×768 against disposable API/data on port 8019 | **6 checks passed**: configured provider links/waitlist copy, API-key alternative, signup wording, hosted signed-out redirect, sign-out and typed account deletion. Browser session came from an API key; no real provider was contacted. Light/dark screenshots captured. |
+
+Raw local logs and browser receipts are under `data/evaluation/oauth-20261020/` (ignored runtime output). The disposable browser server was stopped after the checks. No production account was deleted, no deployment was performed, and no generated graph refresh was run. Real Google/GitHub credentials and callbacks, live PostgreSQL locking, and live R2 account erasure/replay still need deployment verification.
 
 ---
 
@@ -134,9 +169,9 @@ Each step ends in something you can check. Steps 1–4 are backend, 5–6 fronte
 |---|---|---|---|
 | 0 | **Verify the free tiers** (you, about 30 minutes) | Create the Northflank (card required), Vercel, Neon and Cloudflare accounts. In Northflank, note the largest compute plan the free project allows and whether volumes are allowed. | You know the free CPU/RAM. That sets the row limit in step 6. |
 | 1 ✅ | **Runner without Docker** | `LocalLauncher` in `services/supervisor/worker.py` (`METRICGUARD_RUNNER=local`); the engine reads its folders from `METRICGUARD_JOB_INPUT`/`_OUTPUT`; `services/serve.py` runs the API and a self-restarting worker pool; `infra/Dockerfile.server`. | Done: a comparison completes in the `Dockerfile.server` image (Linux, no Docker) and reconciles. |
-| 2 ✅ | **Durable files on R2** | `services/durable.py`: frozen datasets (with manifest sidecars) and evidence are copied to an S3-compatible bucket before a run or import is recorded, and fetched back on first use. Hashes are unchanged, so replay still verifies byte for byte. `scripts/check_storage.py` checks a real bucket. | Done: with the container's files wiped, old evidence reads and a replay reproduces the same evidence hash. Tested with a folder-backed bucket and a mocked S3 endpoint, **not yet against real R2**. |
+| 2 ✅ | **Durable files on R2** | `services/durable.py`: frozen datasets (with manifest sidecars) and evidence are copied to an S3-compatible bucket before a run or import is recorded, and fetched back on first use. Hashes are unchanged, so replay still verifies byte for byte. `scripts/check_storage.py` checks a real bucket. | Done: with the container's files wiped, old evidence reads and a replay reproduces the same evidence hash. Restore/replay tested with a folder-backed bucket and a mocked S3 endpoint. **R2 bucket verified with scripts/check_storage.py (2026-10-20)** — owner-confirmed upload/read/delete check; end-to-end deployed R2 replay remains unverified. |
 | 3 ✅ | **Production switches** | Origin secret (`x-origin-secret`, except `/api/v1/health`); `METRICGUARD_PUBLIC_ORIGINS` and `METRICGUARD_ALLOWED_HOSTS` (the old guards accepted localhost only); `Cache-Control: no-store` on `/api`; Secure session cookie; demo seed off by default; sign-in required in the image. | Done: without the secret → 403, foreign origin → 403, unknown host → 400, API responses not cacheable. Postgres was not exercised in these tests (it already works via `infra/compose.yaml`). |
-| 4 | **Sign up / sign in** | OAuth routes (Google, GitHub) that create or find the user and issue the existing session cookie; create a personal workspace on first sign-in; invite allow-list; sign-out; delete-my-account. | A new Google user lands in an empty workspace. Someone not on the allow-list sees "You're on the waitlist". |
+| 4 ✅ | **Sign up / sign in** | OAuth routes (Google, GitHub) that create or find the user and issue the existing session cookie; create a personal workspace on first sign-in; invite allow-list; sign-out; delete-my-account. | Implemented and locally verified: mocked Google/GitHub sign-in creates one empty personal workspace; uninvited new users create nothing and see the waitlist message. Full suite, web tests/build and browser account controls passed as detailed above. Real provider/deployed storage checks remain open. |
 | 5 | **Homepage and auth pages** | Public `/` explaining the product (the problem, how a comparison works, the evidence seal, a screenshot, a "Sign up" button), plus `/signin`, `/signup`, `/privacy`, `/terms`, and a 404 page. Signed-in users who open `/` go to Cases. | You can share the homepage URL; sign-in works end to end. |
 | 6 | **Free-tier guardrails** | Upload and row caps with clear messages; one running comparison per workspace; a daily run limit; delete datasets after N days of no use; show usage in Settings. | A 200k-row upload gets a friendly "Free beta limit: 100,000 rows" message before it runs. |
 | 7 | **Deploy** | Northflank service from GitHub plus env vars; Vercel project plus `vercel.json`; OAuth redirect URLs. | `metricguard.vercel.app` loads, signs in, runs a comparison, saves and replays a case. |
