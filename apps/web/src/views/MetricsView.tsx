@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { calculationPage, splitCalculations } from '../guidedWorkflow';
+import { matchingMetricLoads, memberName, metricDifference, metricSupport, retainedCalculations, sqlDefinitionRequest, type MetricMember } from '../metricWorkflow';
+import { resultDisplayValue, resultUnit, valueWithUnit } from '../resultSummary';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -14,7 +16,6 @@ import {
 } from 'lucide-react';
 import {
   api,
-  exact,
   latest,
   type Bootstrap,
   type RelationalBootstrap,
@@ -23,6 +24,8 @@ import {
   type MetricItem,
   type MetricStateTransition,
   type Run,
+  type Version,
+  type DefinitionUsage,
 } from '../api';
 import { isDefinedComparison, isExactZero } from '../investigationUtils';
 import { MetricContractsPanel } from './MetricContractsPanel';
@@ -34,7 +37,7 @@ interface MetricsViewProps {
   metricId?: string;
   onTabChange?: (tab: string) => void;
   onSelectMetric?: (metricId: string | null) => void;
-  onComparePair?: (leftVersionId: string, rightVersionId: string, rel: string) => void;
+  onComparePair?: (leftVersionId: string, rightVersionId: string, rel: string, snapshotId?: string) => void;
   onStartReplay?: (defId: string, oldVerId: string) => void;
   onOpenRun?: (run: Run) => void;
 }
@@ -66,6 +69,12 @@ export function MetricsView({
   const [calculationQuery, setCalculationQuery] = useState('');
   const [calculationPageIndex, setCalculationPageIndex] = useState(0);
   const [calculationGroup, setCalculationGroup] = useState<'imported' | 'comparisons'>('imported');
+  const [showAllCalculations, setShowAllCalculations] = useState(false);
+  const [definitionUsage, setDefinitionUsage] = useState<DefinitionUsage[]>([]);
+  const [usageError, setUsageError] = useState('');
+  const [calculationEdit, setCalculationEdit] = useState<Definition | null>(null);
+  const [calculationName, setCalculationName] = useState('');
+  const [calculationDelete, setCalculationDelete] = useState<Definition | null>(null);
   const [importanceFilter, setImportanceFilter] = useState<'all' | 'critical' | 'important' | 'standard' | 'unclassified'>('all');
   const [supportFilter, setSupportFilter] = useState<'all' | 'analyzable' | 'limited' | 'unbound'>('all');
 
@@ -80,7 +89,7 @@ export function MetricsView({
   const [implExistingDefId, setImplExistingDefId] = useState('');
   const [implSqlName, setImplSqlName] = useState('');
   const [implRawSql, setImplRawSql] = useState('');
-  const [implTimeCol, setImplTimeCol] = useState('');
+  const [implContractId, setImplContractId] = useState('');
   const [implStatus, setImplStatus] = useState<'candidate' | 'active'>('candidate');
 
   const [promoteCandidateTarget, setPromoteCandidateTarget] = useState<{
@@ -94,6 +103,9 @@ export function MetricsView({
   const [bindings, setBindings] = useState<MetricBinding[]>([]);
   const [transitions, setTransitions] = useState<MetricStateTransition[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [members, setMembers] = useState<MetricMember[]>([]);
+  const [comparison, setComparison] = useState<{ left: Version; right: Version; relationship: string } | null>(null);
+  const [comparisonSnapshotId, setComparisonSnapshotId] = useState('');
 
   // Status & Feedback
   const [busy, setBusy] = useState(false);
@@ -106,6 +118,18 @@ export function MetricsView({
   const baselines = data.baselines || [];
   const metricDiffs = data.metric_diffs || [];
   const projectId = data.project?.id || 'local-retail';
+  const availableFlatContracts = (data.flat_contracts || []).filter(c =>
+    data.snapshots.some(s => s.contract_hash === c.contract_hash && s.status === 'validated'));
+
+  useEffect(() => {
+    let current = true;
+    setDefinitionUsage([]); setUsageError(''); setMembers([]);
+    api.definitionUsage(projectId).then(result => { if (current) setDefinitionUsage(result.items); })
+      .catch(() => { if (current) setUsageError('Saved calculation usage could not be loaded. Show all calculations to browse them.'); });
+    api.get<MetricMember[]>(`/projects/${encodeURIComponent(projectId)}/members`)
+      .then(result => { if (current) setMembers(result); }).catch(() => {});
+    return () => { current = false; };
+  }, [projectId, data.definitions, data.metrics, data.investigations]);
 
   // Keep internal selected metric in sync with prop
   useEffect(() => {
@@ -116,10 +140,13 @@ export function MetricsView({
 
   // Reset local state when workspace changes
   useEffect(() => {
-    setSelectedMetricId(null);
+    setSelectedMetricId(metricId || null);
     setShowCreateModal(false);
     setShowAddImplModal(false);
     setPromoteCandidateTarget(null);
+    setComparison(null);
+    setCalculationEdit(null); setCalculationDelete(null); setShowAllCalculations(false);
+    setImplContractId('');
     setBindings([]);
     setTransitions([]);
     setNotice('');
@@ -133,6 +160,7 @@ export function MetricsView({
         if (showCreateModal) setShowCreateModal(false);
         if (showAddImplModal) setShowAddImplModal(false);
         if (promoteCandidateTarget) setPromoteCandidateTarget(null);
+        setComparison(null); setCalculationEdit(null); setCalculationDelete(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -187,12 +215,14 @@ export function MetricsView({
     return definitions.filter((d) => !boundDefinitionIds.has(d.id));
   }, [definitions, boundDefinitionIds]);
   // Guided comparisons save one calculation per new formula; keep those apart so imported queries stay findable.
-  const calculationGroups = useMemo(() => splitCalculations(unassignedDefinitions), [unassignedDefinitions]);
+  const visibleCalculations = retainedCalculations(definitions, definitionUsage, showAllCalculations);
+  const calculationGroups = splitCalculations(visibleCalculations);
+  const attachGroups = splitCalculations(unassignedDefinitions);
   const shownGroup = calculationGroup === 'imported' && !calculationGroups.imported.length ? 'comparisons' : calculationGroup;
   const calculations = calculationPage(shownGroup === 'imported' ? calculationGroups.imported : calculationGroups.fromComparisons,
     calculationQuery, calculationPageIndex);
   const definitionOptions = (versionsLabel: boolean) => ([
-    ['Imported queries', calculationGroups.imported], ['Saved from guided comparisons', calculationGroups.fromComparisons],
+    ['Imported queries', attachGroups.imported], ['Saved from guided comparisons', attachGroups.fromComparisons],
   ] as const).filter(([, items]) => items.length).map(([label, items]) => (
     <optgroup key={label} label={label}>
       {items.map((d) => (
@@ -209,38 +239,38 @@ export function MetricsView({
     return metrics.find((m) => m.id === selectedMetricId) || null;
   }, [metrics, selectedMetricId]);
 
-  // Helper to determine support state for a metric
-  const getMetricSupportState = (metric: MetricItem) => {
-    if (!metric.active_binding?.definition_id) {
-      return { state: 'unbound', label: 'No definition yet', isAnalyzable: false, reason: 'No approved calculation yet', version: null, definition: null };
-    }
-    const def = definitions.find((d) => d.id === metric.active_binding?.definition_id);
-    if (!def) {
-      return { state: 'unbound', label: 'No definition yet', isAnalyzable: false, reason: 'Its calculation is no longer available', version: null, definition: null };
-    }
-    // Only use explicitly approved version from backend truth
-    const approvedVerId = metric.active_binding?.approved_version_id;
-    const ver = approvedVerId ? def.versions.find((v) => v.id === approvedVerId) : null;
-    if (!ver) {
-      return {
-        state: 'unbound',
-        label: 'Pending approval',
-        isAnalyzable: false,
-        reason: 'No approved version bound to this metric',
-        version: null,
-        definition: def,
-      };
-    }
-    const isAnalyzable = ver.support_state === 'executable' || ver.support_state === 'supported';
-    return {
-      state: isAnalyzable ? 'analyzable' : 'limited',
-      label: isAnalyzable ? 'Can be compared' : 'Not supported',
-      isAnalyzable,
-      reason: ver.support_reason || (isAnalyzable ? 'Supported calculation' : "This SQL shape isn't supported"),
-      version: ver,
-      definition: def,
-    };
+  const getMetricSupportState = (metric: MetricItem) => metricSupport(metric, definitions, data.snapshots, bindings);
+
+  const startComparison = (left: Version, right: Version, relationship: string) => {
+    const loads = matchingMetricLoads(left, data.snapshots, right);
+    if (!loads.length) { setError('These calculations need supported SQL linked to the same available dataset.'); return; }
+    setComparisonSnapshotId(loads.length === 1 ? loads[0].id : '');
+    setComparison({ left, right, relationship });
   };
+
+  const comparisonDialog = comparison && (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="metric-comparison-title" onClick={() => setComparison(null)}>
+      <form className="modal-card" onClick={e => e.stopPropagation()} onSubmit={e => {
+        e.preventDefault();
+        const load = matchingMetricLoads(comparison.left, data.snapshots, comparison.right).find(s => s.id === comparisonSnapshotId);
+        if (!load) { setError('Choose an available data load for these calculations.'); return; }
+        onComparePair?.(comparison.left.id, comparison.right.id, comparison.relationship, load.id);
+        setComparison(null);
+      }}>
+        <div className="modal-header"><h3 id="metric-comparison-title">Choose data to compare</h3>
+          <button type="button" className="modal-close-button" aria-label="Close dialog" onClick={() => setComparison(null)}><X size={18} /></button></div>
+        <div className="modal-body">
+          <label className="form-label" htmlFor="metric-comparison-load">Data load</label>
+          <select id="metric-comparison-load" className="form-select" required value={comparisonSnapshotId} onChange={e => setComparisonSnapshotId(e.target.value)}>
+            <option value="">Choose a data load…</option>
+            {matchingMetricLoads(comparison.left, data.snapshots, comparison.right).map(s => <option key={s.id} value={s.id}>{s.name} · {s.created_at.slice(0, 10)} · {s.row_count.toLocaleString()} records</option>)}
+          </select>
+        </div>
+        <div className="modal-footer"><button type="button" className="button secondary" onClick={() => setComparison(null)}>Cancel</button>
+          <button className="button primary" disabled={!comparisonSnapshotId}>Compare</button></div>
+      </form>
+    </div>
+  );
 
   // Helper to get latest drift state for a metric
   const getMetricDriftState = (metric: MetricItem) => {
@@ -265,7 +295,7 @@ export function MetricsView({
     return {
       isZero,
       defined,
-      delta: res.delta_target_minus_baseline,
+      delta: metricDifference(res),
       relativePercent: res.relative_change_percent_display,
       runId: relevantRun.id,
       snapshotId: relevantRun.snapshot_id,
@@ -289,7 +319,7 @@ export function MetricsView({
 
       return matchSearch && matchImportance && matchSupport;
     });
-  }, [metrics, searchQuery, importanceFilter, supportFilter, definitions]);
+  }, [metrics, searchQuery, importanceFilter, supportFilter, definitions, data.snapshots, bindings]);
 
   // Handlers
   const handleSelectMetric = (mId: string | null) => {
@@ -336,14 +366,9 @@ export function MetricsView({
     try {
       let targetDefId = implExistingDefId;
       if (implChoice === 'new_sql') {
-        if (!implRawSql.trim()) throw new Error('SQL query cannot be empty.');
-        const createdDef = await api.post<Definition>('/definitions', {
-          name: implSqlName || `${selectedMetric.display_name} Query`,
-          source_label: 'SQL query',
-          owner_label: 'Local analyst',
-          raw_sql: implRawSql.trim(),
-          time_column: implTimeCol || null,
-        });
+        const request = sqlDefinitionRequest(implSqlName || `${selectedMetric.display_name} Query`, implRawSql,
+          implContractId, availableFlatContracts, data.snapshots);
+        const createdDef = await api.post<Definition>(request.endpoint, request.body);
         targetDefId = createdDef.id;
       }
 
@@ -396,6 +421,27 @@ export function MetricsView({
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleRenameCalculation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!calculationEdit || !calculationName.trim()) return;
+    setBusy(true); setError('');
+    try {
+      await api.renameDefinition(calculationEdit.id, calculationName.trim());
+      await refresh(); setCalculationEdit(null); setNotice('Calculation renamed.');
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+
+  const handleDeleteCalculation = async () => {
+    if (!calculationDelete) return;
+    setBusy(true); setError('');
+    try {
+      await api.deleteDefinition(calculationDelete.id);
+      await refresh(); setCalculationDelete(null); setNotice('Unused calculation deleted.');
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
   };
 
   // =========================================================================
@@ -460,6 +506,7 @@ export function MetricsView({
 
     return (
       <div className="metric-detail-view">
+        {comparisonDialog}
         {/* Topbar navigation */}
         <div className="metric-detail-topbar">
           <button
@@ -499,18 +546,19 @@ export function MetricsView({
               <span className="source-badge">Metric ID: {selectedMetric.id}</span>
             </div>
             <h1>{selectedMetric.display_name}</h1>
+            <p className="muted-text">{supportInfo.reason}</p>
             <div className="metric-detail-active-binding-text">
-              {activeDef ? (
+              {activeDef && activeVersion ? (
                 <>
                   <ShieldCheck size={16} color="var(--link)" />
                   <span>
-                    Active implementation: <strong>{activeDef.name}</strong> ·{' '}
-                    <span className="mono-cell">v{activeVersion?.version_number || 1}</span>{' '}
+                    Approved calculation: <strong>{activeDef.name}</strong> ·{' '}
+                    <span className="mono-cell">v{activeVersion.version_number}</span>{' '}
                     (Approved baseline)
                   </span>
                 </>
               ) : (
-                <span className="muted-text">No active definition bound yet.</span>
+                <span className="muted-text">Add a calculation linked to a dataset to get started.</span>
               )}
             </div>
           </div>
@@ -527,16 +575,17 @@ export function MetricsView({
               <Plus size={15} />
               <span>Add implementation</span>
             </button>
-            {activeVersion && onComparePair && (
+            {supportInfo.isAnalyzable && activeVersion && onComparePair && (
               <button
                 type="button"
                 className="button secondary"
                 onClick={() => {
-                  const candidateVer = versionHistoryList.find((vh) => vh.status === 'candidate')?.version;
+                  const candidateVer = versionHistoryList.find((vh) => vh.status === 'candidate' &&
+                    ['executable', 'supported'].includes(vh.version.support_state) && matchingMetricLoads(activeVersion, data.snapshots, vh.version).length > 0)?.version;
                   if (candidateVer) {
-                    onComparePair(activeVersion.id, candidateVer.id, 'candidate_review');
+                    startComparison(activeVersion, candidateVer, 'candidate_review');
                   } else {
-                    onComparePair(activeVersion.id, activeVersion.id, 'baseline_audit');
+                    startComparison(activeVersion, activeVersion, 'baseline_audit');
                   }
                 }}
               >
@@ -554,7 +603,7 @@ export function MetricsView({
             className={`section-tab-button ${detailTab === 'implementations' ? 'active' : ''}`}
             onClick={() => handleDetailTabClick('implementations')}
           >
-            Implementations ({1 + candidateBindings.length + retiredBindings.length})
+            Implementations ({(activeBinding ? 1 : 0) + candidateBindings.length + retiredBindings.length})
           </button>
           <button
             type="button"
@@ -578,7 +627,7 @@ export function MetricsView({
             Decisions & changes ({transitions.length + baselines.length})
           </button>
           <button type="button" className={`section-tab-button ${detailTab === 'contracts' ? 'active' : ''}`}
-            onClick={() => handleDetailTabClick('contracts')}>Contracts</button>
+            onClick={() => handleDetailTabClick('contracts')}>Checks</button>
         </div>
 
         {detailTab === 'contracts' && <MetricContractsPanel key={`${projectId}:${selectedMetric.id}`}
@@ -614,7 +663,7 @@ export function MetricsView({
                     <span className="meta-value mono">v{activeVersion.version_number}</span>
                   </div>
                   <div className="implementation-meta-item">
-                    <span className="meta-label">Support State</span>
+                    <span className="meta-label">Next step</span>
                     <span className="meta-value font-semibold" style={{ color: supportInfo.isAnalyzable ? 'var(--link)' : 'var(--warn)' }}>
                       {supportInfo.label}
                     </span>
@@ -668,11 +717,12 @@ export function MetricsView({
                         <span className="source-badge">{candDef.source_label}</span>
                       </div>
                       <div className="implementation-card-actions">
-                        {activeVersion && onComparePair && (
+                        {supportInfo.isAnalyzable && activeVersion && onComparePair && (
                           <button
                             type="button"
                             className="button secondary"
-                            onClick={() => onComparePair(activeVersion.id, candVer.id, 'candidate_review')}
+                            disabled={!matchingMetricLoads(activeVersion, data.snapshots, candVer).length || !['executable', 'supported'].includes(candVer.support_state)}
+                            onClick={() => startComparison(activeVersion, candVer, 'candidate_review')}
                           >
                             Compare with active
                           </button>
@@ -700,9 +750,9 @@ export function MetricsView({
                         <span className="meta-value mono">v{candVer.version_number}</span>
                       </div>
                       <div className="implementation-meta-item">
-                        <span className="meta-label">Support State</span>
+                        <span className="meta-label">Next step</span>
                         <span className="meta-value">
-                          {candVer.support_state === 'executable' ? 'Can be compared' : 'Not supported'}
+                          {!candVer.contract_hash ? 'Not linked to a dataset — add the SQL again for a dataset' : matchingMetricLoads(candVer, data.snapshots).length > 0 && ['executable', 'supported'].includes(candVer.support_state) ? 'Ready to compare' : 'Add SQL for a dataset'}
                         </span>
                       </div>
                       <div className="implementation-meta-item">
@@ -759,7 +809,7 @@ export function MetricsView({
           <div className="implementations-list">
             <div className="unassigned-header">
               <h3>Version Timeline</h3>
-              <p>Observed definition revisions and approved baseline lineage for this metric.</p>
+              <p>Previous calculations and the versions approved for this metric.</p>
             </div>
 
             {versionHistoryList.length > 0 ? (
@@ -784,11 +834,11 @@ export function MetricsView({
                     </div>
 
                     <div className="implementation-card-actions">
-                      {activeVersion && activeVersion.id !== ver.id && onComparePair && (
+                      {activeVersion && activeVersion.id !== ver.id && onComparePair && matchingMetricLoads(activeVersion, data.snapshots, ver).length > 0 && ['executable', 'supported'].includes(ver.support_state) && (
                         <button
                           type="button"
                           className="button secondary"
-                          onClick={() => onComparePair(activeVersion.id, ver.id, 'version_comparison')}
+                          onClick={() => startComparison(activeVersion, ver, 'version_comparison')}
                         >
                           Compare with active
                         </button>
@@ -802,9 +852,9 @@ export function MetricsView({
                       <span className="meta-value">{ver.observed_at ? ver.observed_at.slice(0, 19).replace('T', ' ') : 'Recent'}</span>
                     </div>
                     <div className="implementation-meta-item">
-                      <span className="meta-label">Support State</span>
+                      <span className="meta-label">Next step</span>
                       <span className="meta-value">
-                        {ver.support_state === 'executable' ? 'Can be compared' : 'Not supported'}
+                        {!ver.contract_hash ? 'Not linked to a dataset — add the SQL again for a dataset' : matchingMetricLoads(ver, data.snapshots).length > 0 && ['executable', 'supported'].includes(ver.support_state) ? 'Ready to compare' : 'Add SQL for a dataset'}
                       </span>
                     </div>
                     <div className="implementation-meta-item">
@@ -832,12 +882,12 @@ export function MetricsView({
           </div>
         )}
 
-        {/* Tab 3: Candidate Impact & Drift */}
+        {/* Tab 3: Difference from approved */}
         {detailTab === 'impact' && (
           <div className="drift-impact-container">
             <div className="unassigned-header">
-              <h3>Candidate Impact & Materiality Drift</h3>
-              <p>Deterministic verification runs evaluated against frozen snapshots.</p>
+              <h3>Difference from approved</h3>
+              <p>How proposed calculations compare with the approved calculation on the same data.</p>
             </div>
 
             {candidateRuns.length > 0 ? (
@@ -846,9 +896,6 @@ export function MetricsView({
                 if (!res) return null;
                 const defined = isDefinedComparison(res);
                 const isZero = defined && isExactZero(res.delta_target_minus_baseline);
-                const bridgeLabel = res.steps?.[0]?.rule === 'case_definition_change'
-                  ? 'whole-definition CASE contributions'
-                  : res.shapley ? 'Shapley bridge' : 'row-contribution bridge';
 
                 return (
                   <div key={r.id} className="drift-summary-card">
@@ -856,7 +903,7 @@ export function MetricsView({
                       <div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
                           <span className={`status-pill ${isZero ? 'ready' : 'neutral'}`}>
-                            {!defined ? 'Gap unavailable (undefined SUM)' : isZero ? 'Exact match (zero drift)' : 'Defined drift — materiality not assessed'}
+                            {!defined ? 'Difference unavailable' : isZero ? 'Same result as approved' : 'Difference from approved'}
                           </span>
                           <span className="source-badge">Snapshot: {r.snapshot_id}</span>
                         </div>
@@ -869,32 +916,32 @@ export function MetricsView({
                           className="button primary"
                           onClick={() => onOpenRun(r)}
                         >
-                          Open evidence bridge
+                          Open comparison
                         </button>
                       )}
                     </div>
 
                     <div className="drift-comparison-grid">
                       <div className="drift-value-box">
-                        <span className="box-label">Approved Baseline</span>
-                        <span className="box-num">{exact(res.baseline_value, res.currency)}</span>
+                        <span className="box-label">Approved value</span>
+                        <span className="box-num">{valueWithUnit(resultDisplayValue(res, res.baseline_value), resultUnit(res))}</span>
                       </div>
                       <div className="drift-value-box target-box">
-                        <span className="box-label">Candidate Value</span>
-                        <span className="box-num">{exact(res.target_value, res.currency)}</span>
+                        <span className="box-label">Proposed value</span>
+                        <span className="box-num">{valueWithUnit(resultDisplayValue(res, res.target_value), resultUnit(res))}</span>
                       </div>
                       <div className={`drift-value-box ${isZero ? 'delta-zero' : ''}`}>
-                        <span className="box-label">Target minus baseline</span>
-                        <span className="box-num">{res.delta_target_minus_baseline ?? 'Unavailable'}</span>
+                        <span className="box-label">Difference from approved</span>
+                        <span className="box-num">{metricDifference(res)}</span>
                       </div>
                       <div className="drift-value-box">
-                        <span className="box-label">Relative Gap</span>
+                        <span className="box-label">Percentage change</span>
                         <span className="box-num">{res.relative_change_percent_display ?? 'Unavailable'}</span>
                       </div>
                     </div>
 
                     <div style={{ fontSize: '13px', color: 'var(--text-2)' }}>
-                      Explanation: {bridgeLabel} ({res.explanation_status}). Open the existing comparison to inspect its bounded evidence.
+                      Open the comparison to see which records explain this difference.
                     </div>
                   </div>
                 );
@@ -902,24 +949,25 @@ export function MetricsView({
             ) : (
               <div className="empty-card" style={{ padding: '36px', textAlign: 'center', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px' }}>
                 <TrendingUp size={32} color="var(--link)" style={{ margin: '0 auto 12px' }} />
-                <h4 style={{ margin: '0 0 6px', fontSize: '16px', color: 'var(--ink)' }}>No candidate impact evaluations recorded yet</h4>
+                <h4 style={{ margin: '0 0 6px', fontSize: '16px', color: 'var(--ink)' }}>No comparisons recorded yet</h4>
                 <p style={{ margin: '0 0 16px', color: 'var(--muted)', fontSize: '13px', maxWidth: '420px', marginLeft: 'auto', marginRight: 'auto' }}>
-                  Evaluate candidate definitions against the approved baseline across a validated data snapshot to detect material drift before deployment.
+                  Compare a proposed calculation with the approved calculation using the same data load.
                 </p>
-                {activeVersion && onComparePair && (
+                {supportInfo.isAnalyzable && activeVersion && onComparePair && (
                   <button
                     type="button"
                     className="button secondary"
                     onClick={() => {
-                      const cand = versionHistoryList.find((v) => v.status === 'candidate');
+                      const cand = versionHistoryList.find((v) => v.status === 'candidate' &&
+                        ['executable', 'supported'].includes(v.version.support_state) && matchingMetricLoads(activeVersion, data.snapshots, v.version).length > 0);
                       if (cand) {
-                        onComparePair(activeVersion.id, cand.version.id, 'candidate_impact');
+                        startComparison(activeVersion, cand.version, 'candidate_impact');
                       } else {
-                        onComparePair(activeVersion.id, activeVersion.id, 'baseline_audit');
+                        startComparison(activeVersion, activeVersion, 'baseline_audit');
                       }
                     }}
                   >
-                    Launch comparison run
+                    Compare calculations
                   </button>
                 )}
               </div>
@@ -931,7 +979,7 @@ export function MetricsView({
         {detailTab === 'decisions' && (
           <div className="decision-timeline">
             <div className="unassigned-header">
-              <h3>Lifecycle Audit Trail</h3>
+              <h3>Approval history</h3>
               <p>Historical promotions, version approvals, and change records for {selectedMetric.display_name}.</p>
             </div>
 
@@ -952,7 +1000,7 @@ export function MetricsView({
                       {t.transition_kind.replace(/_/g, ' ').toUpperCase()}
                     </div>
                     <div className="timeline-node-meta">
-                      <span>Actor: {t.actor_id || 'Analyst'}</span>
+                      <span>Actor: {memberName(t.actor_id, members)}</span>
                       <span>·</span>
                       <span>Recorded: {t.created_at ? t.created_at.slice(0, 19).replace('T', ' ') : 'Recent'}</span>
                     </div>
@@ -1079,6 +1127,15 @@ export function MetricsView({
                   ) : (
                     <>
                       <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label" htmlFor="impl-dataset">Dataset</label>
+                        <select id="impl-dataset" className="form-select" value={implContractId} onChange={e => setImplContractId(e.target.value)} required>
+                          <option value="">Choose a dataset…</option>
+                          {availableFlatContracts.map(c => <option key={c.id} value={c.id}>{c.name} · {c.unit_label}</option>)}
+                        </select>
+                        {!availableFlatContracts.length && <p className="disabled-reason">Add a dataset in Data Sources before adding SQL.</p>}
+                        <p className="muted-text font-small">Use the table name <code>snapshot</code> in your SQL.</p>
+                      </div>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label" htmlFor="impl-sql-name" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>
                           Definition name
                         </label>
@@ -1101,25 +1158,11 @@ export function MetricsView({
                           id="impl-raw-sql"
                           className="form-textarea code-textarea"
                           rows={5}
-                          placeholder="SELECT order_id, order_amount FROM orders WHERE status = 'COMPLETED'"
+                          placeholder="SELECT SUM(amount) FROM snapshot WHERE status = 'COMPLETED'"
                           value={implRawSql}
                           onChange={(e) => setImplRawSql(e.target.value)}
                           required
                           style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: '12px' }}
-                        />
-                      </div>
-                      <div className="form-group" style={{ marginBottom: 0 }}>
-                        <label className="form-label" htmlFor="impl-time-col" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>
-                          Time column (optional)
-                        </label>
-                        <input
-                          id="impl-time-col"
-                          type="text"
-                          className="form-input"
-                          style={{ width: '100%' }}
-                          placeholder="e.g. order_ts"
-                          value={implTimeCol}
-                          onChange={(e) => setImplTimeCol(e.target.value)}
                         />
                       </div>
                     </>
@@ -1150,8 +1193,8 @@ export function MetricsView({
                   >
                     Cancel
                   </button>
-                  <button type="submit" className="button primary" disabled={busy}>
-                    {busy ? 'Binding…' : 'Add implementation'}
+                  <button type="submit" className="button primary" disabled={busy || (implChoice === 'new_sql' && !implContractId)}>
+                    {busy ? 'Adding…' : 'Add implementation'}
                   </button>
                 </div>
               </form>
@@ -1228,6 +1271,7 @@ export function MetricsView({
   // =========================================================================
   return (
     <div className="metrics-page-container">
+      {comparisonDialog}
       {/* Page Heading */}
       <div className="page-heading">
         <div>
@@ -1298,7 +1342,7 @@ export function MetricsView({
                 className={`filter-pill ${supportFilter === sup ? 'active' : ''}`}
                 onClick={() => setSupportFilter(sup)}
               >
-                {sup === 'all' ? 'All' : sup === 'analyzable' ? 'Can be compared' : sup === 'limited' ? 'Not supported' : 'No definition yet'}
+                {sup === 'all' ? 'All' : sup === 'analyzable' ? 'Ready to compare' : sup === 'limited' ? 'Add SQL for a dataset' : 'Waiting for a calculation'}
               </button>
             ))}
           </div>
@@ -1328,8 +1372,9 @@ export function MetricsView({
                   <div className="metric-row-meta">
                     <span className="metric-row-meta-item">
                       <FileCode2 size={14} color="var(--muted)" />
-                      Active: {support.definition ? support.definition.name : 'None yet'}
+                      {support.version && support.definition ? `Approved calculation: ${support.definition.name}` : 'No approved calculation'}
                     </span>
+                    <span className="muted-text">{support.reason}</span>
                     {support.version && (
                       <span className="metric-row-meta-item">
                         <CheckCircle2 size={14} color="var(--link)" />
@@ -1347,7 +1392,7 @@ export function MetricsView({
 
                   {drift && (
                     <span className={`status-pill ${drift.isZero ? 'ready' : 'neutral'}`}>
-                      {!drift.defined ? 'Gap unavailable' : drift.isZero ? 'Exact match' : `Drift: ${drift.delta}`}
+                      {!drift.defined ? 'Difference unavailable' : drift.isZero ? 'Same result as approved' : <>Difference from approved: <span className="mono-cell">{drift.delta}</span></>}
                     </span>
                   )}
                 </div>
@@ -1360,12 +1405,12 @@ export function MetricsView({
                   >
                     View detail
                   </button>
-                  {support.version && onComparePair && (
+                  {support.isAnalyzable && support.version && onComparePair && (
                     <button
                       type="button"
                       className="button secondary icon-only"
                       title="Investigate metric"
-                      onClick={() => onComparePair(support.version.id, support.version.id, 'audit')}
+                      onClick={() => startComparison(support.version!, support.version!, 'audit')}
                     >
                       <Layers size={14} />
                     </button>
@@ -1395,8 +1440,10 @@ export function MetricsView({
       {/* UNASSIGNED DEFINITIONS SECTION */}
       <div className="unassigned-section">
         <div className="unassigned-header">
-          <h3>Saved calculations ({unassignedDefinitions.length})</h3>
-          <p>Ad-hoc calculations and imported queries remain available for reuse. Create a metric when a calculation needs ongoing governance.</p>
+          <h3>Saved calculations ({visibleCalculations.length})</h3>
+          <p>Calculations used by a saved case or metric. Show all to find other calculations.</p>
+          <button type="button" className="button secondary" aria-pressed={showAllCalculations} onClick={() => { setShowAllCalculations(v => !v); setCalculationPageIndex(0); setShowCalculations(true); }}>{showAllCalculations ? 'Used by cases or metrics' : `Show all (${definitions.length})`}</button>
+          {usageError && <p role="alert" className="disabled-reason">{usageError}</p>}
           <p className="muted-text font-small">{calculationGroups.imported.length} imported · {calculationGroups.fromComparisons.length} saved from guided comparisons</p>
           <button type="button" className="button secondary" aria-expanded={showCalculations} aria-controls="saved-calculations" onClick={() => setShowCalculations(v => !v)}>
             {showCalculations ? 'Hide saved calculations' : 'Browse saved calculations'}
@@ -1418,14 +1465,15 @@ export function MetricsView({
           <div className="unassigned-card-grid">
             {calculations.items.map((d) => {
               const latestVer = latest(d);
-              const isAnalyzable = latestVer?.support_state === 'executable';
+              const isAnalyzable = !!latestVer && ['executable', 'supported'].includes(latestVer.support_state) && matchingMetricLoads(latestVer, data.snapshots).length > 0;
+              const usage = definitionUsage.find(u => u.definition_id === d.id);
 
               return (
                 <div key={d.id} className="unassigned-card">
                   <div className="unassigned-card-title">
                     <span>{d.name}</span>
                     <span className={`status-pill ${isAnalyzable ? 'ready' : 'warn'}`}>
-                      {isAnalyzable ? 'Analyzable' : 'Refused'}
+                      {isAnalyzable ? 'Ready to compare' : 'Add SQL for a dataset'}
                     </span>
                   </div>
 
@@ -1435,7 +1483,12 @@ export function MetricsView({
                     <span>{d.versions.length} versions</span>
                   </div>
 
+                  {!latestVer?.contract_hash && <p className="disabled-reason">Not linked to a dataset — add the SQL again for a dataset</p>}
+                  {!!usage?.used_by.length && <p className="muted-text font-small">Used by {usage.used_by.map(u => u.name).join(', ')}</p>}
                   <div className="unassigned-card-actions">
+                    <button type="button" className="button secondary font-small" onClick={() => { setCalculationEdit(d); setCalculationName(d.name); }}>Rename</button>
+                    <button type="button" className="button secondary font-small" disabled={busy || !usage?.can_delete}
+                      aria-describedby={`calculation-delete-hint-${d.id}`} onClick={() => setCalculationDelete(d)}>Delete</button>
                     <button
                       type="button"
                       className="button primary font-small"
@@ -1447,23 +1500,26 @@ export function MetricsView({
                     >
                       Create Metric
                     </button>
-                    {onComparePair && latestVer && (
+                    {onComparePair && latestVer && matchingMetricLoads(latestVer, data.snapshots).length > 0 && isAnalyzable && (
                       <button
                         type="button"
                         className="button secondary font-small"
-                        onClick={() => onComparePair(latestVer.id, latestVer.id, 'unassigned_audit')}
+                        onClick={() => startComparison(latestVer, latestVer, 'unassigned_audit')}
                       >
-                        Investigate
+                        Compare
                       </button>
                     )}
                   </div>
+                  <p id={`calculation-delete-hint-${d.id}`} className="muted-text font-small">
+                    {!usage ? 'Checking whether this calculation is used…' : usage.can_delete ? 'Unused; safe to delete.' : `Kept for ${usage.used_by.map(u => u.name).join(', ') || 'an existing comparison'}.`}
+                  </p>
                 </div>
               );
             })}
           </div>
         ) : (
           <div style={{ padding: '16px', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '6px', color: 'var(--muted)', fontSize: '13px' }}>
-            {!unassignedDefinitions.length ? 'No unassigned calculations. Calculations bound to metrics appear in metric details.'
+            {!visibleCalculations.length ? 'No calculations used by saved cases or metrics yet. Choose Show all to browse other calculations.'
               : calculationQuery.trim() ? 'No saved calculations match this search. Clear the search to browse all calculations.'
               : 'No calculations in this group. Switch groups to see the others.'}
           </div>
@@ -1474,6 +1530,28 @@ export function MetricsView({
         </div>}
         </div>}
       </div>
+
+      {calculationEdit && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="rename-calculation-title" onClick={() => !busy && setCalculationEdit(null)}>
+        <form className="modal-card" onClick={e => e.stopPropagation()} onSubmit={handleRenameCalculation}>
+          <div className="modal-header"><h3 id="rename-calculation-title">Rename calculation</h3>
+            <button type="button" className="modal-close-button" aria-label="Close dialog" disabled={busy} onClick={() => setCalculationEdit(null)}><X size={18} /></button></div>
+          <div className="modal-body"><label className="form-label" htmlFor="calculation-name">Name</label>
+            <input id="calculation-name" className="form-input" autoFocus required maxLength={160} value={calculationName} onChange={e => setCalculationName(e.target.value)} />
+            {error && <p role="alert" className="disabled-reason">{error}</p>}</div>
+          <div className="modal-footer"><button type="button" className="button secondary" disabled={busy} onClick={() => setCalculationEdit(null)}>Cancel</button>
+            <button className="button primary" disabled={busy || !calculationName.trim()}>{busy ? 'Saving…' : 'Save name'}</button></div>
+        </form>
+      </div>}
+      {calculationDelete && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="delete-calculation-title" onClick={() => !busy && setCalculationDelete(null)}>
+        <div className="modal-card" onClick={e => e.stopPropagation()}>
+          <div className="modal-header"><h3 id="delete-calculation-title">Delete unused calculation?</h3>
+            <button type="button" className="modal-close-button" aria-label="Close dialog" disabled={busy} onClick={() => setCalculationDelete(null)}><X size={18} /></button></div>
+          <div className="modal-body"><p>Delete “{calculationDelete.name}” and its versions?</p>
+            {error && <p role="alert" className="disabled-reason">{error}</p>}</div>
+          <div className="modal-footer"><button type="button" className="button secondary" disabled={busy} onClick={() => setCalculationDelete(null)}>Cancel</button>
+            <button type="button" className="button primary" disabled={busy} onClick={handleDeleteCalculation}>{busy ? 'Deleting…' : 'Delete calculation'}</button></div>
+        </div>
+      </div>}
 
       {/* Create Metric Modal */}
       {showCreateModal && (

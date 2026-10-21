@@ -380,8 +380,14 @@ class Supervisor:
         ident, attempt = pending['id'], pending['attempt']
         source = Path(pending['source_path'])
         destination = self.data_dir / 'snapshots' / f'{ident}-{attempt}.duckdb'
+        frozen_upgrade = 'frozen_upgrade' in pending['data']['metadata']
         try:
-            check_upload_size(source.stat().st_size)
+            if frozen_upgrade:
+                if not durable.ensure(source):
+                    raise IngestValidationError('UPGRADE_UNAVAILABLE', 'The frozen dataset could not be restored from storage.')
+                self.store.check_storage_quota(pending['project_id'], source.stat().st_size, self.data_dir)
+            else:
+                check_upload_size(source.stat().st_size)
             if file_hash(source) != pending['data']['source_hash']:
                 raise ValueError('SOURCE_HASH_MISMATCH')
             def progress():
@@ -408,9 +414,9 @@ class Supervisor:
                 error={'code': code, 'message': message})
             destination.unlink(missing_ok=True)
             destination.with_name(destination.name + '.manifest.json').unlink(missing_ok=True)
-        if finished:
+        if finished and not frozen_upgrade:
             source.unlink(missing_ok=True)
-        else:
+        elif not finished:
             durable.remove(destination)
 
     def _preview(self, pending):
@@ -732,7 +738,7 @@ class Supervisor:
                         raise ValueError('RUNNER_OUTPUT_INVALID')
                     os.replace(staged, members_path)
                 context_info = (self._publish_context(output_dir, published, contract, evidence_dir, run_id, attempt)
-                                if run.get('execution_policy') == 'flat_snapshot_v1' and not snapshot_change else None)
+                                if run.get('execution_policy') == 'flat_snapshot_v1' else None)
                 context_path = evidence_dir / f'{run_id}-{attempt}.context.jsonl'
                 durable_files = [published, *([members_path] if members_path is not None else []),
                                  *([context_path] if context_info is not None and context_info['status'] == 'available' else [])]
@@ -779,10 +785,12 @@ def _isolated_ingest_pinned(source, destination, metadata, launcher=None, job_ro
     from packages.metricguard_core.common import SCHEMA, digest
     from packages.metricguard_core.free_tier import check_upload_size
     source, destination, job_root = Path(source), Path(destination), Path(job_root)
-    check_upload_size(source.stat().st_size)
+    if 'frozen_upgrade' not in metadata:
+        check_upload_size(source.stat().st_size)
     suffix = source.suffix.lower()
     relational = 'relational_contract' in metadata
-    allowed = {'.zip'} if relational else {'.csv', '.parquet', '.xlsx'} if 'flat_contract' in metadata else {'.csv', '.parquet'}
+    allowed = ({'.duckdb'} if 'frozen_upgrade' in metadata else {'.zip'} if relational
+               else {'.csv', '.parquet', '.xlsx'} if 'flat_contract' in metadata else {'.csv', '.parquet'})
     if suffix not in allowed:
         raise ValueError('UNSUPPORTED_FORMAT')
     sidecar_destination = destination.with_name(destination.name + '.manifest.json')
@@ -800,6 +808,8 @@ def _isolated_ingest_pinned(source, destination, metadata, launcher=None, job_ro
         output_dir.mkdir()
         output_dir.chmod(0o777)
         shutil.copyfile(source, input_dir / f'source{suffix}')
+        if 'frozen_upgrade' in metadata:
+            shutil.copyfile(source.with_name(source.name + '.manifest.json'), input_dir / 'source.duckdb.manifest.json')
         (input_dir / 'metadata.json').write_text(json.dumps(metadata, allow_nan=False), encoding='utf-8')
         process = launcher.start(input_dir, output_dir, 'ingest')
         try:

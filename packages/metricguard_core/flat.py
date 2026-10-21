@@ -139,7 +139,7 @@ def validate_contract(payload):
     if ver == 3:
         req_fields = FIELDS
         if 'dimension_types' in payload:
-            _error('invalid_contract', 'Flat contract v3 does not support dimension_types')
+            _error('invalid_contract', 'These older datasets do not support declared column types. Add the file as a new dataset to declare column types.')
     elif ver in (4, 5, 7):
         req_fields = FIELDS_V4 | ({'predicate_policy'} if ver in (5, 7) else set())
         if ver == 7:

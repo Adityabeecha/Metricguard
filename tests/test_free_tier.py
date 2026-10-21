@@ -216,6 +216,6 @@ def test_breakdown_reason_matches_why_details_are_missing(case):
     with TestClient(app) as client:
         reasons = {name: client.get(f'/api/v1/comparisons/{ident}/evidence-breakdown').json()['reason']
                    for name, ident in (('legacy', legacy), ('two_loads', two_loads), ('dropped', dropped))}
-    assert reasons['two_loads'] == "Breakdowns aren't available for comparisons between two data loads yet."
+    assert reasons['two_loads'] == 'This comparison was run before two-load breakdowns existed. Replay it to enable them.'
     assert reasons['dropped'].startswith("Breakdown isn't available for this run (the record details could not be saved)")
     assert reasons['legacy'] == 'This comparison was run before column breakdowns existed. Replay it to enable them.'

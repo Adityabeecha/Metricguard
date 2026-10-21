@@ -21,6 +21,8 @@ ALL_BOOLEANS = {'is_active'}
 
 class CoreError(ValueError):
     def __init__(self, code, message):
+        from .public_errors import plain_error_message
+        message = plain_error_message(message)
         self.code, self.message = code, message
         super().__init__(message)
 

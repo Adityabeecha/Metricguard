@@ -3,6 +3,26 @@ import { test } from 'node:test';
 import { parseRoute, buildRouteUrl } from './router.ts';
 import * as routing from './router.ts';
 
+test('shared cases mount a public surface only for one bounded capability token', () => {
+  const token = 'A'.repeat(43);
+  assert.equal(routing.sitePage(`/shared-cases/${token}`), 'shared-case');
+  assert.equal(routing.sharedCaseToken(`/shared-cases/${token}`), token);
+  for (const path of ['/shared-cases/short', `/shared-cases/${token}/edit`, `/shared-cases/${token}/workspace`, `/shared-cases/${'A'.repeat(129)}`]) {
+    assert.equal(routing.sitePage(path), 'not-found');
+    assert.equal(routing.sharedCaseToken(path), null);
+  }
+});
+
+test('case URLs are canonical and older investigation links keep working', () => {
+  for (const path of ['/w/acme/cases/case-1', '/w/acme/investigations/case-1']) {
+    const route = parseRoute(path);
+    assert.equal(route.page, 'investigations');
+    assert.equal(route.query.investigationId, 'case-1');
+    assert.equal(route.notFound, undefined);
+  }
+  assert.equal(buildRouteUrl('acme', 'investigations', undefined, {investigationId: 'case-1'}), '/w/acme/cases/case-1');
+});
+
 test('parseRoute parses workspace routes correctly', () => {
   const r1 = parseRoute('/w/local-retail/dashboard');
   assert.equal(r1.workspaceId, 'local-retail');
@@ -48,7 +68,7 @@ test('parseRoute handles legacy routes with fallback to default workspace', () =
 test('buildRouteUrl constructs standard URL with workspace and parameters', () => {
   assert.equal(buildRouteUrl('acme', 'dashboard'), '/w/acme/dashboard');
   assert.equal(buildRouteUrl('acme', 'settings', 'integrations'), '/w/acme/settings?tab=integrations');
-  assert.equal(buildRouteUrl('acme', 'investigations', undefined, { mode: 'flat' }), '/w/acme/investigations?mode=flat');
+  assert.equal(buildRouteUrl('acme', 'investigations', undefined, { mode: 'flat' }), '/w/acme/cases?mode=flat');
   assert.equal(buildRouteUrl('acme', 'changes'), '/w/acme/changes');
   assert.equal(buildRouteUrl('acme', 'changes', undefined, { changeId: 'diff-123' }), '/w/acme/changes/diff-123');
 });
@@ -76,8 +96,8 @@ test('homepage sends only verified identities with an accessible workspace to Ca
   assert.equal(typeof routing.homeRedirect, 'function');
   assert.equal(routing.homeRedirect(null), null);
   assert.equal(routing.homeRedirect({ verified: false, home_workspace_id: 'local-retail' }), null);
-  assert.equal(routing.homeRedirect({ verified: true, home_workspace_id: 'personal-123' }), '/w/personal-123/investigations');
-  assert.equal(routing.homeRedirect({ verified: true, home_workspace_id: 'team-analytics' }), '/w/team-analytics/investigations');
+  assert.equal(routing.homeRedirect({ verified: true, home_workspace_id: 'personal-123' }), '/w/personal-123/cases');
+  assert.equal(routing.homeRedirect({ verified: true, home_workspace_id: 'team-analytics' }), '/w/team-analytics/cases');
   for (const id of [null, '', '//evil.test', '../private', 'acme/../../evil']) {
     assert.equal(routing.homeRedirect({ verified: true, home_workspace_id: id }), null);
   }

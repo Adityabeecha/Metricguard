@@ -1,5 +1,7 @@
 # MetricGuard v2 local implementation and release evidence
 
+Later usability continuation (2026-10-21): dataset-linked metric SQL, explicit upgrades of frozen typed datasets, calculation reference management and approved-metric checks between loads are mapped in [project-graph.md](project-graph.md#dataset-linked-metric-checks-2026-10-21). These reuse existing import/comparison jobs and do not alter historical v2 evidence or close the external pilot gate. Current verification logs are under `data/evaluation/metric-workflows/`; a local durable restore test does not establish a live R2 deployment check.
+
 The original planning pack describes one v1. This matrix tracks the later **v2 — Real-data investigations** scope in [the roadmap](next-versions-roadmap.md). V2-01 through V2-05 are local implementation paths and are fully verified. **V2 engineering/product requirements complete; V2-06 external real-world validation remains open.** Because external organizations' sanitized real business datasets, real analyst observations, completion-time measurements, and independent second-analyst replays cannot be provided internally, V2-06 cannot be claimed as an accepted real-world pilot. Synthetic pilot rehearsal, scale checks, and all local engineering requirements pass.
 
 | ID | Local implementation and evidence | State |

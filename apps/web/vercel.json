@@ -2,6 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "routes": [
     {
+      "src": "/shared-cases/[^/]+/?$",
+      "headers": { "Referrer-Policy": "no-referrer", "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow" },
+      "continue": true
+    },
+    {
       "src": "/api/(.*)",
       "dest": "https://p01--metricguard--sqbwvsj5zd7c.code.run/api/$1",
       "transforms": [

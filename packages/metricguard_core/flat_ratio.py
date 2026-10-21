@@ -185,8 +185,7 @@ def is_ratio_aggregate(node) -> bool:
 def parse_ratio(aggregate, where, contract, lower_leaf, check_leaf):
     """SQL aggregate node (Div or Avg) plus shared WHERE -> ratio IR (FlatContract v5 or v8)."""
     if not _ratio_contract(contract):
-        _error('unsupported_sql', 'Ratios and averages need a dataset registered with compound filters (contract v5). '
-               'Re-register the dataset to enable them.')
+        _error('unsupported_sql', "This dataset was added before averages were supported. Use 'Enable averages and ratios' on the dataset page.")
     aggregate = _strip(aggregate)
     if isinstance(aggregate, exp.Avg):
         if any(v for k, v in aggregate.args.items() if k != 'this'):

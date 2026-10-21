@@ -8,6 +8,7 @@ import './closeout.css';
 import './theme.css';
 import './seal.css';
 import './evidence.css';
+import './reviewerEvidence.css';
 
 applyTheme(readThemeChoice());
 watchSystemTheme(readThemeChoice);

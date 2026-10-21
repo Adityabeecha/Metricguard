@@ -300,7 +300,7 @@ def load_context(path: Path, info: dict) -> dict[str, dict]:
         for line in iter(source.readline, b''):
             digest.update(line)
             item = json.loads(line)
-            values[str(item['k'])] = item['v']
+            values[str(item['k'])] = {**item['v'], EARLIER: item['b']} if 'b' in item else item['v']
     if digest.hexdigest() != info.get('sha256') or len(values) != info.get('row_count'):
         raise ValueError('CONTEXT_INVALID')
     with _lock:
@@ -309,6 +309,20 @@ def load_context(path: Path, info: dict) -> dict[str, dict]:
                 sum(len(v[3]) for v in _contexts.values()) > MAX_CACHED_ROWS):
             _contexts.popitem(last=False)
     return values
+
+
+# Two-load context: the earlier load's values, kept beside the grouping values under a key no column can have.
+EARLIER = '\u0000earlier'
+
+
+def context_view(row: dict, context: dict[str, dict] | None) -> dict:
+    """Columns to show beside a record; two-load runs also say what each value was in each load."""
+    values = row_values(row, context)
+    shown = {k: v for k, v in values.items() if k != EARLIER}
+    if EARLIER not in values:
+        return {'context': shown}
+    return {'context': shown, 'baseline_context': values[EARLIER],
+            'target_context': shown if row.get('target_present') is not False else None}
 
 
 # Group value for lookup columns of a record whose link found no lookup row: kept apart from a
@@ -350,17 +364,21 @@ def _group_value(row: dict, context: dict[str, dict] | None, column: str, bucket
 
 def group_page(path: Path, key: tuple, verify_all: Callable[[], Any], column: str, context: dict[str, dict] | None,
                value, offset: int, limit: int, *, no_match: bool = False, bucket: str | None = None,
-               query: str = '') -> tuple[list[dict], int]:
-    """Changed records whose ``column`` equals ``value`` (one row of the breakdown), largest change first."""
+               query: str = '', also: tuple = ()) -> tuple[list[dict], int]:
+    """Changed records whose ``column`` equals ``value`` (one row of the breakdown), largest change first.
+
+    ``also`` adds further (column, value, no_match, bucket) conditions, e.g. a two-column concentration.
+    """
     entry = _fresh(Path(path), key, verify_all)
     wanted = NO_MATCH if no_match else value
+    conditions = [(column, wanted, bucket), *((c, NO_MATCH if nm else v, b) for c, v, nm, b in also)]
     query = query.strip().lower()
-    view_key = ('group', column, json.dumps(wanted), bucket, query, id(context))
+    view_key = ('group', json.dumps(conditions), query, id(context))
     if view_key not in entry.views:
         matches = []
         for number, row in enumerate(iter_rows(path, key, verify_all)):
             magnitude = _magnitude(row.get('delta'))
-            if not magnitude or _group_value(row, context, column, bucket) != wanted:
+            if not magnitude or any(_group_value(row, context, c, b) != w for c, w, b in conditions):
                 continue
             if query and query not in record_key(row).lower():
                 continue

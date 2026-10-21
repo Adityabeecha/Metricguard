@@ -13,7 +13,7 @@ import { scrollToHash } from './publicScroll';
 import { CONTACT_EMAIL, HOSTING_REGION } from './publicFacts';
 import './public.css';
 
-type PublicPage = Exclude<SitePage, 'workspace' | 'signin' | 'signup'>;
+type PublicPage = Exclude<SitePage, 'workspace' | 'signin' | 'signup' | 'shared-case'>;
 
 export function PublicPages({ page }: { page: PublicPage }) {
   const [scrolled, setScrolled] = useState(false);

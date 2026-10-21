@@ -1,0 +1,17 @@
+.public-case-page { min-height: 100vh; background: var(--ground); color: var(--ink); }
+.shared-case-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); padding: 16px 28px; }
+.shared-case-header > a { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; }
+.public-case-page > main { max-width: 1320px; margin: 0 auto; padding: 28px; }
+.shared-case-notice { color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+.case-share-body { display: grid; gap: 14px; padding: 20px; }
+.case-share-links { margin: 0; padding: 0; list-style: none; }
+.case-share-links li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.case-share-new-link { display: grid; gap: 8px; overflow-wrap: anywhere; }
+.custody-print-hash { display: flex; align-items: center; gap: 8px; margin-top: 4px; overflow-wrap: anywhere; }
+.custody-print-hash code { font-size: 11px; word-break: break-all; }
+.case-print-custody dt { font-weight: 600; margin-top: 12px; }
+.case-print-custody dd { margin: 4px 0 12px; }
+.public-custody { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line); }
+.print-only { display: none; }
+@media (max-width: 600px) { .public-case-page > main { padding: 16px; } .shared-case-header { padding: 14px 16px; } }
+@media print { .shared-case-header, .shared-case-notice, .public-custody { display: none; } .public-case-page > main { max-width: none; padding: 0; } .print-only { display: block; } }

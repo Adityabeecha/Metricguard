@@ -259,7 +259,7 @@ def test_ratio_refusals(ratio_snapshot, sql):
 
 
 def test_ratio_needs_contract_v5_and_matching_shapes(tmp_path, ratio_snapshot):
-    with pytest.raises(CoreError, match='v5'):
+    with pytest.raises(CoreError, match='Enable averages and ratios'):
         parse_flat('SELECT AVG(amount) FROM snapshot', _contract(list(RATIO_TYPES), RATIO_TYPES, version=4))
     c, database, context = ratio_snapshot
     with pytest.raises(CoreError, match='same kind of total'):

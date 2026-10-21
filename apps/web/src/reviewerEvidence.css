@@ -1,0 +1,51 @@
+.record-context { margin-top: 8px; font: 12px var(--font-ui); color: var(--text-2); white-space: normal; }
+.record-context summary { cursor: pointer; color: var(--link); }
+.record-context dl { margin: 8px 0 0; min-width: 0; }
+.record-context dl > div { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 5px 0; border-top: 1px solid var(--line); }
+.record-context dt { color: var(--muted); overflow-wrap: anywhere; }
+.record-context dd { margin: 0; overflow-wrap: anywhere; font-family: var(--font-mono); }
+.field-change { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.field-was, .field-now { padding: 2px 5px; border: 1px solid var(--line-strong); border-radius: 3px; }
+.record-concentration { padding: 10px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--text-2); }
+.sql-comparison { padding-top: 12px; }
+.sql-comparison h4 { margin: 12px 0 6px; }
+.sql-comparison pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; padding: 12px; background: var(--panel); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font: 12px/1.7 var(--font-mono); }
+.sql-diff ins { color: var(--ok); background: var(--ok-tint); text-decoration: none; border-bottom: 1px solid var(--ok-line); }
+.sql-diff del { color: var(--danger); background: var(--danger-tint); text-decoration: line-through; }
+.concentration-register { width: 100%; margin-top: 20px; }
+.concentration-register button { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.print-only { display: none; }
+
+@page { margin: 16mm; }
+@media print {
+  :root { color-scheme: light; }
+  html,body,#root { height: auto !important; overflow: visible !important; background: var(--panel) !important; }
+  .app-shell,.main-content,.content,.view-container,.guided-page,.public-case-page { display: block !important; width: auto !important; max-width: none !important; min-height: 0 !important; height: auto !important; overflow: visible !important; margin: 0 !important; padding: 0 !important; }
+  .sidebar,.nav-rail,.rail-backdrop,.topbar,.shared-case-header,.skip-link,.tabs-wrap,.heading-actions,.report-actions,.modal-backdrop,.ledger:not(.print-records),.detail-stack,.guided-page > .guided-card,.public-custody,.no-print { display: none !important; }
+  button,form,input,select,.seal-custody,.record-concentration { display: none !important; }
+  .print-only,.definitions-exhibit[hidden] { display: block !important; }
+  .case-header { display: block; }
+  .case-header > * { margin-bottom: 16px; }
+  .answer-figure .figure { font-size: 32px; }
+  .seal-card,.case-header,.bridge,.sql-comparison,.case-print-custody { break-inside: avoid; box-shadow: none; }
+  .seal-card { width: auto; max-width: none; }
+  .bridge-svg { display: block !important; }
+  .bridge-list { display: none !important; }
+  .calc-pair { display: block; }
+  .sql-diff ins::before { content: '+ '; }
+  .sql-diff del::before { content: '− '; }
+  .ledger-table { width: 100%; border-collapse: collapse; }
+  .ledger-table thead { display: table-header-group !important; }
+  .ledger-table tr { display: table-row !important; break-inside: avoid; }
+  .ledger-table td,.ledger-table th { display: table-cell !important; font-size: 10px; padding: 6px; border-bottom: 1px solid var(--line); }
+  .ledger-table td::before { display: none !important; }
+  pre,code,.custody-print-hash { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+  .case-print-custody { margin-top: 20px; border-top: 1px solid var(--line-strong); }
+}
+
+/* "Where it sits": concentration across other columns. */
+.concentration { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+.concentration h4 { margin: 0; font-size: 14px; }
+.concentration ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.concentration li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.concentration-figures { font: 500 12px var(--font-mono); color: var(--text-2); }

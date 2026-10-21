@@ -131,7 +131,7 @@ def test_v3_hash_unchanged():
 
     # v3 payload with dimension_types must be rejected
     bad_v3 = {**payload, 'dimension_types': {'status': 'string'}}
-    with pytest.raises(CoreError, match='dimension_types'):
+    with pytest.raises(CoreError, match='column types'):
         validate_contract(bad_v3)
 
 

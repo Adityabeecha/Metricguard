@@ -141,3 +141,39 @@ def test_group_page_lists_one_breakdown_group_largest_first(tmp_path, index_kind
     assert [r['order_id'] for r in found] == ['E'] and count == 1
     page2, count = evidence_cache.group_page(path, key, lambda: None, 'region', context, 'north', 1, 1)
     assert [r['order_id'] for r in page2] == ['E'] and count == 2
+
+
+def test_concentration_finds_values_and_pairs_holding_more_of_the_difference_than_of_the_records(tmp_path):
+    from services.api.evidence_concentration import concentration, public_concentration
+    evidence_cache.clear()
+    rows = [{'order_id': f'K{i}', 'baseline_included': True, 'target_included': i >= 4, 'delta': '-10.00' if i < 4 else '0.00'}
+            for i in range(20)]
+    path, key = artifact(tmp_path, rows)
+    # The four changed records are all channel=app, region=west; the others are spread out.
+    context = {f'K{i}': {'channel': 'app' if i < 4 or i % 3 == 0 else 'web', 'region': 'west' if i < 4 or i % 5 == 0 else 'east'}
+               for i in range(20)}
+    result = concentration(path, key, lambda: None, ['channel', 'region'], context, {})
+    assert result['available'] and Decimal(result['abs_change_total']) == Decimal('40.00')
+    top_pair = result['pairs'][0]
+    assert top_pair['columns'] == ['channel', 'region'] and top_pair['values'] == ['app', 'west']
+    assert top_pair['difference_share'] == 1.0 and top_pair['changed_records'] == 4
+    assert Decimal(top_pair['change']) == Decimal('-40.00')
+    # Every listed item holds more of the difference than of the records.
+    assert all(item['difference_share'] > item['record_share'] for item in result['items'] + result['pairs'])
+    rows_in_pair, total = evidence_cache.group_page(path, key, lambda: None, 'channel', context, 'app', 0, 50,
+                                                    also=(('region', 'west', False, None),))
+    assert total == 4 and {r['order_id'] for r in rows_in_pair} == {'K0', 'K1', 'K2', 'K3'}
+    assert set(public_concentration({**result, 'secret': 'x'})) <= {'available', 'reason', 'columns', 'total_records',
+                                                                     'abs_change_total', 'ratio', 'capped', 'items', 'pairs'}
+
+
+def test_change_context_rejects_earlier_values_for_other_columns(tmp_path):
+    from services.supervisor.row_context import validate_context
+    evidence = tmp_path / 'e.jsonl'
+    evidence.write_text(json.dumps({'order_id': 'A', 'delta': '1'}) + '\n', encoding='utf-8')
+    good, bad = tmp_path / 'good.jsonl', tmp_path / 'bad.jsonl'
+    good.write_text(json.dumps({'k': 'A', 'v': {'s': 'x'}, 'b': {'s': 'y'}}) + '\n', encoding='utf-8')
+    bad.write_text(json.dumps({'k': 'A', 'v': {'s': 'x'}, 'b': {'s': 'y', 'secret': 'z'}}) + '\n', encoding='utf-8')
+    assert validate_context(good, evidence, ['s'])['row_count'] == 1
+    with pytest.raises(ValueError):
+        validate_context(bad, evidence, ['s'])

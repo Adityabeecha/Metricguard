@@ -8,6 +8,8 @@ SHA-256, is validated line-by-line against the evidence keys by the supervisor, 
 is optional (older runs simply have none).
 
 Line format: {"k": <record key>, "v": {<column>: <string|bool|null>, ...}}
+Two-load runs add "b": the earlier load's values (null when the record is new). Their "v"
+holds the later load's values, or the earlier load's for a record that was removed.
 """
 from __future__ import annotations
 
@@ -52,8 +54,9 @@ def _plain(value):
     return text[:MAX_VALUE_LENGTH]
 
 
-def _encode(key: str, values: dict) -> bytes:
-    return (json.dumps({'k': key, 'v': values}, ensure_ascii=False, allow_nan=False, separators=(',', ':')) + '\n').encode('utf-8')
+def _encode(key: str, values: dict, earlier=None, two_loads: bool = False) -> bytes:
+    item = {'k': key, 'v': values, **({'b': earlier} if two_loads else {})}
+    return (json.dumps(item, ensure_ascii=False, allow_nan=False, separators=(',', ':')) + '\n').encode('utf-8')
 
 
 def _connect(snapshot_path):
@@ -122,6 +125,55 @@ def write_flat_context(snapshot_path: Path, contract: dict, evidence, path: Path
         return _write_context(index, evidence, path, columns)
 
 
+def _collect(snapshot_path, key_column: str, columns: list[str], keys: set[str]) -> dict[str, dict]:
+    """Filter-column values of the given records, read from one frozen snapshot."""
+    quoted = ', '.join('"' + c.replace('"', '""') + '"' for c in [key_column, *columns])
+    found: dict[str, dict] = {}
+    if not keys:
+        return found
+    connection = _connect(snapshot_path)
+    try:
+        cursor = connection.execute(f'SELECT {quoted} FROM snapshot')
+        while batch := cursor.fetchmany(CONTEXT_BATCH_ROWS):
+            for row in batch:
+                key = str(row[0])
+                if key in keys:
+                    found[key] = {c: _plain(v) for c, v in zip(columns, row[1:])}
+            if len(found) == len(keys):
+                break
+    finally:
+        connection.close()
+    return found
+
+
+def write_change_context(baseline_path: Path, target_path: Path, contract: dict, evidence: list[dict], path: Path) -> dict:
+    """Runner side, two-load runs: each record's values in the later load (earlier if removed), plus the earlier values.
+
+    Two-load runs are bounded (100,000 records per load), so both lookups fit in memory.
+    """
+    columns = [c for c in contract.get('categories', [])][:MAX_CONTEXT_COLUMNS]
+    key_column = contract['row_key']
+    earlier = _collect(baseline_path, key_column, columns, {record_key(r) for r in evidence if r.get('baseline_present') is not False})
+    later = _collect(target_path, key_column, columns, {record_key(r) for r in evidence if r.get('target_present') is not False})
+    digest = hashlib.sha256()
+    count = size = 0
+    with Path(path).open('xb', buffering=1024 * 1024) as out:
+        for row in evidence:
+            key = record_key(row)
+            before = earlier.get(key) if row.get('baseline_present') is not False else None
+            after = later.get(key) if row.get('target_present') is not False else None
+            if (row.get('baseline_present') is not False and before is None) or (row.get('target_present') is not False and after is None):
+                raise ValueError('CONTEXT_INVALID')
+            line = _encode(key, after if after is not None else before, before, two_loads=True)
+            if len(line) > MAX_LINE_BYTES or size + len(line) > MAX_CONTEXT_BYTES:
+                raise ValueError('CONTEXT_LIMIT')
+            out.write(line)
+            digest.update(line)
+            size += len(line)
+            count += 1
+    return {'sha256': digest.hexdigest(), 'row_count': count, 'byte_count': size, 'columns': columns}
+
+
 def write_entity_context(snapshot_path: Path, contract: dict, entity_column: str, evidence: list[dict], path: Path) -> dict:
     """Runner side, COUNT(DISTINCT) runs: one line per entity (the evidence unit).
 
@@ -181,9 +233,12 @@ def validate_context(context_path: Path, evidence_path: Path, allowed_columns: l
             if not evidence_line or len(evidence_line) > 64 * 1024 or not evidence_line.endswith(b'\n'):
                 raise ValueError('CONTEXT_INVALID')
             item = json.loads(line)
-            if set(item) != {'k', 'v'} or item['k'] != record_key(json.loads(evidence_line)) or not isinstance(item['v'], dict):
+            if set(item) not in ({'k', 'v'}, {'k', 'v', 'b'}) or item['k'] != record_key(json.loads(evidence_line)) or not isinstance(item['v'], dict):
                 raise ValueError('CONTEXT_INVALID')
-            for name, value in item['v'].items():
+            earlier = item.get('b')
+            if earlier is not None and (not isinstance(earlier, dict) or set(earlier) - set(item['v']) or set(item['v']) - set(earlier)):
+                raise ValueError('CONTEXT_INVALID')
+            for name, value in [*item['v'].items(), *((earlier or {}).items())]:
                 if name not in allowed or not (value is None or isinstance(value, bool) or (isinstance(value, str) and len(value) <= MAX_VALUE_LENGTH)):
                     raise ValueError('CONTEXT_INVALID')
                 if name not in columns:

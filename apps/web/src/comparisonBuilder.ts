@@ -238,6 +238,9 @@ export function ratioUnavailableReason(contract: FlatContract | RelationalContra
   if ((contract as FlatContract).version === 7) {
     return 'This dataset uses a conditional total (CASE WHEN), which does not support averages or ratios. Upload a plain amount column and put the condition in the calculation filters.';
   }
+  if ((contract as FlatContract).version === 4) {
+    return 'This dataset was added before averages were supported. Use "Enable averages and ratios" on the dataset page. Your original data and cases stay unchanged.';
+  }
   return 'This dataset uses an older calculation format. Upload the same file again with "Allow filters combined with AND, OR and NOT" enabled to use averages, rates and shares.';
 }
 

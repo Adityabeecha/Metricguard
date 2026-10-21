@@ -224,7 +224,7 @@ test('dataset usage identifies saved calculations rather than governed metrics',
 });
 
 test('older and expression datasets explain the exact ratio limitation and remedy', () => {
-  assert.match(ratioUnavailableReason({version:4}), /older calculation format.*same file again/);
+  assert.match(ratioUnavailableReason({version:4}), /Enable averages and ratios.*original data and cases stay unchanged/);
   assert.match(ratioUnavailableReason({version:6}), /subtraction.*Several amount columns/);
   assert.match(ratioUnavailableReason({version:7}), /CASE WHEN.*plain amount column/);
   assert.match(ratioUnavailableReason({mode:'relational_snapshot',version:2}), /two connected tables.*one flat table/);

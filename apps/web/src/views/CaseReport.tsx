@@ -1,6 +1,8 @@
 import { resultUnit } from '../resultSummary';
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, BookmarkCheck, Copy, Download, Link2, Pencil, RefreshCw } from 'lucide-react';
+import { ArrowLeft, BookmarkCheck, Copy, Download, Link2, Pencil, Printer, RefreshCw } from 'lucide-react';
+import { CaseShareDialog } from './CaseShareDialog';
+import { CasePrintCustody } from './evidence/CasePrintCustody';
 import { SaveAsMetric } from './SaveAsMetric';
 import { api, ApiError, versionName, type Bootstrap, type InvestigationDetail, type Run } from '../api';
 import { caseNumber, KIND_LABEL } from '../investigationLibrary';
@@ -42,8 +44,15 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
   const [replaying, setReplaying] = useState(false);
   const [custodyOpen, setCustodyOpen] = useState(false);
   const [copied, setCopied] = useState<'' | 'summary' | 'link'>('');
-  const [alone, setAlone] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [canShare, setCanShare] = useState(false);
   const copyRef = useRef<() => void>(() => undefined);
+
+  useEffect(() => {
+    let active = true;
+    api.identity().then(identity => { if (active) setCanShare(!identity.verified || identity.role === 'owner' || identity.role === 'analyst'); }).catch(() => {});
+    return () => { active = false; };
+  }, [data.project.id]);
 
   // "C" copies the case summary (ignored while typing or with a modifier key).
   useEffect(() => {
@@ -102,7 +111,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
       </div>
     );
   }
-  if (!detail) return <div className="view-container" role="status">Opening investigation…</div>;
+  if (!detail) return <div className="view-container" role="status">Opening case…</div>;
 
   const ctx = detail.context as unknown as { mode?: string; unit_label?: string; currency?: string };
   const relational = ctx.mode === 'relational_snapshot';
@@ -123,7 +132,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
   const replayBlocker = !detail.replay_available ? 'The frozen dataset is no longer available, so this case cannot be replayed. The saved result stays readable.'
     : data.mode !== 'isolated' ? 'Replay needs the isolated engine (scripts\\mg.ps1 start).' : '';
 
-  const link = `${window.location.origin}/w/${encodeURIComponent(data.project.id)}/investigations/${encodeURIComponent(detail.id)}`;
+  const link = `${window.location.origin}/w/${encodeURIComponent(data.project.id)}/cases/${encodeURIComponent(detail.id)}`;
   // Replays of this case recorded on the server, plus the one running now.
   const replays = [...(data.runs || []).filter(r => r.investigation_id === detail.id && r.id !== replay?.id), ...(replay ? [replay] : [])]
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
@@ -141,15 +150,6 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
     } catch (e) { setReplayProblem(`The summary could not be copied: ${e instanceof Error ? e.message : String(e)}`); }
   };
   copyRef.current = () => { void copySummary(); };
-
-  // Copy the link; if nobody else is in the workspace, say so (the link only opens for members).
-  const share = async () => {
-    await copyText(link); setCopied('link');
-    try {
-      const members = await api.get<Array<{ revoked_at?: string | null }>>(`/projects/${encodeURIComponent(data.project.id)}/members`);
-      setAlone(members.filter(m => !m.revoked_at).length <= 1);
-    } catch { setAlone(false); }
-  };
 
   const startReplay = async () => {
     setReplaying(true); setReplayProblem('');
@@ -170,11 +170,11 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
           <button className="button secondary small" onClick={() => void copySummary()} title="Copy a summary for Slack, Jira or a pull request (shortcut: C)">
             <Copy size={15} /> Copy summary
           </button>
-          <button className="button secondary small" title="Copy a link to this case for workspace members" onClick={() => void share()}><Link2 size={15} /> Share</button>
+          {canShare && <button className="button secondary small" title="Manage public read-only case links" onClick={() => setShareOpen(true)}><Link2 size={15} /> Share</button>}
+          <button className="button secondary small" onClick={() => window.print()}><Printer size={15} /> Print / Save PDF</button>
           <button className="button secondary small" onClick={() => onEdit(relational)}><Pencil size={15} /> Edit comparison</button>
           {!relational && detail.run.result && <button className="button secondary small" onClick={() => setSavingMetric(true)} title="Make one of these calculations the approved definition of a metric"><BookmarkCheck size={15} /> Save as metric</button>}
           {copied && <span className="copied-note" role="status">{copied === 'summary' ? 'Summary copied' : 'Link copied'}</span>}
-          {alone && <span className="share-note" role="status">Only you can open this link. <a href={`/w/${encodeURIComponent(data.project.id)}/settings?tab=members`}>Invite a teammate</a></span>}
         </div>
       </div>
 
@@ -226,6 +226,8 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
       </section>
       {savingMetric && <SaveAsMetric data={data} detail={detail} onClose={() => setSavingMetric(false)}
         onSaved={async metricId => { setSavingMetric(false); await refresh(); onOpenMetric?.(metricId); }} />}
+      {shareOpen && <CaseShareDialog caseId={detail.id} memberLink={link} onClose={() => setShareOpen(false)} />}
+      <div className="print-only print-custody"><CasePrintCustody detail={detail} replays={replays} /></div>
       {custodyOpen && (
         <CustodyLog detail={detail} replays={replays} live={replay} replaying={replaying} blocker={replayBlocker}
           onReplay={() => void startReplay()} onClose={() => setCustodyOpen(false)} />

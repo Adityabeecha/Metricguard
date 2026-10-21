@@ -165,6 +165,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
     durable.configure(durable.from_environment(data_dir))
     from .relational_routes import install_relational_routes
     install_relational_routes(app, store, data_dir, execution_mode, resolve_project_id)
+    from .dataset_upgrade import register_routes as register_dataset_upgrade_routes
+    register_dataset_upgrade_routes(app, store, data_dir, execution_mode)
     hosting = hosting_settings()
     from .oauth import install_oauth_routes
     install_oauth_routes(app, store, data_dir, secure_cookies=hosting['secure_cookies'])
@@ -727,6 +729,29 @@ def create_app(database_url=None, data_dir=None, mode=None):
         verify_object_access(store, item, auth, allowed_roles=('owner', 'analyst'))
         return store.record_definition(**body.model_dump(mode='json'), definition_id=ident, project_id=item.get('project_id'))['versions'][-1]
 
+    @app.get('/api/v1/definitions/usage')
+    def definition_usage(request: Request):
+        auth = get_auth_context(request, store)
+        pid = resolve_project_id(request, auth, store=store)
+        verify_project_access(store, pid, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        from .calculation_management import calculation_usage
+        return calculation_usage(store, pid)
+
+    @app.patch('/api/v1/definitions/{ident}')
+    async def rename_definition_route(ident: str, request: Request):
+        auth = get_auth_context(request, store)
+        verify_object_access(store, store.definition(ident), auth, allowed_roles=('owner', 'analyst'))
+        body = await request.json()
+        from .calculation_management import rename_calculation
+        return rename_calculation(store, ident, body.get('name') if isinstance(body, dict) else None)
+
+    @app.delete('/api/v1/definitions/{ident}')
+    def delete_definition_route(ident: str, request: Request):
+        auth = get_auth_context(request, store)
+        verify_object_access(store, store.definition(ident), auth, allowed_roles=('owner', 'analyst'))
+        from .calculation_management import delete_calculation
+        return delete_calculation(store, ident)
+
     @app.get('/api/v1/definitions/{ident}')
     @app.get('/api/v1/definitions/{ident}/history')
     def history(ident: str, request: Request):
@@ -1125,7 +1150,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             raise DomainError('FORBIDDEN', 'Baseline, target, and snapshot must belong to the same project.', 403)
         if (snapshot.get('execution_policy') != 'flat_snapshot_v1' or
                 any(version.get('execution_policy') != 'flat_snapshot_v1' for version in (a, b))):
-            raise DomainError('POLICY_MISMATCH', 'Both definitions and the snapshot must use flat-snapshot policy v1.')
+            raise DomainError('POLICY_MISMATCH', 'Choose two calculations linked to this dataset. Add the SQL again for this dataset if it is not linked.')
         contract_hash = snapshot.get('contract_hash')
         if (not contract_hash or any(version.get('contract_hash') != contract_hash for version in (a, b)) or
                 payload['context']['contract_hash'] != contract_hash):
@@ -1143,7 +1168,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 for version in (a, b):
                     check_case_ir(version['ir'], flat_contract)
             except (CoreError, KeyError, TypeError, ValueError) as error:
-                raise DomainError('NOT_COMPARABLE', 'CASE definitions must match the frozen v7 contract and execution policy.', 422) from error
+                raise DomainError('NOT_COMPARABLE', 'Choose conditional calculations linked to this same dataset, or add the SQL again for this dataset.', 422) from error
         elif flat_contract.get('version') == 6:
             if (a['ir'].get('measure_expression') != b['ir'].get('measure_expression') or
                     a['ir'].get('measure_expression') != snapshot['manifest']['contract'].get('measure_expression')):
@@ -1248,6 +1273,9 @@ def create_app(database_url=None, data_dir=None, mode=None):
         return {'baseline_version_id': body.version_id, 'target_version_id': body.version_id,
                 'snapshot_id': body.baseline_snapshot_id, 'target_snapshot_id': body.target_snapshot_id,
                 'context': context, 'relationship': 'candidate'}
+
+    from .load_checks import install_load_check_routes
+    install_load_check_routes(app, store, resolve_project_id, validated_snapshot_change, execution_mode)
 
     def _snapshot_change_access(body, request, roles):
         auth = get_auth_context(request, store)
@@ -1561,13 +1589,22 @@ def create_app(database_url=None, data_dir=None, mode=None):
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        return read_evidence(run, offset=offset, limit=limit, changed_only=changed_only, q=q, order=order,
+                             with_context=with_context, category=category)
+
+    def read_evidence(run, offset=0, limit=100, changed_only=False, q='', order='file', with_context=False, category=''):
         page = evidence_page(run, offset, limit, changed_only=changed_only, query=q, order=order, category=category)
         page['items'] = evidence_cache.annotate_ratio(page['items'], (run.get('result') or {}).get('ratio'))
-        if with_context:
-            context, _ = run_context(run)
-            if context is not None or run.get('execution_policy') == 'relational_snapshot_v1':
-                page['items'] = [{**row, 'context': evidence_cache.row_values(row, context)} for row in page['items']]
+        if with_context and page.get('items'):
+            page['items'] = with_record_context(run, page['items'])
         return page
+
+    def with_record_context(run, items):
+        """Each record's filter-column values (two-load runs: in each load), when the run stored them."""
+        context, _ = run_context(run)
+        if context is None and run.get('execution_policy') != 'relational_snapshot_v1':
+            return items
+        return [{**row, **evidence_cache.context_view(row, context)} for row in items]
 
     def expired_details(run):
         if run.get('evidence_state') == 'expired':
@@ -1616,6 +1653,9 @@ def create_app(database_url=None, data_dir=None, mode=None):
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        return read_breakdown(run, column=column, top=top)
+
+    def read_breakdown(run, column='', top=50):
         if expired_details(run):
             return expired_details(run)
         result = run.get('result') or {}
@@ -1633,8 +1673,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             if excluded:
                 reason = 'No column has a single value per counted item, so no exact breakdown exists.'
             elif (run.get('context') or {}).get('comparison') == 'snapshot_change':
-                # Two-load runs never write record details (by design), so a rerun would not help.
-                reason = "Breakdowns aren't available for comparisons between two data loads yet."
+                reason = 'This comparison was run before two-load breakdowns existed. Replay it to enable them.'
             elif (store.evidence_context(run['id'], run.get('attempt', 1)) or {}).get('status') == 'unavailable':
                 reason = "Breakdown isn't available for this run (the record details could not be saved). Rerun to try again."
             else:
@@ -1663,37 +1702,82 @@ def create_app(database_url=None, data_dir=None, mode=None):
     @app.get('/api/v1/comparisons/{ident}/evidence-group')
     def evidence_group(ident: str, request: Request, column: str = Query(..., min_length=1, max_length=200),
                        value: str = Query('null', max_length=2000), no_match: bool = Query(False),
-                       q: str = Query('', max_length=256), offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100)):
+                       q: str = Query('', max_length=256), offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100),
+                       column2: str = Query('', max_length=200), value2: str = Query('null', max_length=2000),
+                       no_match2: bool = Query(False), with_context: bool = Query(False)):
         """The changed records of one breakdown group (click-through from 'Where it sits'), largest first.
 
         ``value`` is the group's value as JSON, exactly as the breakdown returned it (null for blank).
+        ``column2``/``value2`` narrow it to a two-column combination from the concentration list.
         """
         auth = get_auth_context(request, store)
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        return read_group(run, column=column, value=value, no_match=no_match, q=q, offset=offset, limit=limit,
+                          column2=column2, value2=value2, no_match2=no_match2, with_context=with_context)
+
+    def read_group(run, column, value='null', no_match=False, q='', offset=0, limit=100,
+                   column2='', value2='null', no_match2=False, with_context=False):
         if expired_details(run):
             return expired_details(run)
         result = run.get('result') or {}
         if not result.get('evidence_artifact'):
             raise DomainError('EVIDENCE_UNAVAILABLE', 'This run has no stored record evidence.')
         context, columns = run_context(run)
-        if column not in columns:
-            raise DomainError('INVALID_COLUMN', f"'{column}' is not a filter column of this dataset.")
-        try:
-            wanted = json.loads(value)
-        except ValueError as error:
-            raise DomainError('INVALID_VALUE', 'The group value is not valid.') from error
-        if isinstance(wanted, (dict, list)):
-            raise DomainError('INVALID_VALUE', 'The group value is not valid.')
+
+        def parsed(name, text):
+            if name not in columns:
+                raise DomainError('INVALID_COLUMN', f"'{name}' is not a filter column of this dataset.")
+            try:
+                wanted = json.loads(text)
+            except ValueError as error:
+                raise DomainError('INVALID_VALUE', 'The group value is not valid.') from error
+            if isinstance(wanted, (dict, list)):
+                raise DomainError('INVALID_VALUE', 'The group value is not valid.')
+            return wanted
+
+        wanted = parsed(column, value)
+        bucket = lambda name: 'day' if column_type(run, name) == 'timestamp' else None
+        also = ((column2, parsed(column2, value2), no_match2, bucket(column2)),) if column2 else ()
         path, key, verify_all = evidence_access(run)
-        bucket = 'day' if column_type(run, column) == 'timestamp' else None
         try:
             items, total = evidence_cache.group_page(path, key, verify_all, column, context, wanted, offset, limit,
-                                                     no_match=no_match, bucket=bucket, query=q)
+                                                     no_match=no_match, bucket=bucket(column), query=q, also=also)
         except (ValueError, KeyError, TypeError, OSError) as error:
             raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
-        return {'items': evidence_cache.annotate_ratio(items, result.get('ratio')), 'total': total, 'offset': offset, 'limit': limit}
+        items = evidence_cache.annotate_ratio(items, result.get('ratio'))
+        if with_context and items:
+            items = with_record_context(run, items)
+        return {'items': items, 'total': total, 'offset': offset, 'limit': limit}
+
+    @app.get('/api/v1/comparisons/{ident}/evidence-concentration')
+    def evidence_concentration_route(ident: str, request: Request):
+        """Values and two-column combinations that hold far more of the difference than of the records."""
+        auth = get_auth_context(request, store)
+        run = store.get_run(ident)
+        verify_shared_access(request, store, auth, run)
+        verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        return read_concentration(run)
+
+    def read_concentration(run):
+        if expired_details(run):
+            return expired_details(run)
+        result = run.get('result') or {}
+        if not result.get('evidence_artifact'):
+            return {'available': False, 'reason': 'This run has no stored record evidence.', 'items': [], 'pairs': []}
+        if result.get('aggregate') == 'count_distinct':
+            return {'available': False, 'reason': 'Distinct counts are split per value in "Where it sits" only.', 'items': [], 'pairs': []}
+        context, columns = run_context(run)
+        if not columns:
+            return {'available': False, 'reason': 'This comparison has no stored record columns.', 'items': [], 'pairs': []}
+        from .evidence_concentration import concentration
+        path, key, verify_all = evidence_access(run)
+        buckets = {c: ('day' if column_type(run, c) == 'timestamp' else None) for c in columns}
+        try:
+            return concentration(path, key, verify_all, columns, context, buckets, ratio=result.get('ratio'))
+        except (ValueError, KeyError, TypeError, OSError) as error:
+            raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
 
     @app.get('/api/v1/comparisons/{ident}/entity-records')
     def entity_records(ident: str, request: Request, entity: str = Query(..., max_length=256),
@@ -1703,6 +1787,9 @@ def create_app(database_url=None, data_dir=None, mode=None):
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        return read_entity_records(run, entity=entity, offset=offset, limit=limit)
+
+    def read_entity_records(run, entity, offset=0, limit=500):
         if expired_details(run):
             return expired_details(run)
         result = run.get('result') or {}
@@ -1741,6 +1828,9 @@ def create_app(database_url=None, data_dir=None, mode=None):
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
+        return read_evidence_summary(run)
+
+    def read_evidence_summary(run):
         if expired_details(run):
             return expired_details(run)
         result = run.get('result') or {}
@@ -2415,6 +2505,11 @@ def create_app(database_url=None, data_dir=None, mode=None):
         verify_project_access(store, pid, auth, allowed_roles=('owner', 'analyst', 'reader'))
         return store.list_extractions(pid)
 
+    from .case_shares import install_case_share_routes
+    install_case_share_routes(app, store, {
+        'evidence': read_evidence, 'evidence-summary': read_evidence_summary, 'evidence-breakdown': read_breakdown,
+        'evidence-group': read_group, 'evidence-concentration': read_concentration, 'entity-records': read_entity_records})
+
     web_dist = ROOT / 'apps/web/dist'
     if web_dist.is_dir():
         index_file = web_dist / 'index.html'
@@ -2429,6 +2524,10 @@ def create_app(database_url=None, data_dir=None, mode=None):
         @app.get('/w/{path:path}')
         def spa_fallback(path: str):
             return FileResponse(index_file)
+
+        @app.get('/shared-cases/{token}')
+        def shared_case_spa(token: str):
+            return FileResponse(index_file, headers={'Referrer-Policy':'no-referrer', 'Cache-Control':'no-store', 'X-Robots-Tag':'noindex, nofollow'})
 
         web_files = StaticFiles(directory=web_dist, html=True)
 

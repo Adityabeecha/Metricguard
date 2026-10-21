@@ -1,6 +1,7 @@
 import { groupDigits } from './resultSummary';
 export type Version={id:string;definition_id:string;version_number:number;raw_sql:string;bound_sql?:string|null;time_column:string|null;source_time_column?:string|null;mapping_id?:string|null;contract_hash?:string|null;mapping_hash?:string|null;support_state:string;support_reason:string|null;raw_hash:string;ir_hash:string|null;ir:Record<string,unknown>|null;observed_at:string;source_changed_at?:string|null;effective_from?:string|null;change_kind:string};
 export type Definition={id:string;name:string;source_label:string;owner_label:string;versions:Version[]};
+export type DefinitionUsage={definition_id:string;used_by:Array<{kind:string;id:string;name:string}>;retained:boolean;can_delete:boolean};
 export type Snapshot={id:string;name:string;row_count:number;manifest_hash:string;source_hash:string;contract_hash?:string|null;mapping_hash?:string|null;currency:string;timezone:string;scope:string;grain:string;cutoff_at:string;schema?:Record<string,string>|null;status:string;created_at:string;preparation_manifest_hash?:string;preparation?:Record<string,unknown>;manifest?:Record<string,unknown>;execution_policy?:string;unit_label?:string|null};
 export type SnapshotImport={id:string;name:string;source_hash:string;metadata:Record<string,string>;state:string;attempt:number;created_at:string;completed_at:string|null;snapshot_id:string|null;error:{code:string;message:string}|null};
 export type Candidate={left_definition_id:string;right_definition_id:string;left_version_id:string;right_version_id:string;score:number;reasons:string[];cautions:string[];review_status:string;review_id:string|null};
@@ -23,6 +24,9 @@ export type DatasetContract={id:string;version:2;version_number:number;name:stri
 export type ColumnMapping={id:string;contract_id:string;version_number:number;columns:Record<string,string>;contract_hash:string;mapping_hash:string;created_at:string};
 export type Investigation={id:string;title:string;decision:string;actor_label:string;run_id:string;snapshot_id:string;baseline_version_id:string;target_version_id:string;context:Context;relationship:string;review_status:string;created_at:string};
 export type InvestigationDetail=Investigation&{record_type?:'investigation'|'draft';is_draft?:boolean;snapshot:Snapshot;run:Run;baseline_version:Version;target_version:Version;replay_available:boolean};
+/** Explicit public case payload: no actor, workspace, credentials, or storage locations. */
+export type PublicCaseDetail=Pick<InvestigationDetail,'id'|'title'|'decision'|'created_at'|'context'|'relationship'|'run_id'|'snapshot_id'|'baseline_version_id'|'target_version_id'|'snapshot'|'run'|'baseline_version'|'target_version'> & {workspace_name:string};
+export type CaseShare={id:string;created_at:string;expires_at:string|null;revoked_at:string|null};
 export type DatasetPreview={row_count?:number;headers:string[];declared_types:Record<string,string|null>;observed_types:Record<string,string>;sample_rows:Array<Record<string,string|null>>;source_hash:string;
   /** Excel only: the first worksheet's name and its converted CSV's first lines (bounded). */
   source_format?:'xlsx';sheet_name?:string;csv_head?:string};
@@ -87,7 +91,7 @@ export type Workspace={id:string;name:string;role?:'owner'|'analyst'|'reader'|nu
 export type MetricBinding={id:string;project_id:string;metric_id:string;definition_id:string;status:'active'|'candidate'|'retired';approved_version_id?:string|null;activated_at?:string|null;retired_at?:string|null;created_at:string;data?:Record<string,unknown>};
 export type MetricStateTransition={id:string;project_id:string;metric_id:string;transition_kind:string;definition_id:string;approved_version_id?:string|null;previous_definition_id?:string|null;previous_approved_version_id?:string|null;comparison_run_id?:string|null;review_decision_id?:string|null;actor_id?:string|null;metadata:Record<string,unknown>;created_at:string};
 export type ExternalMetricReference={id:string;project_id:string;metric_id:string;provider:string;external_id:string;created_at:string;data?:Record<string,unknown>};
-export type MetricItem={id:string;project_id:string;display_name:string;importance:'critical'|'important'|'standard'|'unclassified';created_at:string;active_binding?:{definition_id:string;approved_version_id?:string;status:string}|null;data?:Record<string,unknown>};
+export type MetricItem={candidate_count?:number;id:string;project_id:string;display_name:string;importance:'critical'|'important'|'standard'|'unclassified';created_at:string;active_binding?:{definition_id:string;approved_version_id?:string;status:string}|null;data?:Record<string,unknown>};
 export type MetricContractExpectationsV1 = {
   schema_version: 1;
   owner_label: string;
@@ -520,6 +524,26 @@ export type ColumnValues = {
   values: Array<{ value: string; count: number }>;
 };
 
+/** One 'Where it sits' group, or a two-column combination from the concentration list. */
+export type EvidenceGroupView = { column: string; value: unknown; noMatch?: boolean; column2?: string; value2?: unknown; noMatch2?: boolean;
+  withContext?: boolean; q?: string; offset: number; limit: number };
+export function evidenceGroupParams(view: EvidenceGroupView): URLSearchParams {
+  const params = new URLSearchParams({ column: view.column, value: JSON.stringify(view.value ?? null), offset: String(view.offset), limit: String(view.limit) });
+  if (view.noMatch) params.set('no_match', 'true');
+  if (view.column2) {
+    params.set('column2', view.column2);
+    params.set('value2', JSON.stringify(view.value2 ?? null));
+    if (view.noMatch2) params.set('no_match2', 'true');
+  }
+  if (view.withContext) params.set('with_context', 'true');
+  if (view.q?.trim()) params.set('q', view.q.trim());
+  return params;
+}
+export type ConcentrationItem = { columns: string[]; values: Array<string | boolean | null>; no_match?: boolean[]; records: number; changed_records: number;
+  change: string | null; change_exact?: string | null; difference_share: number; record_share: number; lift?: number | null };
+export type EvidenceConcentration = { available: boolean; reason?: string; columns?: string[]; total_records?: number; abs_change_total?: string;
+  ratio?: boolean; capped?: string[]; items: ConcentrationItem[]; pairs: ConcentrationItem[] };
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
@@ -770,12 +794,9 @@ export const api = {
     return request<{ items: FlatEvidence[]; total: number }>(`/comparisons/${encodeURIComponent(id)}/evidence?${params}`);
   },
   /** Changed records of one 'Where it sits' group; `value` is the group's value exactly as the breakdown returned it. */
-  evidenceGroup: (id: string, view: { column: string; value: unknown; noMatch?: boolean; q?: string; offset: number; limit: number }) => {
-    const params = new URLSearchParams({ column: view.column, value: JSON.stringify(view.value ?? null), offset: String(view.offset), limit: String(view.limit) });
-    if (view.noMatch) params.set('no_match', 'true');
-    if (view.q?.trim()) params.set('q', view.q.trim());
-    return request<{ items: FlatEvidence[]; total: number }>(`/comparisons/${encodeURIComponent(id)}/evidence-group?${params}`);
-  },
+  evidenceGroup: (id: string, view: EvidenceGroupView) =>
+    request<{ items: FlatEvidence[]; total: number }>(`/comparisons/${encodeURIComponent(id)}/evidence-group?${evidenceGroupParams(view)}`),
+  evidenceConcentration: (id: string) => request<EvidenceConcentration>(`/comparisons/${encodeURIComponent(id)}/evidence-concentration`),
   flatEvidence: (id: string, offset: number, limit: number) =>
     request<{ items: FlatEvidence[]; total: number }>(
       `/comparisons/${encodeURIComponent(id)}/evidence?offset=${offset}&limit=${limit}`
@@ -893,6 +914,9 @@ export const api = {
       }
     );
   },
+  definitionUsage: (projectId: string) => request<{items: DefinitionUsage[]}>(`/definitions/usage?project_id=${encodeURIComponent(projectId)}`),
+  renameDefinition: (id: string, name: string) => request<Definition>(`/definitions/${encodeURIComponent(id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})}),
+  deleteDefinition: (id: string) => request<{deleted: boolean; id: string}>(`/definitions/${encodeURIComponent(id)}`, {method:'DELETE'}),
   renameSnapshot: (id: string, name: string) =>
     request<Snapshot>(`/snapshots/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }),
   deleteSnapshot: (id: string) =>

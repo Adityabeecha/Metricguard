@@ -1,18 +1,21 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { api, type ChangeCategory, type Evidence, type FlatEvidence, type RelationalEvidence } from '../../api';
+import { type ChangeCategory, type Evidence, type FlatEvidence, type RelationalEvidence } from '../../api';
 import { groupDigits } from '../../resultSummary';
 import { runningTotals } from '../../exactDecimal';
 import { categoryLabel, type CategoryKey } from './categories';
+import { RecordContext } from './RecordContext';
+import { workspaceEvidenceClient, type EvidenceDataClient } from './evidenceClient';
 
 type Row = Evidence & Partial<FlatEvidence> & Partial<RelationalEvidence>;
 const keyOf = (row: Row) => row.fact_key ?? row.row_key ?? row.order_id ?? '—';
 const minus = (text: string) => text.replace(/^-/, '−');
 
 /** A 'Where it sits' group the ledger is narrowed to. */
-export type LedgerGroup = { column: string; columnLabel: string; value: unknown; noMatch?: boolean; label: string; totalText: string };
+export type LedgerGroup = { column: string; columnLabel: string; value: unknown; noMatch?: boolean; label: string; totalText: string; column2?:string;value2?:unknown;noMatch2?:boolean };
 
 export type LedgerProps = {
   runId: string;
+  evidenceClient?:EvidenceDataClient;
   group?: LedgerGroup | null;
   onClearGroup?: () => void;
   categories: ChangeCategory[];
@@ -35,6 +38,7 @@ export type LedgerProps = {
 
 /** Exhibit A (docs/design/evidence-ui-spec.md §3): the records that explain the difference, as a ruled ledger. */
 export function Ledger(props: LedgerProps) {
+  const client=props.evidenceClient||workspaceEvidenceClient;
   const { runId, categories, category, onCategory, labels, keyHeader, side, change, additive, group } = props;
   const [limit, setLimit] = useState(10);
   const [search, setSearch] = useState('');
@@ -50,14 +54,14 @@ export function Ledger(props: LedgerProps) {
     let active = true;
     setBusy(true); setProblem('');
     const load = group
-      ? api.evidenceGroup(runId, { column: group.column, value: group.value, noMatch: group.noMatch, q: query, offset: 0, limit })
-      : api.evidenceView(runId, { offset: 0, limit, changedOnly: true, order: 'impact', category: category || undefined, q: query });
+      ? client.evidenceGroup(runId, { column: group.column, value: group.value, noMatch: group.noMatch, column2:group.column2,value2:group.value2,noMatch2:group.noMatch2, withContext:true, q: query, offset: 0, limit })
+      : client.evidenceView(runId, { offset: 0, limit, changedOnly: true, order: 'impact', category: category || undefined, q: query,withContext:true });
     load
       .then(res => { if (active) { setRows(res.items as Row[]); setTotal(res.total); } })
       .catch(e => { if (active) setProblem(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
-  }, [runId, category, limit, group, query]);
+  }, [runId, category, limit, group, query,client]);
 
   const allCount = categories.reduce((n, c) => n + c.records, 0);
   // A running total only adds up over the full, unsearched list.
@@ -99,7 +103,7 @@ export function Ledger(props: LedgerProps) {
         <tbody>
           {rows.map((r, i) => (
             <tr key={keyOf(r)}>
-              <td className="key" data-label={keyHeader}>{keyOf(r)}</td>
+              <td className="key" data-label={keyHeader}>{keyOf(r)}<RecordContext row={r} loads={labels.loads} /></td>
               <td className="move" data-label={labels.loads ? 'Earlier load → Later load' : 'Current → Proposed'}>
                 <span className={`was${leaves(r) ? ' left' : ''}`}>{side(r, 'baseline')}</span>
                 <span className="arrow" aria-label="becomes">→</span>

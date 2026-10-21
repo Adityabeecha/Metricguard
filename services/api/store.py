@@ -21,6 +21,8 @@ from services import durable
 
 class DomainError(Exception):
     def __init__(self, code, message, status=422):
+        from packages.metricguard_core.public_errors import plain_error_message
+        message = plain_error_message(message)
         super().__init__(message)
         self.code, self.message, self.status = code, message, status
 
@@ -1994,6 +1996,8 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                 results.append({
                     **dict(r),
                     'active_binding': dict(active) if active else None,
+                    'candidate_count': conn.execute(select(func.count()).select_from(metric_definition_bindings).where(
+                        metric_definition_bindings.c.metric_id == r['id'], metric_definition_bindings.c.status == 'candidate')).scalar_one(),
                 })
             return results
 

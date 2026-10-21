@@ -83,19 +83,25 @@ export function breakdownSharePercent(lead: BreakdownLead): string {
   return ((numerator * 200n + denominator) / (denominator * 2n)).toString();
 }
 
-/** Preferred filter first; otherwise compare each column's largest supported group share. */
+/** Filter columns remain selectable, but usually only restate the calculation. */
+export function nonFilterBreakdownColumns(columns:string[],filters:string[]):string[] {
+  return columns.filter(column=>!filters.some(filter=>filter.includes('.') ? filter===column : column.split('.').pop()===filter));
+}
+
+/** Compare the most concentrated non-filter columns, bounded to eight candidates. */
 export async function loadSummaryBreakdown(
-  load: (column?: string, top?: number) => Promise<EvidenceBreakdown>, preferred: string[],
+  load: (column?: string, top?: number) => Promise<EvidenceBreakdown>, preferred: string[],rankedColumn?:string,
 ): Promise<EvidenceBreakdown | null> {
   const first = await load(undefined, 1);
   if (!first.available) return null;
-  const wanted = preferredBreakdownColumn(first.columns || [], preferred);
-  if (wanted) return wanted === first.column ? first : load(wanted, 1);
-  const others = await Promise.all([...new Set(first.columns || [])].filter(column => column !== first.column)
+  if(rankedColumn && first.columns.includes(rankedColumn)) return rankedColumn===first.column ? first : load(rankedColumn,1);
+  const unrelated=nonFilterBreakdownColumns(first.columns||[],preferred);
+  const candidates=(unrelated.length ? unrelated : [...new Set(first.columns||[])]).slice(0,8);
+  const others = await Promise.all(candidates.filter(column => column !== first.column)
     .map(column => load(column, 1)));
   let selected: EvidenceBreakdown | null = null;
   let best: BreakdownLead | null = null;
-  for (const candidate of [first, ...others]) {
+  for (const candidate of [...(candidates.includes(first.column||'') ? [first] : []), ...others]) {
     const lead = breakdownLead(candidate);
     if (lead && (!best || greater(lead.share, best.share))) { selected = candidate; best = lead; }
   }

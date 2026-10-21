@@ -915,7 +915,7 @@ class TestDbtIntegration:
         with pytest.raises(DomainError) as exc:
             resolve_version(store, 'dbt:model.test.cte_model', pid)
         assert exc.value.code == 'UNSUPPORTED_CONSTRUCT'
-        assert 'metadata_only' in exc.value.message
+        assert 'Add the SQL again for the chosen dataset' in exc.value.message
 
     def test_dbt_anchor_appears_in_report(self, workspace):
         """When a dbt resource revision is attached, the report includes it."""

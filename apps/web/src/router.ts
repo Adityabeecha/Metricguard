@@ -25,7 +25,7 @@ export function parseRoute(pathname: string, search: string = '', defaultWorkspa
     const subId = match[3];
     let page: Page = 'dashboard';
     let tab = query.tab;
-    if (subId && !['metrics', 'changes', 'investigations'].includes(rawPage)) {
+    if (subId && !['metrics', 'changes', 'investigations', 'cases'].includes(rawPage)) {
       return { workspaceId, page, query, rawPath: clean, notFound: true };
     }
 
@@ -35,7 +35,7 @@ export function parseRoute(pathname: string, search: string = '', defaultWorkspa
     if (rawPage === 'changes' && subId && !query.changeId) {
       query.changeId = subId;
     }
-    if (rawPage === 'investigations' && subId && !query.investigationId) {
+    if (['investigations', 'cases'].includes(rawPage) && subId && !query.investigationId) {
       query.investigationId = subId;
     }
 
@@ -62,6 +62,7 @@ export function parseRoute(pathname: string, search: string = '', defaultWorkspa
         page = 'start';
         break;
       case 'investigations':
+      case 'cases':
       case 'compare':
         page = 'investigations';
         break;
@@ -106,6 +107,7 @@ export function parseRoute(pathname: string, search: string = '', defaultWorkspa
   switch (legacySeg) {
     case 'compare':
     case 'investigations':
+    case 'cases':
       page = 'investigations';
       break;
     case 'flat':
@@ -155,12 +157,17 @@ export function parseRoute(pathname: string, search: string = '', defaultWorkspa
   return { workspaceId: defaultWorkspaceId, page, tab, query, rawPath: clean };
 }
 
-export type SitePage = 'home' | 'signin' | 'signup' | 'privacy' | 'terms' | 'demo' | 'workspace' | 'not-found';
+export type SitePage = 'home' | 'signin' | 'signup' | 'privacy' | 'terms' | 'demo' | 'shared-case' | 'workspace' | 'not-found';
+
+export function sharedCaseToken(pathname: string): string | null {
+  return pathname.replace(/\/+$/, '').match(/^\/shared-cases\/([A-Za-z0-9_-]{43,128})$/)?.[1] || null;
+}
 
 /** Public routes never mount workspace components or fetch their data. */
 export function sitePage(pathname: string): SitePage {
   const clean = pathname.replace(/\/+$/, '') || '/';
   if (clean === '/') return 'home';
+  if (sharedCaseToken(clean)) return 'shared-case';
   if (/^\/demo(\/mg-f3a3)?$/i.test(clean)) return 'demo';
   if (clean === '/signin' || clean === '/signup' || clean === '/privacy' || clean === '/terms') {
     return clean.slice(1) as SitePage;
@@ -175,7 +182,7 @@ export function homeRedirect(identity: { verified?: boolean; home_workspace_id?:
 }
 
 export function buildRouteUrl(workspaceId: string, page: Page, tab?: string, query?: Record<string, string>): string {
-  let url = `/w/${encodeURIComponent(workspaceId)}/${page}`;
+  let url = `/w/${encodeURIComponent(workspaceId)}/${page === 'investigations' ? 'cases' : page}`;
   if (page === 'metrics' && query?.metricId) {
     url += `/${encodeURIComponent(query.metricId)}`;
   } else if (page === 'changes' && query?.changeId) {

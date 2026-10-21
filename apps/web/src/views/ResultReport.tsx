@@ -1,6 +1,6 @@
 import { evidenceCountLabel, twoLoadCountNotes, evidenceSealLabel } from './evidence/evidencePresentation';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api, type DistinctSummary, type EntityRecords, type EvidenceBreakdown, type Evidence, type EvidenceSummary, type FlatEvidence, type RatioBlock, type RelationalEvidence, type RelationalRun, type Result, type Run, type Snapshot, type Version } from '../api';
+import { api, type ConcentrationItem, type DistinctSummary, type EvidenceConcentration, type EntityRecords, type EvidenceBreakdown, type Evidence, type EvidenceSummary, type FlatEvidence, type RatioBlock, type RelationalEvidence, type RelationalRun, type Result, type Run, type Snapshot, type Version } from '../api';
 import { resultUnit, fractionDisplay, groupDigits, percentOf, summarizeResult, type RecordDelta } from '../resultSummary';
 import { RelationalEvidencePanel } from './RelationalEvidencePanel';
 import { caseNumber } from '../investigationLibrary';
@@ -10,6 +10,10 @@ import { Ledger, type LedgerGroup } from './evidence/Ledger';
 import { categoryLabel, type CategoryKey } from './evidence/categories';
 import { HashPrint } from './evidence/HashPrint';
 import { groupShare, preferredBreakdownColumn } from './evidence/breakdownSelection';
+import { recordConcentrationLine } from './evidence/recordConcentration';
+import { SqlComparison } from './evidence/SqlComparison';
+import { RecordContext } from './evidence/RecordContext';
+import { workspaceEvidenceClient, type EvidenceDataClient } from './evidence/evidenceClient';
 
 const PAGE = 100;
 
@@ -17,7 +21,7 @@ type AnyEvidence = Evidence & Partial<FlatEvidence> & Partial<RelationalEvidence
 const recordKey = (row: AnyEvidence) => row.fact_key ?? row.row_key ?? row.order_id ?? '—';
 
 /** Server-computed change summary (exact counts across every record) for one run. */
-export function useEvidenceSummary(run: Run | RelationalRun | null) {
+export function useEvidenceSummary(run: Run | RelationalRun | null,client:EvidenceDataClient=workspaceEvidenceClient) {
   const [summary, setSummary] = useState<EvidenceSummary | null>(null);
   const [problem, setProblem] = useState('');
   const expired = run?.evidence_state === 'expired';
@@ -26,16 +30,16 @@ export function useEvidenceSummary(run: Run | RelationalRun | null) {
     if (!runId) { setSummary(null); setProblem(expired ? 'Detailed records expired — rerun to see them' : ''); return; }
     let active = true;
     setProblem(''); setSummary(null);
-    api.evidenceSummary(runId)
+    client.evidenceSummary(runId)
       .then(s => { if (active) setSummary(s); })
       .catch(e => { if (active) setProblem(e instanceof Error ? e.message : String(e)); });
     return () => { active = false; };
-  }, [runId, expired]);
+  }, [runId, expired,client]);
   return { summary, problem };
 }
 
 /** One page of a filtered/sorted record view, fetched from the server. */
-function useRecordPage(runId: string, view: { offset: number; changedOnly: boolean; q: string; order: 'file' | 'impact'; withContext: boolean }) {
+function useRecordPage(runId: string, view: { offset: number; changedOnly: boolean; q: string; order: 'file' | 'impact'; withContext: boolean },client:EvidenceDataClient) {
   const [rows, setRows] = useState<AnyEvidence[]>([]);
   const [total, setTotal] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -45,13 +49,13 @@ function useRecordPage(runId: string, view: { offset: number; changedOnly: boole
     let active = true;
     setBusy(true); setProblem('');
     const timer = setTimeout(() => {
-      api.evidenceView(runId, { ...view, limit: PAGE })
+      client.evidenceView(runId, { ...view, limit: PAGE })
         .then(res => { if (active) { setRows(res.items as AnyEvidence[]); setTotal(res.total); } })
         .catch(e => { if (active) setProblem(e instanceof Error ? e.message : String(e)); })
         .finally(() => { if (active) setBusy(false); });
     }, view.q ? 250 : 0);
     return () => { active = false; clearTimeout(timer); };
-  }, [runId, view.offset, view.changedOnly, view.q, view.order, view.withContext]);
+  }, [runId, view.offset, view.changedOnly, view.q, view.order, view.withContext,client]);
   return { rows, total, busy, problem };
 }
 
@@ -137,7 +141,7 @@ function DistinctPanel({ distinct }: { distinct: DistinctSummary }) {
 }
 
 /** The records behind one counted value, loaded on demand. */
-function EntityRecordsButton({ runId, entity }: { runId: string; entity: string }) {
+function EntityRecordsButton({ runId, entity,client }: { runId: string; entity: string;client:EvidenceDataClient }) {
   const [data, setData] = useState<EntityRecords | null>(null);
   const [problem, setProblem] = useState('');
   const [open, setOpen] = useState(false);
@@ -148,11 +152,11 @@ function EntityRecordsButton({ runId, entity }: { runId: string; entity: string 
     if (!open) return;
     let active = true;
     setBusy(true); setProblem('');
-    api.entityRecords(runId, entity, offset).then(d => { if (active) setData(d); })
+    client.entityRecords(runId, entity, offset).then(d => { if (active) setData(d); })
       .catch(e => { if (active) setProblem(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
-  }, [runId, entity, open, offset, retry]);
+  }, [runId, entity, open, offset, retry,client]);
   return (
     <div>
       <button type="button" className="button secondary small" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? 'Hide records' : 'Show records'}</button>
@@ -174,21 +178,32 @@ function EntityRecordsButton({ runId, entity }: { runId: string; entity: string 
 }
 
 /** Exact split of the change by one filter column, largest first. */
-function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, onPickGroup }: { runId: string; unit: string; percent?: boolean; onColumns: (c: string[]) => void; preferred?: string[] ; loads?: boolean; onPickGroup?: (group: LedgerGroup) => void }) {
+function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, onPickGroup, client = workspaceEvidenceClient }: { runId: string; unit: string; percent?: boolean; onColumns: (c: string[]) => void; preferred?: string[] ; loads?: boolean; onPickGroup?: (group: LedgerGroup) => void; client?: EvidenceDataClient }) {
   const [column, setColumn] = useState('');
+  // Across-column concentration; also picks the opening column when the filter column would only restate the filter.
+  const [concentration, setConcentration] = useState<EvidenceConcentration | null | undefined>(undefined);
+  useEffect(() => {
+    let active = true;
+    setConcentration(undefined);
+    if (!client.evidenceConcentration) { setConcentration(null); return; }
+    client.evidenceConcentration(runId).then(c => { if (active) setConcentration(c); }).catch(() => { if (active) setConcentration(null); });
+    return () => { active = false; };
+  }, [runId, client]);
+  const opening = openingColumn(concentration, preferred);
   const [data, setData] = useState<EvidenceBreakdown | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
   const [all, setAll] = useState(false);
   useEffect(() => {
+    if (concentration === undefined && !column) return;  // wait to know which column to open on
     let active = true;
     setBusy(true); setProblem('');
-    api.evidenceBreakdown(runId, column || undefined, all ? 200 : 10)
+    client.evidenceBreakdown(runId, column || undefined, all ? 200 : 10)
       .then(d => {
         if (!active) return;
         onColumns(d.columns || []);
-        // Open on a column the calculations filter on: it usually explains the difference best.
-        const wanted = !column && preferredBreakdownColumn(d.columns || [], preferred);
+        // Open where the change concentrates outside the filter columns; otherwise on a filter column.
+        const wanted = !column && ((opening && (d.columns || []).includes(opening) ? opening : '') || preferredBreakdownColumn(d.columns || [], preferred));
         if (wanted && wanted !== d.column) { setColumn(wanted); return; }
         setData(d);
         if (!column && d.column) setColumn(d.column);
@@ -196,7 +211,7 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, on
       .catch(e => { if (active) setProblem(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
-  }, [runId, column, all]);
+  }, [runId, column, all, concentration === undefined]);
   if (problem) return <p className="disabled-reason">The breakdown could not be loaded: {problem}</p>;
   if (!data) return busy ? <p role="status">Working out where the difference comes from…</p> : null;
   const unavailable = Object.entries(data.unavailable_columns || {});
@@ -286,8 +301,46 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, on
       {data.coverage_note && <small style={{ display: 'block' }}>{sideTotals ? data.coverage_note : 'Only records whose inclusion changed are listed for this large dataset, so each value’s change is exact; its totals on each side are not shown.'}</small>}
       {data.grouping === 'day' && <small style={{ display: 'block' }}>Timestamps are grouped by calendar day.</small>}
       {unavailableNote}
+      {concentration && <Concentration data={concentration} exclude={preferred} unit={unit} percent={percent} onPick={onPickGroup} />}
     </div>
   );
+}
+
+/** The non-filter column with the strongest concentration, to open "Where it sits" on. */
+function openingColumn(concentration: EvidenceConcentration | null | undefined, filters: string[]): string {
+  const outside = (concentration?.items || []).find(item => !filters.some(f => item.columns[0] === f || item.columns[0].endsWith(`.${f}`)));
+  return outside?.columns[0] || '';
+}
+
+/** Values and pairs of values that hold far more of the difference than of the records (filter columns left out). */
+function Concentration({ data, exclude, unit, percent, onPick }: { data: EvidenceConcentration; exclude: string[]; unit: string; percent?: boolean; onPick?: (group: LedgerGroup) => void }) {
+  const outside = (item: ConcentrationItem) => item.columns.every(c => !exclude.some(f => c === f || c.endsWith(`.${f}`)));
+  const lines = [...data.items, ...data.pairs].filter(outside)
+    .sort((a, b) => (b.lift || 0) - (a.lift || 0) || b.difference_share - a.difference_share).slice(0, 8);
+  if (!data.available) return null;
+  if (!lines.length) return <section className="concentration" aria-labelledby="concentration-title">
+    <h4 id="concentration-title">Concentration across other columns</h4>
+    <p className="where-legend">No value or pair of values holds much more of the difference than of the records: the difference is spread evenly across the other columns.</p>
+  </section>;
+  const valueText = (v: unknown, noMatch?: boolean) => noMatch ? 'no matching row' : showValue(v);
+  const label = (item: ConcentrationItem) => item.columns.map((c, i) => `${columnLabel(c)} = ${valueText(item.values[i], item.no_match?.[i])}`).join(' × ');
+  const changeText = (v: string | null) => v == null ? '—' : minus(percent ? `${groupDigits(percentOf(v))} pts` : `${groupDigits(v)}${unit ? ` ${unit}` : ''}`);
+  return <section className="concentration" aria-labelledby="concentration-title">
+    <h4 id="concentration-title">Concentration across other columns</h4>
+    <p className="where-legend">Values and combinations that hold far more of the difference than of the records.</p>
+    <ul>
+      {lines.map(item => <li key={label(item)}>
+        {onPick && item.changed_records > 0
+          ? <button type="button" className="link-button group-pick" onClick={() => onPick({
+              column: item.columns[0], columnLabel: item.columns.map(columnLabel).join(' × '), value: item.values[0] ?? null, noMatch: item.no_match?.[0],
+              column2: item.columns[1], value2: item.columns[1] ? item.values[1] ?? null : undefined, noMatch2: item.no_match?.[1],
+              label: item.columns.map((_, i) => valueText(item.values[i], item.no_match?.[i])).join(' × '), totalText: changeText(item.change) })}>{label(item)}</button>
+          : <b>{label(item)}</b>}
+        <span className="concentration-figures">{(item.difference_share * 100).toFixed(1)}% of the difference · {(item.record_share * 100).toFixed(1)}% of records · {changeText(item.change)}</span>
+      </li>)}
+    </ul>
+    {(data.capped || []).map(note => <small key={note} style={{ display: 'block' }}>{note}</small>)}
+  </section>;
 }
 
 type Props = {
@@ -311,6 +364,8 @@ type Props = {
   note?: ReactNode;
   /** Opens the custody log (saved cases). */
   onCustody?: () => void;
+  evidenceClient?:EvidenceDataClient;
+  readOnly?:boolean;
 };
 
 type Tab = 'records' | 'breakdown' | 'definitions' | 'notes';
@@ -340,7 +395,7 @@ function inclusion(row: AnyEvidence, side: 'baseline' | 'target') {
   return nullTerm ? 'Included · blank amount (ignored)' : 'Included';
 }
 
-export function ResultReport({ run, unit: declaredUnit, relational, baselineLabel, targetLabel, baselineSql, targetSql, baselineDescription, targetDescription, snapshot, versions, breakdownColumns, sealStatus, note, onCustody, savedCase = false }: Props) {
+export function ResultReport({ run, unit: declaredUnit, relational, baselineLabel, targetLabel, baselineSql, targetSql, baselineDescription, targetDescription, snapshot, versions, breakdownColumns, sealStatus, note, onCustody, savedCase = false,evidenceClient=workspaceEvidenceClient,readOnly=false }: Props) {
   const [tab, setTab] = useState<Tab>('records');
   const result = run.result as Result;
   const expired = run.evidence_state === 'expired';
@@ -356,7 +411,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   // COUNT(*) counts records and COUNT(DISTINCT) counts values: the dataset's declared unit does not apply.
   const unit = resultUnit(result, declaredUnit);
   const noun = ratio ? 'value' : kind === 'count_distinct' || kind === 'count' ? 'count' : 'total';
-  const evidence = useEvidenceSummary(run);
+  const evidence = useEvidenceSummary(run,evidenceClient);
   const top = (evidence.summary?.top_changes || []) as AnyEvidence[];
   // Large changed-records-only runs state how many records they list in the result itself,
   // so the count is right before the evidence summary has loaded.
@@ -382,7 +437,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   const [ledgerGroup, setLedgerGroup] = useState<LedgerGroup | null>(null);
   const pickGroup = (group: LedgerGroup) => { setLedgerGroup(group); setLedgerCategory(''); setTab('records'); };
   const [registerOpen, setRegisterOpen] = useState(false);
-  const records = useRecordPage(run.result && !expired ? run.id : '', { offset, changedOnly, q, order, withContext: shown.length > 0 });
+  const records = useRecordPage(run.result && !expired ? run.id : '', { offset, changedOnly, q, order, withContext: true },evidenceClient);
   const pages = Math.max(1, Math.ceil(records.total / PAGE));
   const pageNo = Math.floor(offset / PAGE) + 1;
   const waitingFor = summaryLoading || (records.busy && records.rows.length === 0);
@@ -440,10 +495,10 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   const balanced = !/[1-9]/.test(residual);
   const listedChange = categories && !ratio ? decimalSum(categories.map(c => c.change)) : null;
   const bridge = categories && categories.length > 0 && result.baseline_value != null && result.target_value != null ? {
-    start: { label: cur, value: Number(percent ? percentOf(result.baseline_value) : result.baseline_value), text: show(result.baseline_value) },
-    end: { label: pro, value: Number(percent ? percentOf(result.target_value) : result.target_value), text: show(result.target_value) },
+    start: { label: cur, value: percent ? percentOf(result.baseline_value) : result.baseline_value, text: show(result.baseline_value) },
+    end: { label: pro, value: percent ? percentOf(result.target_value) : result.target_value, text: show(result.target_value) },
     steps: categories.map(c => ({ key: c.key, label: categoryLabel(c.key, labels), records: c.records,
-      value: Number(percent ? percentOf(stepValue(c)) : stepValue(c)), text: fmt(stepValue(c)) })),
+      value: percent ? percentOf(stepValue(c)) : stepValue(c), text: fmt(stepValue(c)) })),
     residualText: fmt(residual),
     balanced,
     description: `${cur} ${show(result.baseline_value)}, ${categories.map(c => `${categoryLabel(c.key, labels).toLowerCase()} ${fmt(stepValue(c))} (${evidenceCountLabel(c.records, loads)})`).join(', ')}, unexplained ${fmt(residual)}, equals ${pro.toLowerCase()} ${show(result.target_value)}${balanced ? '; balanced' : ''}.`,
@@ -493,18 +548,10 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
         ))}
       </div></div>
 
-      {tab === 'definitions' && (
-      <div className="calc-pair">
-        <div>
-          <h3>Current calculation{baselineLabel && ` · ${baselineLabel}`}</h3>
-          <p>{baselineDescription || <code className="mono-cell">{baselineSql}</code>}</p>
-        </div>
-        <div>
-          <h3>Proposed calculation{targetLabel && ` · ${targetLabel}`}</h3>
-          <p>{targetDescription || <code className="mono-cell">{targetSql}</code>}</p>
-        </div>
+      <div className="definitions-exhibit" hidden={tab !== 'definitions'}>
+        <div className="calc-pair"><p>{baselineLabel}{baselineDescription && ` · ${baselineDescription}`}</p><p>{targetLabel}{targetDescription && ` · ${targetDescription}`}</p></div>
+        <SqlComparison before={baselineSql} after={targetSql} currentLabel={cur} proposedLabel={pro} />
       </div>
-      )}
 
       {tab === 'definitions' && ratio && (
         <details className="exact-values">
@@ -522,7 +569,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
       {tab === 'breakdown' && kind === 'count_distinct' && result.distinct && <DistinctPanel distinct={result.distinct} />}
 
       {/* Kept mounted so its column list feeds the record table's "Show columns"; hidden outside its tab. */}
-      {run.result && !expired && <div hidden={tab !== 'breakdown'}><Breakdown runId={run.id} unit={unit} percent={percent} onColumns={setColumns} preferred={breakdownColumns} loads={loads} onPickGroup={pickGroup} /></div>}
+      {run.result && !expired && <div hidden={tab !== 'breakdown'}><Breakdown runId={run.id} unit={unit} percent={percent} onColumns={setColumns} preferred={breakdownColumns} loads={loads} onPickGroup={pickGroup} client={evidenceClient} /></div>}
 
       {expired && (tab === 'records' || tab === 'breakdown') && <p className="disabled-reason" role="status">Detailed records expired — rerun to see them</p>}
       {tab === 'records' && summaryLoading && (
@@ -532,8 +579,10 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
         </div>
       )}
 
+      {tab === 'records' && !expired && recordConcentrationLine(evidence.summary,result) && <p className="record-concentration" role="status">{recordConcentrationLine(evidence.summary,result)}</p>}
+
       {tab === 'records' && categories && categories.length > 0 && !expired && (
-        <Ledger runId={run.id} categories={categories} category={ledgerCategory} onCategory={key => { setLedgerGroup(null); setLedgerCategory(key); }} labels={labels}
+        <Ledger evidenceClient={evidenceClient} runId={run.id} categories={categories} category={ledgerCategory} onCategory={key => { setLedgerGroup(null); setLedgerCategory(key); }} labels={labels}
           group={ledgerGroup} onClearGroup={() => setLedgerGroup(null)}
           keyHeader={keyHeader} side={sideCell} change={changeText} additive={!ratio} totalText={ledgerTotal}
           balanceText={balanceText} balanced={balanced} unchanged={unchanged}
@@ -562,6 +611,15 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
           {(evidence.summary?.changed ?? 0) > 10 && <small>Showing the 10 largest of {groupDigits(String(evidence.summary!.changed))} changed {kind === 'count_distinct' ? `${keyHeader} values` : 'records'}. Open “{listLabel}” below to see them all.</small>}
         </div>
       )}
+
+      {!expired && <section className="print-only print-records">
+        <h3><span className="exhibit">A</span> Largest record changes</h3>
+        <p>{recordConcentrationLine(evidence.summary,result)}</p>
+        <p>Top {Math.min(10,top.length)} of {groupDigits(String(evidence.summary?.changed||0))} changed records. This is a bounded excerpt; the saved case keeps the full evidence.</p>
+        <table className="ledger-table"><thead><tr><th>{keyHeader}</th><th>{cur}</th><th>{pro}</th><th>Change</th></tr></thead>
+          <tbody>{top.slice(0,10).map(row=><tr key={recordKey(row)}><td>{recordKey(row)}</td><td>{sideCell(row,'baseline')}</td><td>{sideCell(row,'target')}</td><td>{changeText(row)}</td></tr>)}</tbody>
+        </table>
+      </section>}
 
       {tab === 'notes' && summary.uncertainties.length > 0 && (
         <div>
@@ -607,7 +665,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
                   ))}
                 </fieldset>
               )}
-              <button type="button" className="button secondary small" onClick={downloadCsv}>Download {kind === 'count_distinct' ? 'distinct values' : result.evidence_coverage ? 'listed records' : 'all records'} (CSV)</button>
+              {!readOnly && <button type="button" className="button secondary small" onClick={downloadCsv}>Download {kind === 'count_distinct' ? 'distinct values' : result.evidence_coverage ? 'listed records' : 'all records'} (CSV)</button>}
             </div>
             {csvProblem && <p className="disabled-reason">The download failed: {csvProblem}</p>}
             {records.problem && <p className="disabled-reason">Records could not be loaded: {records.problem}</p>}
@@ -618,7 +676,8 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
                   {records.rows.map(r => (
                     <tr key={recordKey(r)}>
                       <td className="mono-cell">{recordKey(r)}
-                        {kind === 'count_distinct' && <EntityRecordsButton runId={run.id} entity={recordKey(r)} />}
+                        <RecordContext row={r} loads={loads} />
+                        {kind === 'count_distinct' && <EntityRecordsButton client={evidenceClient} runId={run.id} entity={recordKey(r)} />}
                       </td>
                       {shown.map(c => <td key={c} data-label={columnLabel(c)}>{showValue((r as { context?: Record<string, unknown> }).context?.[c])}</td>)}
                       <td className="side-cell" data-label={cur}>{sideCell(r, 'baseline')}</td>
@@ -649,7 +708,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
           </div>
         </details>
 
-        {relational && (
+        {relational && !readOnly && (
           <details hidden={tab !== 'definitions'}>
             <summary>Join behavior</summary>
             <div>
@@ -694,16 +753,6 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
               </div>
             )}
             <p>Status: {result.explanation_status?.replaceAll('_', ' ') || 'not reported'} · definitions {result.definition_status?.replaceAll('_', ' ')}.</p>
-          </div>
-        </details>
-
-        <details hidden={tab !== 'definitions'}>
-          <summary>Original SQL</summary>
-          <div>
-            <strong>Current calculation</strong>
-            <pre className="sql-preview">{baselineSql || 'Not available'}</pre>
-            <strong>Proposed calculation</strong>
-            <pre className="sql-preview">{targetSql || 'Not available'}</pre>
           </div>
         </details>
 

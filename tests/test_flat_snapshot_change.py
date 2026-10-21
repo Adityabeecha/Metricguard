@@ -159,7 +159,13 @@ def test_runner_reads_the_target_load_and_checks_its_hash(loads, tmp_path):
     assert result['method'] == 'flat_snapshot_change' and result['delta_target_minus_baseline'] == '115.00'
     verify_artifact(output_dir / 'evidence.jsonl', result['evidence_artifact'], result['delta_target_minus_baseline'],
                     expected_result=result)
-    assert not (output_dir / 'context.jsonl').exists()
+    # Two-load runs now write record context: later values, plus the earlier ones under "b", validated against the evidence.
+    from services.supervisor.row_context import validate_context
+    lines = [json.loads(line) for line in (output_dir / 'context.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert {line['k']: (line['b'], line['v']) for line in lines}['R1'] == ({'status': 'completed'}, {'status': 'returned'})
+    assert validate_context(output_dir / 'context.jsonl', output_dir / 'evidence.jsonl', ['status'])['row_count'] == len(lines)
+    (output_dir / 'context.jsonl').unlink()
+    (output_dir / 'context.json').unlink(missing_ok=True)
     # a different target file is refused before any query runs
     job['target_snapshot_hash'] = file_hash(sep)
     (input_dir / 'job.json').write_text(json.dumps(job), encoding='utf-8')
@@ -222,6 +228,22 @@ def test_http_compare_two_loads_end_to_end(tmp_path):
         assert {row['order_id']: row['change'] for row in evidence['items']}['R7'] == 'added'
         assert sum(Decimal(row['delta']) for row in evidence['items']) == Decimal('115.00')
         assert client.get(f"/api/v1/comparisons/{run['id']}/export?format=html").status_code == 200
+        # Where it sits works for two loads: grouped by the later value (the earlier one for removed records).
+        split = client.get(f"/api/v1/comparisons/{run['id']}/evidence-breakdown?column=status").json()
+        assert split['available'], split
+        by_status = {g['value']: Decimal(g['change']) for g in split['groups']}
+        assert by_status['returned'] == Decimal('-120.00') and by_status['completed'] == Decimal('235.00')
+        assert sum(by_status.values()) == Decimal('115.00')
+        # Each record shows its value in each load.
+        rows = {r['order_id']: r for r in client.get(f"/api/v1/comparisons/{run['id']}/evidence?limit=100&with_context=true").json()['items']}
+        assert rows['R1']['baseline_context'] == {'status': 'completed'} and rows['R1']['target_context'] == {'status': 'returned'}
+        assert rows['R7']['baseline_context'] is None and rows['R7']['context'] == {'status': 'completed'}
+        assert rows['R8']['target_context'] is None and rows['R8']['context'] == {'status': 'completed'}
+        group = client.get(f"/api/v1/comparisons/{run['id']}/evidence-group",
+                           params={'column': 'status', 'value': '"completed"', 'with_context': 'true'}).json()
+        assert {r['order_id'] for r in group['items']} == {'R2', 'R3', 'R7', 'R8'}
+        assert all('baseline_context' in r for r in group['items'])
+        assert client.get(f"/api/v1/comparisons/{run['id']}/evidence-concentration").json()['available'] is True
         saved = client.post('/api/v1/investigations', json={
             'title': 'Sep vs Oct', 'run_id': run['id'], 'decision': 'Explained', 'actor_label': 'Tester'})
         assert saved.status_code == 201, saved.text

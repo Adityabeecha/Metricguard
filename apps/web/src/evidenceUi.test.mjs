@@ -58,13 +58,13 @@ test('copied summary carries the exact figures, balance and case link', () => {
 const split = (column, change, total, extra = {}) => ({ available: true, columns: ['region', 'status'], column,
   abs_change_total: total, groups: [{ value: 'top', change, records: 1, changed_records: 1, current: null, proposed: null }], ...extra });
 
-test('summary prefers the same available filtered column as Breakdown, including qualified columns', async () => {
+test('summary keeps filter columns available but opens on a concentrated other column', async () => {
   assert.equal(preferredBreakdownColumn(['fact.status', 'dimension.status'], ['dimension.status']), 'dimension.status');
   assert.equal(preferredBreakdownColumn(['fact.status', 'dimension.status'], ['status']), undefined);
   assert.equal(preferredBreakdownColumn(['fact.region', 'dimension.status'], ['status']), 'dimension.status');
   const choices = { region: split('region', '-100', '100'), status: split('status', '-10', '100') };
   const selected = await loadSummaryBreakdown(async column => choices[column || 'region'], ['status']);
-  assert.equal(selected.column, 'status'); // the preferred filter wins even when another column has a larger share
+  assert.equal(selected.column, 'region');
 });
 
 test('saved filter preferences cover flat, relational, boolean, ratio and legacy predicates without amount columns', () => {

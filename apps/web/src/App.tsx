@@ -34,7 +34,8 @@ import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { SignInScreen } from './SignInScreen';
 import { loadAuthProviders } from './authApi';
 import { shouldRedirectToSignIn } from './authFlow';
-import { sitePage } from './router';
+import { sitePage, sharedCaseToken } from './router';
+import { PublicCasePage } from './PublicCasePage';
 import { PublicPages } from './PublicPages';
 import { useDialog } from './useDialog';
 import { FeedbackDialog } from './views/FeedbackDialog';
@@ -56,6 +57,7 @@ export function App() {
     return () => window.removeEventListener('popstate', sync);
   }, []);
   const page = sitePage(pathname);
+  if (page === 'shared-case') return <PublicCasePage token={sharedCaseToken(pathname)!} />;
   if (page === 'signin' || page === 'signup') return <SignInScreen mode={page} />;
   if (page !== 'workspace') return <PublicPages page={page} />;
   return <WorkspaceApp />;
@@ -450,7 +452,7 @@ function WorkspaceApp() {
                       navigate({ page: 'metrics', query: newQuery });
                     }
                   }}
-                  onComparePair={(leftId, rightId) => startWith({ left: leftId, right: rightId })}
+                  onComparePair={(leftId, rightId, _relationship, snapshotId) => startWith({ left: leftId, right: rightId, ...(snapshotId ? {dataset: snapshotId} : {}) })}
                   onStartReplay={(_defId, verId) => startWith({ left: verId, right: verId })}
                 />
               )}
@@ -460,6 +462,7 @@ function WorkspaceApp() {
               {route.page === 'data' && (
                 <DataSourcesView key={route.workspaceId} data={data} refresh={refresh} openAdd={route.query.add === '1'}
                   onCompare={id => startWith({ dataset: id })}
+                  onCheckMetrics={(earlier, later) => navigate({page:'changes', query:{baseline_load:earlier, target_load:later, check_load:'1'}})}
                   onCreatedReturn={route.query.return === 'start' ? (id => navigate({ page: 'start', query: { dataset: id } })) : undefined} />
               )}
 
@@ -469,6 +472,8 @@ function WorkspaceApp() {
                   data={data}
                   refresh={refresh}
                   changeId={route.query.changeId}
+                  baselineLoadId={route.query.baseline_load}
+                  targetLoadId={route.query.target_load}
                   onSelectChange={(changeId) => {
                     if (changeId) {
                       navigate({ page: 'changes', query: { ...route.query, changeId } });

@@ -19,7 +19,7 @@ import {
   UploadCloud,
   X,
 } from 'lucide-react';
-import { api, type Bootstrap, type FlatContract, type Snapshot, type SnapshotImport } from '../api';
+import { api, apiFetch, type Bootstrap, type FlatContract, type Snapshot, type SnapshotImport } from '../api';
 import { inferMeaning, parseCsvText, type ParsedCsvPreview } from '../csvInference';
 import { DIRECT_TWO_TABLE_LIMIT, PrepareTwoTable } from './PrepareTwoTable';
 import { WarehouseSource } from './WarehouseSource';
@@ -39,12 +39,13 @@ interface DataSourcesViewProps {
   /** After a new dataset is created from the guided comparison, return there with it selected. */
   onCreatedReturn?: (snapshotId: string) => void;
   onCompare?: (snapshotId: string) => void;
+  onCheckMetrics?: (earlierSnapshotId: string, laterSnapshotId: string) => void;
 }
 
 type OnboardingStep = 'upload' | 'confirm' | 'validating' | 'success' | 'error';
 type SourceType = 'file' | 'postgres';
 
-export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCompare }: DataSourcesViewProps) {
+export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCompare, onCheckMetrics }: DataSourcesViewProps) {
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string>(
     data.snapshots[0]?.id || ''
   );
@@ -94,6 +95,8 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
   const [createdSnapshot, setCreatedSnapshot] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [pageNotice, setPageNotice] = useState('');
+  const [upgradingSnapshotId, setUpgradingSnapshotId] = useState<string | null>(null);
+  const [upgradeProblem, setUpgradeProblem] = useState('');
   // Adding a newer load of an existing dataset: its definition is reused as is.
   const [loadContract, setLoadContract] = useState<FlatContract | null>(null);
   // A new upload whose settings match an existing dataset definition joins it as a new load.
@@ -159,6 +162,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
     setValidationError(null);
     setCreatedSnapshot(null);
     setPageNotice('');
+    setUpgradingSnapshotId(null); setUpgradeProblem('');
     setStep('upload');
     setImportStarted(null);
   }, [projectId]);
@@ -178,6 +182,41 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
       null
     );
   }, [activeSnapshot, flatContracts]);
+
+  async function enableAveragesAndRatios() {
+    if (!activeSnapshot || upgradingSnapshotId) return;
+    const id = activeSnapshot.id;
+    const isCurrent = () => currentProject.current === projectId;
+    setUpgradingSnapshotId(id); setUpgradeProblem('');
+    try {
+      const response = await apiFetch(`/snapshots/${encodeURIComponent(id)}/enable-averages-ratios`, {
+        method: 'POST', headers: { 'X-Project-Id': projectId },
+      });
+      const body = await response.json();
+      if (!response.ok) throw body.error || new Error('Could not enable averages and ratios.');
+      let snapshotId: string | null = null;
+      if (response.status === 200) snapshotId = (body as Snapshot).id;
+      else {
+        let pending = body as SnapshotImport;
+        while (pending.state === 'queued' || pending.state === 'running') {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          if (!isCurrent()) return;
+          pending = await api.snapshotImport(pending.id);
+        }
+        if (pending.state !== 'validated' || !pending.snapshot_id) throw pending.error || new Error('The frozen dataset could not be upgraded. Try again.');
+        snapshotId = pending.snapshot_id;
+      }
+      if (!isCurrent()) return;
+      await refresh();
+      if (!isCurrent()) return;
+      setSelectedSnapshotId(snapshotId);
+      setPageNotice('Averages and ratios are ready on the new frozen copy. Your earlier dataset and saved cases retain their original inputs.');
+    } catch (error) {
+      if (isCurrent()) setUpgradeProblem(humanizeError(error).message);
+    } finally {
+      if (isCurrent()) setUpgradingSnapshotId(null);
+    }
+  }
   const keyIssue = confirmedKey ? filePreview?.key_issues?.[confirmedKey] : undefined;
   const multiExtras = enableMulti ? extraAmounts.filter(c => c !== confirmedKey && c !== confirmedMeasure) : [];
   const roleColumns = new Set([confirmedKey, enableSubtraction ? minuendColumn : confirmedMeasure, enableSubtraction ? subtrahendColumn : '', ...multiExtras].filter(Boolean));
@@ -867,6 +906,14 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
               )}
 
               {activeContract?.version === 7 && <p className="panel-note">Conditional SUM: one CASE WHEN branch over <code>{activeContract.measure}</code>, ELSE zero. FALSE and UNKNOWN select zero; TRUE may select a NULL measure. WHERE and WHEN definitions are saved separately from this physical measure contract.</p>}
+              {activeContract?.version === 4 && <div className="panel-note">
+                <p>Create a new frozen copy with averages and ratios enabled. This uses the stored rows, amounts, types and units; no upload is needed. Earlier saved cases keep their original inputs.</p>
+                <button type="button" className="button secondary small" disabled={Boolean(upgradingSnapshotId)}
+                  onClick={() => void enableAveragesAndRatios()}>
+                  {upgradingSnapshotId === activeSnapshot.id ? 'Enabling averages and ratios…' : 'Enable averages and ratios'}
+                </button>
+                {upgradeProblem && <p role="alert">{upgradeProblem}</p>}
+              </div>}
 
               {/* Detail Tabs */}
               <div className="section-nav-tabs compact">
@@ -952,7 +999,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                   </div>
 
                   <div className="usage-section" style={{ marginTop: '20px' }}>
-                    <h3>Recorded reconciliation runs</h3>
+                    <h3>Comparisons</h3>
                     {snapshotRuns.length === 0 ? (
                       <p className="helper-muted">No comparisons have run on this dataset yet.</p>
                     ) : (
@@ -1900,6 +1947,11 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
 
               {step === 'success' && <>
                 <button type="button" className="button secondary" onClick={() => void handleDone('datasets')}>Back to datasets</button>
+                {createdSnapshot && loadContract && onCheckMetrics && (() => {
+                  const earlier = [...data.snapshots].filter(s => s.id !== createdSnapshot.id && s.contract_hash === createdSnapshot.contract_hash && s.created_at <= createdSnapshot.created_at)
+                    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+                  return earlier ? <button type="button" className="button secondary" onClick={() => { setShowAddModal(false); onCheckMetrics(earlier.id, createdSnapshot.id); }}>Check your metrics on the new load</button> : null;
+                })()}
                 <button type="button" className="button primary" disabled={!createdSnapshot || !(onCompare || onCreatedReturn)} onClick={() => void handleDone('compare')}>Compare calculations on this data <ArrowRight size={15} /></button>
               </>}
 

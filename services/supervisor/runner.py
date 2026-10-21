@@ -98,13 +98,16 @@ def run_job(input_dir=None, output_dir=None):
         # Required for COUNT(DISTINCT): which records carry each entity at each endpoint.
         from packages.metricguard_core.flat_distinct_evidence import write_members
         write_members(output_dir / 'members.jsonl', members or [])
-    if job.get('execution_policy') == 'flat_snapshot_v1' and job['context'].get('comparison') != 'snapshot_change':
+    if job.get('execution_policy') == 'flat_snapshot_v1':
         # Optional, separately hashed record context (filter-column values per row).
         # Not written for two-snapshot runs: one snapshot cannot describe records of both loads.
         # Best effort: the comparison and its evidence never depend on it.
         try:
-            from services.supervisor.row_context import write_entity_context, write_flat_context
-            if distinct_context is not None:
+            from services.supervisor.row_context import write_change_context, write_entity_context, write_flat_context
+            if job['context'].get('comparison') == 'snapshot_change':
+                info = write_change_context(snapshot, input_dir / 'target_snapshot.duckdb', manifest['contract'],
+                                            evidence, output_dir / 'context.jsonl')
+            elif distinct_context is not None:
                 info = write_entity_context(snapshot, manifest['contract'], job['baseline_ir']['measure'],
                                             evidence, output_dir / 'context.jsonl')
             else:
@@ -138,6 +141,11 @@ def ingest_job(input_dir=None, output_dir=None):
     metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
     output_dir.mkdir(parents=True, exist_ok=True)
     database = output_dir / 'snapshot.duckdb'
+    if 'frozen_upgrade' in metadata:
+        from packages.metricguard_core.flat_upgrade import upgrade_frozen
+        manifest = upgrade_frozen(input_dir / 'source.duckdb', database, metadata)
+        (output_dir / 'manifest.json').write_text(json.dumps(manifest, allow_nan=False), encoding='utf-8')
+        return manifest
     if 'relational_contract' in metadata:
         from packages.metricguard_core.relational_snapshot import ingest_relational
         manifest = ingest_relational(input_dir / 'source.zip', database, metadata['relational_contract'])
@@ -233,7 +241,7 @@ if __name__ == '__main__':
             code = str(error)
             msg = 'Validation error during runner execution'
             if code == 'POLICY_MISMATCH':
-                msg = 'Policy mismatch between job and IR'
+                msg = 'The saved calculation does not match this comparison. Add the SQL again for the chosen dataset.'
             elif code == 'SNAPSHOT_HASH_MISMATCH':
                 msg = 'Snapshot hash mismatch'
             elif code in ('JOB_INPUT_TOO_LARGE', 'RUNNER_OUTPUT_TOO_LARGE'):

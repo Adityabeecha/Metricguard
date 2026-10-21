@@ -3429,15 +3429,14 @@ td.weight {
 }
 
 .unassigned-card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
 }
 
 .unassigned-card {
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  border-bottom: 1px solid var(--line);
   padding: 14px 16px;
   display: flex;
   flex-direction: column;
@@ -3451,6 +3450,9 @@ td.weight {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  overflow-wrap: anywhere;
 }
 
 .unassigned-card-meta {
@@ -3462,6 +3464,7 @@ td.weight {
 
 .unassigned-card-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-top: 4px;

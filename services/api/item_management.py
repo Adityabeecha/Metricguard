@@ -85,6 +85,11 @@ def delete_snapshot(store, snapshot_id: str, data_dir) -> dict:
         if conn.execute(select(snapshot_imports.c.id).where(snapshot_imports.c.snapshot_id == snapshot_id,
                                                             snapshot_imports.c.state.in_(('queued', 'running')))).first():
             raise DomainError('DATASET_BUSY', 'This dataset is still being imported. Try again when it finishes.', 409)
+        active_imports = conn.execute(select(snapshot_imports.c.data).where(
+            snapshot_imports.c.project_id == pid, snapshot_imports.c.state.in_(('queued', 'running')))).scalars()
+        if any(item.get('metadata', {}).get('frozen_upgrade', {}).get('snapshot_id') == snapshot_id
+               for item in active_imports):
+            raise DomainError('DATASET_BUSY', 'Averages and ratios are being enabled from this frozen dataset. Try again when it finishes.', 409)
         cases = [r['data'] for r in conn.execute(select(records).where(records.c.project_id == pid, records.c.kind == 'investigation')).mappings()
                  if r['data'].get('snapshot_id') == snapshot_id or r['data'].get('target_snapshot_id') == snapshot_id
                  or r['data'].get('run_id') in run_ids]
@@ -107,6 +112,9 @@ def delete_snapshot(store, snapshot_id: str, data_dir) -> dict:
             files.update(_run_files(run, root))
         imports = [dict(r) for r in conn.execute(select(snapshot_imports).where(snapshot_imports.c.snapshot_id == snapshot_id)).mappings()]
         for item in imports:
+            # Upgrades borrow the older frozen artifact; it is never a disposable upload.
+            if 'frozen_upgrade' in item.get('data', {}).get('metadata', {}):
+                continue
             source = _owned_path(item.get('source_path'), root)
             if source:
                 files.update({source, source.with_name(source.name + durable.SIDECAR)})

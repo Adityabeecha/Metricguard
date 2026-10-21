@@ -38,6 +38,7 @@ import {
   sortAffectedMetricsByActionRelevance,
 } from '../changesUtils';
 import { isDefinedComparison, isExactZero } from '../investigationUtils';
+import { NewLoadChecksPanel } from './NewLoadChecksPanel';
 
 // Preserve the backend's fixed-point string rather than round it through Number.
 function formatDelta(value: string | null | undefined, currency = ''): string {
@@ -52,6 +53,8 @@ interface ChangesViewProps {
   onSelectChange?: (changeId: string | null) => void;
   onNavigate?: (page: 'dashboard' | 'metrics' | 'data' | 'changes' | 'investigations' | 'settings', tab?: string, query?: Record<string, string>) => void;
   onOpenRun?: (run: Run) => void;
+  baselineLoadId?: string;
+  targetLoadId?: string;
 }
 
 export function ChangesView({
@@ -61,6 +64,8 @@ export function ChangesView({
   onSelectChange,
   onNavigate,
   onOpenRun,
+  baselineLoadId,
+  targetLoadId,
 }: ChangesViewProps) {
   const workspaceId = data.project.id;
   const rawDiffs = data.metric_diffs || [];
@@ -635,7 +640,7 @@ export function ChangesView({
                         className="button primary small"
                         onClick={() => handleOpenInvestigation(m)}
                       >
-                        Open investigation <ArrowRight size={13} />
+                        Open comparison <ArrowRight size={13} />
                       </button>
                     )}
                   </div>
@@ -1075,7 +1080,7 @@ export function ChangesView({
       <div className="page-heading">
         <div>
           <h1>Changes</h1>
-          <p>See which metrics a definition or code change moves, before it ships.</p>
+          <p>See how new data loads and definition changes move your metrics.</p>
         </div>
         <div className="heading-actions">
           <button className="button primary" onClick={handleOpenRunModal}>
@@ -1086,6 +1091,8 @@ export function ChangesView({
           </button>
         </div>
       </div>
+
+      <NewLoadChecksPanel data={data} refresh={refresh} onOpenRun={onOpenRun} baselineLoadId={baselineLoadId} targetLoadId={targetLoadId} />
 
       {/* Search and Filters Toolbar */}
       {rawDiffs.length > 0 && (
@@ -1234,7 +1241,7 @@ export function ChangesView({
       {runs.length > 0 && (
         <section className="panel">
           <div className="panel-header">
-            <h2>Individual reconciliation runs ({runs.length})</h2>
+            <h2>Comparisons ({runs.length})</h2>
             <p>Direct comparisons and CI runs recorded in this workspace.</p>
           </div>
           <div className="queue-list">
