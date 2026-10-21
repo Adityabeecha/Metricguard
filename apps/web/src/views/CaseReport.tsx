@@ -172,7 +172,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
           </button>
           {canShare && <button className="button secondary small" title="Manage public read-only case links" onClick={() => setShareOpen(true)}><Link2 size={15} /> Share</button>}
           <button className="button secondary small" onClick={() => window.print()}><Printer size={15} /> Print / Save PDF</button>
-          <button className="button secondary small" onClick={() => onEdit(relational)}><Pencil size={15} /> Edit comparison</button>
+          <button className="button secondary small" onClick={() => onEdit(relational)}><Pencil size={15} /> Edit &amp; re-run</button>
           {!relational && detail.run.result && <button className="button secondary small" onClick={() => setSavingMetric(true)} title="Make one of these calculations the approved definition of a metric"><BookmarkCheck size={15} /> Save as metric</button>}
           {copied && <span className="copied-note" role="status">{copied === 'summary' ? 'Summary copied' : 'Link copied'}</span>}
         </div>

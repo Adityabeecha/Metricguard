@@ -152,6 +152,11 @@ def write_change_context(baseline_path: Path, target_path: Path, contract: dict,
     Two-load runs are bounded (100,000 records per load), so both lookups fit in memory.
     """
     columns = [c for c in contract.get('categories', [])][:MAX_CONTEXT_COLUMNS]
+    target_manifest = Path(target_path).with_name(Path(target_path).name + '.manifest.json')
+    if target_manifest.is_file():
+        # Two separate sources may differ in their other filter columns: keep the shared ones.
+        shared = set(json.loads(target_manifest.read_text(encoding='utf-8')).get('contract', {}).get('categories', []))
+        columns = [c for c in columns if c in shared]
     key_column = contract['row_key']
     earlier = _collect(baseline_path, key_column, columns, {record_key(r) for r in evidence if r.get('baseline_present') is not False})
     later = _collect(target_path, key_column, columns, {record_key(r) for r in evidence if r.get('target_present') is not False})

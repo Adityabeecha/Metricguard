@@ -4,7 +4,7 @@ import { api, ApiError, type Bootstrap, type ColumnValues, type FlatContract, ty
 import {
   aggregateRowLimitReason, buildFlatSql, buildRelationalSql, describeCalculation, flatFilterColumns, formProblems, guidedFormSupported,
   OP_LABEL, operatorsFor, relationalFilterColumns, supportsAnyMatch, supportsCount, supportsDistinct, supportsRatios, ratioUnavailableReason,
-  RATIO_AGGREGATES, amountColumns, lookupJoins, starLookups, defaultConditionColumn, type Aggregate, type LookupJoin, type CalculationForm, type Filter, type FilterColumn,
+  RATIO_AGGREGATES, amountColumns, lookupJoins, starLookups, defaultConditionColumn, datasetTableName, flatSqlColumns, type Aggregate, type LookupJoin, type CalculationForm, type Filter, type FilterColumn,
 } from '../comparisonBuilder';
 import { summarizeDataset } from '../datasetSummary';
 import { groupDigits } from '../resultSummary';
@@ -21,6 +21,7 @@ import { COMPARISON_KINDS, comparisonDatasetGroups, emptyCalculationSides, initi
 import { useRecordedBy } from '../useRecordedBy';
 import './comparisonSelection.css';
 import { SampleDatasetButton } from './FirstRun';
+import { SqlEditor } from './SqlEditor';
 
 type Side = 'baseline' | 'target';
 type SideState = { name: string; mode: 'form' | 'sql'; form: CalculationForm; sql: string; refusal: ClassifiedInvestigationError | null;
@@ -766,11 +767,13 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                     </>
                   ) : (
                     <label>SQL
-                      <textarea rows={6} spellCheck={false} value={s.sql} onChange={e => update(side, { sql: e.target.value })}
-                        placeholder={relational ? 'SELECT SUM(f.amount) FROM fact f LEFT JOIN dim d ON f.key = d.key WHERE …' : 'SELECT SUM(amount) FROM snapshot WHERE status = \'completed\''} />
+                      <SqlEditor value={s.sql} onChange={sql => update(side, { sql })}
+                        columns={choice?.flat ? flatSqlColumns(choice.flat) : []}
+                        tables={choice?.flat ? ['snapshot', ...(datasetTableName(choice.flat) ? [datasetTableName(choice.flat)] : [])] : []}
+                        placeholder={relational ? 'SELECT SUM(f.amount) FROM fact f LEFT JOIN dim d ON f.key = d.key WHERE …' : `SELECT SUM(amount) FROM ${(choice?.flat && datasetTableName(choice.flat)) || 'snapshot'} WHERE status = 'completed'`} />
                       <span className="example">{relational
                         ? `One SUM over the main table${starLookups(contract).length ? ', with optional declared lookup joins' : ' with one declared lookup join'}, and optional WHERE conditions on the filter columns.`
-                        : <>One calculation over <code>snapshot</code> (SUM, COUNT(*), COUNT(DISTINCT column), AVG, or a ratio such as SUM(amount) / COUNT(*)), with optional WHERE conditions on the filter columns.</>}</span>
+                        : <>One calculation over <code>snapshot</code>{choice?.flat && datasetTableName(choice.flat) ? <> (or <code>{datasetTableName(choice.flat)}</code>)</> : null} (SUM, COUNT(*), COUNT(DISTINCT column), AVG, or a ratio such as SUM(amount) / COUNT(*)), with optional WHERE conditions on the filter columns.</>}</span>
                     </label>
                   )}
 

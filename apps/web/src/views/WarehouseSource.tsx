@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Database } from 'lucide-react';
 import { api, type FlatContract } from '../api';
 import { classifyInvestigationError, type ClassifiedInvestigationError } from '../investigationUtils';
@@ -21,7 +21,7 @@ const SOURCE_LABEL: Record<Source, string> = { postgres: 'PostgreSQL', snowflake
  * Freeze a warehouse table into a dataset. PostgreSQL: a read-only collector in one
  * REPEATABLE READ transaction. Snowflake and BigQuery: one read-only query over the
  * vendor's REST API, written as text and validated row by row by the isolated import.
- * Connection strings and tokens are used for this request only and never stored.
+ * Connection strings and tokens are used for one request, unless an owner saves the connection (encrypted on the server).
  */
 export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
   const [source, setSource] = useState<Source>('postgres');
@@ -53,6 +53,54 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<ClassifiedInvestigationError | null>(null);
   const [done, setDone] = useState('');
+  // Saved connections (credentials stay on the server) and the "Test connection & load columns" step.
+  type Saved = { id: string; kind: Source; label: string; public: Record<string, string> };
+  type Inspected = { tables: string[]; columns: Array<{ name: string; type: string; kind: string }> };
+  const [saved, setSaved] = useState<Saved[]>([]);
+  const [savingAvailable, setSavingAvailable] = useState(false);
+  const [connectionId, setConnectionId] = useState('');
+  const [inspected, setInspected] = useState<Inspected | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [saveAs, setSaveAs] = useState('');
+  const loadSaved = () => api.get<{ items: Saved[]; saving_available: boolean }>(`/projects/${encodeURIComponent(workspaceId)}/warehouse-connections`)
+    .then(r => { setSaved(r.items); setSavingAvailable(r.saving_available); }).catch(() => { setSaved([]); setSavingAvailable(false); });
+  useEffect(() => { void loadSaved(); }, [workspaceId]);
+  useEffect(() => { setConnectionId(''); setInspected(null); }, [source]);
+  const savedHere = saved.filter(c => c.kind === source);
+  const chosen = savedHere.find(c => c.id === connectionId) || null;
+  const credentials = () => connectionId ? { connection_id: connectionId }
+    : source === 'postgres' ? { source_uri: uri.trim() }
+    : source === 'snowflake' ? { token: token.trim(), token_type: tokenType, account: account.trim(), database }
+    : { token: token.trim(), project: project.trim(), ...(location.trim() ? { location: location.trim() } : {}) };
+  async function testConnection(forTable?: string) {
+    setTesting(true); setProblem(null);
+    try {
+      const result = await api.post<Inspected>(`/projects/${encodeURIComponent(workspaceId)}/sources/${source}/inspect`, {
+        ...credentials(), schema_name: schema, ...(source === 'bigquery' ? { dataset } : {}), ...(forTable ? { table: forTable } : {}),
+      });
+      setInspected(result);
+      if (forTable && result.columns.length) {
+        // Sensible first answers from the column types; every one stays editable.
+        const names = result.columns.map(c => c.name);
+        if (!key) setKey(names.find(n => /(^id$|_id$|_key$)/.test(n)) || names[0]);
+        if (!amount) setAmount(result.columns.find(c => c.kind === 'amount')?.name || '');
+        if (!cutoffColumn) setCutoffColumn(result.columns.find(c => c.kind === 'date' || c.kind === 'timestamp')?.name || '');
+      }
+      if (saveAs.trim() && !connectionId) {
+        const created = await api.post<Saved>(`/projects/${encodeURIComponent(workspaceId)}/warehouse-connections`, {
+          kind: source, label: saveAs.trim(), ...(source === 'postgres' ? { source_uri: uri.trim() } : source === 'snowflake'
+            ? { token: token.trim(), token_type: tokenType, account: account.trim(), database, ...(warehouse ? { warehouse } : {}), ...(role ? { role } : {}) }
+            : { token: token.trim(), project: project.trim(), ...(location.trim() ? { location: location.trim() } : {}) }) });
+        await loadSaved();
+        setConnectionId(created.id); setSaveAs(''); setUri(''); setToken('');
+      }
+    } catch (e) {
+      setProblem(classifyInvestigationError(e));
+    } finally {
+      setTesting(false);
+    }
+  }
+  const columnNames = inspected?.columns.map(c => c.name) || [];
 
   const named = filters.filter(f => f.name.trim());
   const extras = moreAmounts.split(',').map(x => x.trim()).filter(Boolean).map(x => {
@@ -60,12 +108,12 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
     return { name: name.trim(), unit: rest.join(':').trim() || unit.trim() };
   });
   const cloud = source !== 'postgres';
-  const blocker = source === 'postgres' && !uri.trim() ? 'Enter the connection string.'
-    : cloud && (token.trim().length < 8 || /\s/.test(token.trim())) ? 'Paste an access token.'
-    : source === 'snowflake' && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(account.trim()) ? 'Enter the Snowflake account identifier, like myorg-myaccount.'
-    : source === 'snowflake' && !IDENT.test(database) ? 'Enter the Snowflake database.'
+  const blocker = !connectionId && source === 'postgres' && !uri.trim() ? 'Enter the connection string.'
+    : !connectionId && cloud && (token.trim().length < 8 || /\s/.test(token.trim())) ? 'Paste an access token.'
+    : !connectionId && source === 'snowflake' && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(account.trim()) ? 'Enter the Snowflake account identifier, like myorg-myaccount.'
+    : !connectionId && source === 'snowflake' && !IDENT.test(database) ? 'Enter the Snowflake database.'
     : source === 'snowflake' && ((warehouse && !IDENT.test(warehouse)) || (role && !IDENT.test(role))) ? 'Warehouse and role must be plain names.'
-    : source === 'bigquery' && !/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/.test(project.trim()) ? 'Enter the Google Cloud project ID, like my-analytics-123.'
+    : !connectionId && source === 'bigquery' && !/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/.test(project.trim()) ? 'Enter the Google Cloud project ID, like my-analytics-123.'
     : source === 'bigquery' && !/^[A-Za-z0-9_]{1,1024}$/.test(dataset) ? 'Enter the BigQuery dataset.'
     : source !== 'bigquery' && !IDENT.test(schema) ? 'Enter a valid schema name.'
     : !IDENT.test(table) ? 'Enter a valid table name.'
@@ -100,13 +148,14 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
                           ...extras.map(x => ({ name: x.name, precision, scale, unit_label: x.unit }))],
       } : { ...common, version: 5, measure: amount, precision }) as FlatContract;
       if (cloud) {
-        const where = source === 'snowflake' ? `${database}.${schema}.${table}` : `${project}.${dataset}.${table}`;
+        const where = source === 'snowflake' ? `${chosen?.public.database || database}.${schema}.${table}` : `${chosen?.public.project || project}.${dataset}.${table}`;
         let job = await api.post<{ id: string; state: string; snapshot_id: string | null; error: { message?: string } | null }>(
           `/projects/${encodeURIComponent(workspaceId)}/sources/${source}/extract`, {
-            contract_id: contract.id, snapshot_name: `${where}${cutoffColumn ? ` at ${cutoffValue}` : ''}`, token: token.trim(), table,
-            ...(source === 'snowflake'
-              ? { account: account.trim(), database, schema_name: schema, token_type: tokenType, ...(warehouse ? { warehouse } : {}), ...(role ? { role } : {}) }
-              : { project: project.trim(), dataset, ...(location.trim() ? { location: location.trim() } : {}) }),
+            contract_id: contract.id, snapshot_name: `${where}${cutoffColumn ? ` at ${cutoffValue}` : ''}`, table,
+            ...(connectionId ? { connection_id: connectionId, ...(source === 'snowflake' ? { schema_name: schema } : { dataset }) }
+              : source === 'snowflake'
+              ? { token: token.trim(), account: account.trim(), database, schema_name: schema, token_type: tokenType, ...(warehouse ? { warehouse } : {}), ...(role ? { role } : {}) }
+              : { token: token.trim(), project: project.trim(), dataset, ...(location.trim() ? { location: location.trim() } : {}) }),
             ...(cutoffColumn ? { cutoff_column: cutoffColumn, cutoff_type: cutoffType, cutoff_value: cutoffValue } : {}),
             ...(full ? {} : { sample_rows: sampleRows }),
           });
@@ -124,7 +173,7 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
       }
       const extraction = await api.post<{ snapshot_id?: string; row_count?: number; state?: string; error?: { message?: string } }>(
         `/projects/${encodeURIComponent(workspaceId)}/sources/postgres/extract`, {
-          source_uri: uri.trim(), schema_name: schema, table_name: table, contract_id: contract.id,
+          ...(connectionId ? { connection_id: connectionId } : { source_uri: uri.trim() }), schema_name: schema, table_name: table, contract_id: contract.id,
           cutoff_column: cutoffColumn, cutoff_value: cutoffValue,
           snapshot_name: `${schema}.${table} at ${cutoffValue}`,
           ...(full ? {} : { sample_rows: sampleRows }),
@@ -150,18 +199,26 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
         ))}
       </div>
       <p className="lead">MetricGuard reads the table once with a single read-only query and freezes the rows as a dataset{source === 'postgres' ? ' (one consistent transaction, up to your cutoff)' : '; every value is read as text and checked row by row against your answers'}. Start with a sample to check your answers, then take the full table (up to 5,000,000 rows). Every calculation type works on large datasets.</p>
-      {source === 'postgres' && (
-        <label>Connection string
-          <input type="password" autoComplete="off" spellCheck={false} value={uri} onChange={e => setUri(e.target.value)} placeholder="postgresql://user:password@host:5432/database" />
-          <span className="example">Used for this request only. It is never saved; the dataset records the connection with the password removed. Use a read-only database user.</span>
+      {savedHere.length > 0 && (
+        <label>Saved connection
+          <select value={connectionId} onChange={e => { setConnectionId(e.target.value); setInspected(null); }}>
+            <option value="">— Type the details below —</option>
+            {savedHere.map(c => <option key={c.id} value={c.id}>{c.label} · {Object.values(c.public).filter(Boolean).join(' · ')}</option>)}
+          </select>
         </label>
       )}
-      {source === 'snowflake' && (
+      {!connectionId && source === 'postgres' && (
+        <label>Connection string
+          <input type="password" autoComplete="off" spellCheck={false} value={uri} onChange={e => setUri(e.target.value)} placeholder="postgresql://user:password@host:5432/database" />
+          <span className="example">{savingAvailable ? 'Used for this request only unless you save it below (then stored encrypted, and never shown again).' : 'Used for this request only and never saved.'} Datasets record the connection with the password removed. Use a read-only database user.</span>
+        </label>
+      )}
+      {!connectionId && source === 'snowflake' && (
         <div className="calc-grid">
           <label>Account identifier<input value={account} onChange={e => setAccount(e.target.value)} placeholder="myorg-myaccount" /></label>
           <label>Access token
             <input type="password" autoComplete="off" spellCheck={false} value={token} onChange={e => setToken(e.target.value)} placeholder="programmatic access token" />
-            <span className="example">Used for this request only and never saved. Use a token for a role that can only read this table.</span>
+            <span className="example">{savingAvailable ? 'Used for this request only unless you save the connection below (stored encrypted).' : 'Used for this request only and never saved.'} Use a token for a role that can only read this table.</span>
           </label>
           <label>Token type<select value={tokenType} onChange={e => setTokenType(e.target.value as typeof tokenType)}>
             <option value="PROGRAMMATIC_ACCESS_TOKEN">Programmatic access token</option><option value="OAUTH">OAuth token</option></select></label>
@@ -170,23 +227,35 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
           <label>Role (optional)<input value={role} onChange={e => setRole(e.target.value)} placeholder="ANALYST_RO" /></label>
         </div>
       )}
-      {source === 'bigquery' && (
+      {!connectionId && source === 'bigquery' && (
         <div className="calc-grid">
           <label>Project ID<input value={project} onChange={e => setProject(e.target.value)} placeholder="my-analytics-123" /></label>
           <label>Access token
             <input type="password" autoComplete="off" spellCheck={false} value={token} onChange={e => setToken(e.target.value)} placeholder="output of: gcloud auth print-access-token" />
-            <span className="example">Used for this request only and never saved. Tokens expire after about an hour.</span>
+            <span className="example">{savingAvailable ? 'Used for this request only unless you save the connection below.' : 'Used for this request only and never saved.'} Tokens expire after about an hour{savingAvailable ? ', so a saved BigQuery token needs replacing' : ''}.</span>
           </label>
           <label>Dataset<input value={dataset} onChange={e => setDataset(e.target.value)} placeholder="sales" /></label>
           <label>Location (optional)<input value={location} onChange={e => setLocation(e.target.value)} placeholder="US, EU, asia-south1" /></label>
         </div>
       )}
+      {connectionId && source === 'bigquery' && <label>Dataset<input value={dataset} onChange={e => setDataset(e.target.value)} placeholder="sales" /></label>}
+      <div className="warehouse-test">
+        <button type="button" className="button secondary" disabled={testing || (source !== 'bigquery' && !schema) || (source === 'bigquery' && !dataset)
+          || (!connectionId && (source === 'postgres' ? !uri.trim() : token.trim().length < 8))} onClick={() => void testConnection(table || undefined)}>
+          {testing ? 'Connecting…' : 'Test connection & load columns'}
+        </button>
+        {inspected && <span className="example" role="status">Connected · {inspected.tables.length} table{inspected.tables.length === 1 ? '' : 's'}{inspected.columns.length ? ` · ${inspected.columns.length} columns in ${table}` : ''}</span>}
+        {!connectionId && savingAvailable && <label className="warehouse-save">Save as (optional, owners)<input value={saveAs} onChange={e => setSaveAs(e.target.value)} placeholder="e.g. Production read-only" maxLength={120} /></label>}
+      </div>
+      <datalist id="warehouse-tables">{(inspected?.tables || []).map(t => <option key={t} value={t} />)}</datalist>
+      <datalist id="warehouse-columns">{columnNames.map(c => <option key={c} value={c} />)}</datalist>
       <div className="calc-grid">
         <div className="calc-card">
           {source !== 'bigquery' && <label>Schema<input value={schema} onChange={e => setSchema(e.target.value)} /></label>}
-          <label>Table<input value={table} onChange={e => setTable(e.target.value)} placeholder="orders" /></label>
-          <label>Which column uniquely identifies each row?<input value={key} onChange={e => setKey(e.target.value)} placeholder="order_id" /></label>
-          <label>Which amount do you want to total?<input value={amount} onChange={e => setAmount(e.target.value)} placeholder="sales_amount" /></label>
+          <label>Table<input list="warehouse-tables" value={table} onChange={e => setTable(e.target.value)}
+            onBlur={() => { if (inspected && inspected.tables.includes(table)) void testConnection(table); }} placeholder="orders" /></label>
+          <label>Which column uniquely identifies each row?<input list="warehouse-columns" value={key} onChange={e => setKey(e.target.value)} placeholder="order_id" /></label>
+          <label>Which amount do you want to total?<input list="warehouse-columns" value={amount} onChange={e => setAmount(e.target.value)} placeholder="sales_amount" /></label>
           <label>What unit does that amount use?<input value={unit} onChange={e => setUnit(e.target.value)} placeholder="INR, USD, points" /></label>
           <label>Other amount columns (optional)<input value={moreAmounts} onChange={e => setMoreAmounts(e.target.value)} placeholder="cost, units:pieces" />
             <span className="example">For ratios such as margin % or revenue per unit. Same unit as above unless written as name:unit; same decimal places.</span></label>
@@ -196,7 +265,12 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
             <legend style={{ fontSize: 13, fontWeight: 600 }}>Which columns should be available for filtering? (up to 8)</legend>
             {filters.map((f, i) => (
               <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,0.8fr) auto', gap: 6 }}>
-                <input aria-label={`Filter column ${i + 1}`} value={f.name} placeholder="status" onChange={e => setFilters(fs => fs.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
+                <input aria-label={`Filter column ${i + 1}`} list="warehouse-columns" value={f.name} placeholder="status" onChange={e => {
+                  const name = e.target.value;
+                  const found = inspected?.columns.find(c => c.name === name);
+                  const type: Kind | undefined = found ? (found.kind === 'date' || found.kind === 'timestamp' || found.kind === 'boolean' ? found.kind : 'string') : undefined;
+                  setFilters(fs => fs.map((x, j) => j === i ? { ...x, name, ...(type ? { type } : {}) } : x));
+                }} />
                 <select aria-label={`Filter column ${i + 1} type`} value={f.type} onChange={e => setFilters(fs => fs.map((x, j) => j === i ? { ...x, type: e.target.value as Kind } : x))}>
                   <option value="string">text</option><option value="boolean">true/false</option><option value="date">date</option><option value="timestamp">timestamp</option>
                 </select>
@@ -205,7 +279,7 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
             ))}
             <button type="button" className="button secondary small" style={{ width: 'fit-content' }} disabled={filters.length >= 8} onClick={() => setFilters(fs => [...fs, { name: '', type: 'string' }])}>Add filter column</button>
           </fieldset>
-          <label>Cutoff column {cloud ? '(optional) ' : ''}(rows up to this point are included)<input value={cutoffColumn} onChange={e => setCutoffColumn(e.target.value)} placeholder="created_at" /></label>
+          <label>Cutoff column {cloud ? '(optional) ' : ''}(rows up to this point are included)<input list="warehouse-columns" value={cutoffColumn} onChange={e => setCutoffColumn(e.target.value)} placeholder="created_at" /></label>
           {cloud && cutoffColumn && <label>Cutoff column type<select value={cutoffType} onChange={e => setCutoffType(e.target.value as 'date' | 'timestamp')}><option value="date">date</option><option value="timestamp">timestamp</option></select></label>}
           <label>Cutoff value<input value={cutoffValue} onChange={e => setCutoffValue(e.target.value)} placeholder="2026-10-01" /></label>
         </div>

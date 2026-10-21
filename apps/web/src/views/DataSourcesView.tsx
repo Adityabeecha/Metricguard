@@ -1294,6 +1294,17 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                           ))}
                         </select>
                         <small className="field-hint">Example: <code>sales_amount</code>. Both calculations add up this column.</small>
+                        {(() => {
+                          // Other numeric columns would otherwise be unusable as amounts later (e.g. tax, net_revenue).
+                          const others = (filePreview?.headers || []).filter(h => h !== confirmedMeasure && h !== confirmedKey
+                            && /numeric|decimal|number|integer/.test(filePreview?.observed_types[h] || '')).slice(0, 7);
+                          if (!confirmedMeasure || !others.length || enableMulti) return null;
+                          return <small className="field-hint amount-offer">This file also has amount columns: <b>{others.join(', ')}</b>.{' '}
+                            <button type="button" className="link-button" onClick={() => {
+                              setEnableMulti(true); setEnableCase(false); setEnableSubtraction(false);
+                              setExtraAmounts(others); setShowAdvanced(true);
+                            }}>Keep them available too</button> — so you can total them or compute margins later.</small>;
+                        })()}
                       </label>
                     </div>
 

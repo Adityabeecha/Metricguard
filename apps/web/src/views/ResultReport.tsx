@@ -178,7 +178,7 @@ function EntityRecordsButton({ runId, entity,client }: { runId: string; entity: 
 }
 
 /** Exact split of the change by one filter column, largest first. */
-function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, onPickGroup, client = workspaceEvidenceClient }: { runId: string; unit: string; percent?: boolean; onColumns: (c: string[]) => void; preferred?: string[] ; loads?: boolean; onPickGroup?: (group: LedgerGroup) => void; client?: EvidenceDataClient }) {
+function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, sources, onPickGroup, client = workspaceEvidenceClient }: { runId: string; unit: string; percent?: boolean; onColumns: (c: string[]) => void; preferred?: string[] ; loads?: boolean; sources?: boolean; onPickGroup?: (group: LedgerGroup) => void; client?: EvidenceDataClient }) {
   const [column, setColumn] = useState('');
   // Across-column concentration; also picks the opening column when the filter column would only restate the filter.
   const [concentration, setConcentration] = useState<EvidenceConcentration | null | undefined>(undefined);
@@ -221,7 +221,7 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, on
   if (!data.available) return <div><p className="example">{data.reason}</p>{unavailableNote}</div>;
   // Changed-only listings carry no per-group totals; leave those columns out instead of a column of dashes.
   const sideTotals = (data.groups || []).some(g => g.current != null || g.proposed != null);
-  const [cur, pro] = loads ? ['Earlier load', 'Later load'] : ['Current', 'Proposed'];
+  const [cur, pro] = sources ? ['Source A', 'Source B'] : loads ? ['Earlier load', 'Later load'] : ['Current', 'Proposed'];
   const groupLabel = (g: { value: unknown; no_match?: boolean }) =>
     g.no_match ? `No matching ${data.column?.split('.')[0] === 'dimension' ? 'lookup' : data.column?.split('.')[0]} row` : showValue(g.value);
   const shown = (v: string | null | undefined) => v == null ? '—' : percent ? groupDigits(percentOf(v)) : groupDigits(v);
@@ -402,7 +402,9 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   const kind = result.aggregate;
   // The same calculation on an earlier and a later load of one dataset, instead of two calculations.
   const loads = Boolean((run as Run).target_snapshot_id);
-  const [cur, pro] = loads ? ['Earlier load', 'Later load'] : ['Current', 'Proposed'];
+  // Two sources for the same period (e.g. Finance vs Product) rather than two points in time.
+  const sources = loads && (run.context as { labels?: string } | undefined)?.labels === 'sources';
+  const [cur, pro] = sources ? ['Source A', 'Source B'] : loads ? ['Earlier load', 'Later load'] : ['Current', 'Proposed'];
   const differing = result.change_summary
     ? Object.entries(result.change_summary).filter(([k]) => k !== 'unchanged').reduce((n, [, v]) => n + (v?.records || 0), 0)
     : result.evidence_coverage?.listed_records;
@@ -423,7 +425,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
     complete: true,
     changedCount: evidence.summary.changed,
     differing,
-  } : undefined, loads ? 'loads' : 'calculations'), [result, unit, evidence.summary]);
+  } : undefined, sources ? 'sources' : loads ? 'loads' : 'calculations'), [result, unit, evidence.summary]);
 
   const [offset, setOffset] = useState(0);
   const [changedOnly, setChangedOnly] = useState(false);
@@ -487,7 +489,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
 
   // ---- Reconciliation (docs/design/evidence-ui-spec.md §2–3)
   const categories = evidence.summary?.categories ?? null;
-  const labels = { loads, distinct: kind === 'count_distinct' };
+  const labels = { loads, sources, distinct: kind === 'count_distinct' };
   const fmt = (v: string | null | undefined) => v == null ? '—'
     : minus(percent ? `${groupDigits(percentOf(v))} pts` : `${groupDigits(v)}${unit ? ` ${unit}` : ''}`);
   const stepValue = (c: { change: string; effect?: string | null }) => (ratio ? (c.effect ?? '0') : c.change);
@@ -569,7 +571,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
       {tab === 'breakdown' && kind === 'count_distinct' && result.distinct && <DistinctPanel distinct={result.distinct} />}
 
       {/* Kept mounted so its column list feeds the record table's "Show columns"; hidden outside its tab. */}
-      {run.result && !expired && <div hidden={tab !== 'breakdown'}><Breakdown runId={run.id} unit={unit} percent={percent} onColumns={setColumns} preferred={breakdownColumns} loads={loads} onPickGroup={pickGroup} client={evidenceClient} /></div>}
+      {run.result && !expired && <div hidden={tab !== 'breakdown'}><Breakdown runId={run.id} unit={unit} percent={percent} onColumns={setColumns} preferred={breakdownColumns} loads={loads} sources={sources} onPickGroup={pickGroup} client={evidenceClient} /></div>}
 
       {expired && (tab === 'records' || tab === 'breakdown') && <p className="disabled-reason" role="status">Detailed records expired — rerun to see them</p>}
       {tab === 'records' && summaryLoading && (

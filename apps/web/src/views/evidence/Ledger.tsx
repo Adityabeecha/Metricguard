@@ -21,7 +21,7 @@ export type LedgerProps = {
   categories: ChangeCategory[];
   category: CategoryKey | '';
   onCategory: (key: CategoryKey | '') => void;
-  labels: { loads?: boolean; distinct?: boolean };
+  labels: { loads?: boolean; distinct?: boolean; sources?: boolean };
   keyHeader: string;
   /** Current and proposed state of one record, e.g. "Included · 200.00". */
   side: (row: Row, which: 'baseline' | 'target') => ReactNode;
@@ -97,14 +97,14 @@ export function Ledger(props: LedgerProps) {
       {problem && <p className="disabled-reason">Records could not be loaded: {problem}</p>}
       <table className="ledger-table" aria-busy={busy}>
         <thead>
-          <tr><th scope="col">{keyHeader}</th><th scope="col">{labels.loads ? 'Earlier load → Later load' : 'Current → Proposed'}</th><th scope="col" className="num">Change</th>
+          <tr><th scope="col">{keyHeader}</th><th scope="col">{labels.sources ? 'Source A → Source B' : labels.loads ? 'Earlier load → Later load' : 'Current → Proposed'}</th><th scope="col" className="num">Change</th>
             {showRunning && <th scope="col" className="num">Running total</th>}</tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (
             <tr key={keyOf(r)}>
               <td className="key" data-label={keyHeader}>{keyOf(r)}<RecordContext row={r} loads={labels.loads} /></td>
-              <td className="move" data-label={labels.loads ? 'Earlier load → Later load' : 'Current → Proposed'}>
+              <td className="move" data-label={labels.sources ? 'Source A → Source B' : labels.loads ? 'Earlier load → Later load' : 'Current → Proposed'}>
                 <span className={`was${leaves(r) ? ' left' : ''}`}>{side(r, 'baseline')}</span>
                 <span className="arrow" aria-label="becomes">→</span>
                 <span className="now">{side(r, 'target')}</span>

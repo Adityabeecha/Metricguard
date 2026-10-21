@@ -7,8 +7,8 @@ type Mode = 'menu' | 'rename' | 'delete' | null;
 /** Row menu for a list item: rename it, or delete it after confirming by name. */
 export function ItemActions({ name, kind, onRename, onDelete, deleteNote }: {
   name: string;
-  kind: 'dataset' | 'case';
-  onRename: (name: string) => Promise<void>;
+  kind: 'dataset' | 'case' | 'draft';
+  onRename?: (name: string) => Promise<void>;
   onDelete: () => Promise<void>;
   deleteNote?: string;
 }) {
@@ -45,13 +45,13 @@ export function ItemActions({ name, kind, onRename, onDelete, deleteNote }: {
     try { await action(); close(); }
     catch (e) { setProblem(e instanceof Error ? e.message : String(e)); setBusy(false); }
   };
-  const rename = (e: FormEvent) => { e.preventDefault(); if (value.trim() && value.trim() !== name) void run(() => onRename(value.trim())); else close(); };
+  const rename = (e: FormEvent) => { e.preventDefault(); if (onRename && value.trim() && value.trim() !== name) void run(() => onRename(value.trim())); else close(); };
 
   return <div className="item-actions" ref={root} onClick={e => e.stopPropagation()}>
     <button ref={trigger} type="button" className="item-actions-trigger" aria-label={`More actions for ${name}`} aria-haspopup="menu" aria-expanded={mode === 'menu'}
       onClick={() => { place(); setMode(m => m ? null : 'menu'); }}><MoreHorizontal size={16} /></button>
     {mode === 'menu' && <div className="item-actions-pop" role="menu" style={anchor ? { top: anchor.top, right: anchor.right } : undefined}>
-      <button type="button" role="menuitem" onClick={() => { setValue(name); setMode('rename'); }}>Rename</button>
+      {onRename && <button type="button" role="menuitem" onClick={() => { setValue(name); setMode('rename'); }}>Rename</button>}
       <button type="button" role="menuitem" className="danger" onClick={() => setMode('delete')}>Delete</button>
     </div>}
     {mode === 'rename' && <form className="item-actions-pop" style={anchor ? { top: anchor.top, right: anchor.right } : undefined} onSubmit={rename} aria-label={`Rename ${kind}`}>

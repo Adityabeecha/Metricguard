@@ -273,3 +273,61 @@ def test_large_loads_stream_and_list_only_changed_records(loads, tmp_path, monke
     manifest = write_artifact(tmp_path / 'large.jsonl', evidence, expected_result=stored)
     assert manifest['row_count'] == len(small['evidence'])
     verify_artifact(tmp_path / 'large.jsonl', manifest, large['delta_target_minus_baseline'], expected_result=stored)
+
+
+def test_http_compare_two_separately_uploaded_sources(tmp_path):
+    """Finance vs Product: two datasets with their own definitions, same row ID, amount and filter column."""
+    from fastapi.testclient import TestClient
+    from services.api.app import create_app
+    from services.api.store import Store
+    from services.supervisor.worker import Supervisor
+    from tests.test_flat_workflow import InProcessLauncher
+
+    url = f"sqlite:///{tmp_path / 'app.db'}"
+    worker = Supervisor(Store(url), InProcessLauncher(), tmp_path / 'jobs', 'sources-worker')
+
+    def dataset(client, name, rows, row_key='row_id', header=HEADER):
+        contract = client.post('/api/v1/flat/contracts', json={
+            'version': 4, 'mode': 'flat_snapshot', 'dimension_types': {'status': 'string'}, 'name': name,
+            'row_key': row_key, 'measure': 'amount', 'precision': 18, 'scale': 2, 'categories': ['status'],
+            'measure_meaning': f'{name} amount', 'unit_label': 'INR', 'values_comparable': True,
+            'scope': 'entire_supplied_snapshot', 'null_policy': 'blank_nullable'}).json()
+        source = tmp_path / f'{name}.csv'
+        with source.open('w', newline='') as stream:
+            csv.writer(stream).writerows([header, *rows])
+        with source.open('rb') as content:
+            uploaded = client.post('/api/v1/flat/snapshots', files={'file': (f'{name}.csv', content, 'text/csv')},
+                                   data={'contract_id': contract['id'], 'name': name}).json()
+        assert worker.run_once()
+        return contract, client.get(f"/api/v1/snapshot-imports/{uploaded['id']}").json()['snapshot_id']
+
+    with TestClient(create_app(database_url=url, data_dir=tmp_path, mode='isolated')) as client:
+        finance, finance_id = dataset(client, 'Finance export', SEPTEMBER)
+        product, product_id = dataset(client, 'Product export', OCTOBER)
+        assert finance['contract_hash'] != product['contract_hash']
+        definition = client.post('/api/v1/flat/definitions', json={
+            'name': 'Completed', 'raw_sql': "SELECT SUM(amount) FROM snapshot WHERE status = 'completed'",
+            'contract_id': finance['id']}).json()
+        body = {'version_id': definition['versions'][0]['id'], 'baseline_snapshot_id': finance_id,
+                'target_snapshot_id': product_id, 'labels': 'sources',
+                'context': {'mode': 'flat_snapshot', 'scope': 'entire_supplied_snapshot',
+                            'contract_hash': finance['contract_hash'], 'unit_label': 'INR', 'values_comparable': True}}
+        queued = client.post('/api/v1/flat/snapshot-changes', json=body, headers={'Idempotency-Key': 'sources'})
+        assert queued.status_code == 202, queued.text
+        assert worker.run_once()
+        run = client.get(f"/api/v1/comparisons/{queued.json()['id']}").json()
+        assert run['state'] == 'succeeded', run['error']
+        assert run['result']['delta_target_minus_baseline'] == '115.00'
+        assert run['context']['labels'] == 'sources'
+        saved = client.post('/api/v1/investigations', json={'title': 'Finance vs Product', 'run_id': run['id'],
+                                                             'decision': 'Explained', 'actor_label': 'Tester'}).json()
+        replay = client.post(f"/api/v1/investigations/{saved['id']}/replays", headers={'Idempotency-Key': 'sources-replay'})
+        assert replay.status_code == 202, replay.text
+
+        # A source keyed by a different record ID cannot run the same calculation: say why, plainly.
+        _, other_id = dataset(client, 'Other export', [list(r) for r in OCTOBER], row_key='order_ref',
+                              header=['order_ref', 'amount', 'status'])
+        refused = client.post('/api/v1/flat/snapshot-changes/validate', json={**body, 'target_snapshot_id': other_id})
+        assert refused.status_code == 422
+        assert 'record ID column differs (row_id vs order_ref)' in refused.json()['error']['message']
+        assert 'contract' not in refused.json()['error']['message'].lower()

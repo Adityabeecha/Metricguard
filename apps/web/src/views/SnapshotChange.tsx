@@ -4,12 +4,15 @@ import { api, type Bootstrap, type ColumnValues, type FlatContract, type Run, ty
 import {
   amountColumns, buildFlatSql, defaultConditionColumn, describeCalculation, flatFilterColumns, formProblems, OP_LABEL, operatorsFor,
   supportsAnyMatch, supportsCount, type CalculationForm, type Filter,
+  datasetTableName, flatSqlColumns,
 } from '../comparisonBuilder';
+import { SqlEditor } from './SqlEditor';
 import { comparisonRequestKey } from '../guidedWorkflow';
 import { classifyInvestigationError, type ClassifiedInvestigationError } from '../investigationUtils';
 import { groupDigits } from '../resultSummary';
 import { ConditionHelp, ConditionValue } from './ConditionFields';
 import { CHANGE_LABEL, ResultReport } from './ResultReport';
+import { categoryLabel, type CategoryKey } from './evidence/categories';
 import { comparisonDatasetGroups } from '../comparisonSelection';
 import { useRecordedBy } from '../useRecordedBy';
 
@@ -34,19 +37,23 @@ export function loadLabel(s: Snapshot): string {
 
 /** One calculation run on two data loads of the same dataset (e.g. September vs October). */
 export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props) {
-  const groups = useMemo(() => {
-    const choices = data.snapshots.flatMap(snapshot => {
-      const flat = (data.flat_contracts || []).find(c => SUPPORTED.has(c.version) && c.contract_hash === snapshot.contract_hash);
-      return flat && snapshot.execution_policy !== 'relational_snapshot_v1' ? [{ snapshot, flat }] : [];
-    });
-    return comparisonDatasetGroups(choices).filter(g => g.loads.length >= 2).map(g => ({
-      contract: g.latest.flat, snapshots: g.loads.map(c => c.snapshot).reverse(),
-    }));
-  }, [data.flat_contracts, data.snapshots]);
+  const sourceChoices = useMemo(() => data.snapshots.flatMap(snapshot => {
+    const flat = (data.flat_contracts || []).find(c => SUPPORTED.has(c.version) && c.contract_hash === snapshot.contract_hash);
+    return flat && snapshot.execution_policy !== 'relational_snapshot_v1' ? [{ snapshot, flat }] : [];
+  }), [data.flat_contracts, data.snapshots]);
+  const groups = useMemo(() => comparisonDatasetGroups(sourceChoices).filter(g => g.loads.length >= 2).map(g => ({
+    contract: g.latest.flat, snapshots: g.loads.map(c => c.snapshot).reverse(),
+  })), [sourceChoices]);
+  // 'loads': two points in time of one dataset; 'sources': two separately uploaded datasets for the same period.
+  const [kind, setKind] = useState<'loads' | 'sources'>('loads');
+  const sources = kind === 'sources';
   const [contractId, setContractId] = useState('');
-  const group = groups.find(g => g.contract.id === contractId) || null;
   const [baselineId, setBaselineId] = useState('');
   const [targetId, setTargetId] = useState('');
+  const sourceA = sources ? sourceChoices.find(c => c.snapshot.id === baselineId) : undefined;
+  const group = sources
+    ? (sourceA ? { contract: sourceA.flat, snapshots: sourceChoices.map(c => c.snapshot) } : null)
+    : groups.find(g => g.contract.id === contractId) || null;
   const [versionId, setVersionId] = useState('');
   const [mode, setMode] = useState<'form' | 'sql'>('form');
   const [form, setForm] = useState<CalculationForm>({ filters: [] });
@@ -121,9 +128,9 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
 
   const baseline = group?.snapshots.find(s => s.id === baselineId), target = group?.snapshots.find(s => s.id === targetId);
   const blocker = !engineReady ? 'The comparison engine is not running. Start it with scripts\\mg.ps1 start.'
-    : !group ? 'Choose a dataset with at least two loads.'
-    : !baseline || !target ? 'Choose both loads.'
-    : baseline.id === target.id ? 'Choose two different loads.'
+    : !group ? (sources ? 'Choose source A.' : 'Choose a dataset with at least two loads.')
+    : !baseline || !target ? (sources ? 'Choose both sources.' : 'Choose both loads.')
+    : baseline.id === target.id ? (sources ? 'Choose two different datasets.' : 'Choose two different loads.')
     : formIssue || (!currentSql.trim() ? 'Choose a saved calculation or describe one.' : '');
 
   const update = (next: CalculationForm) => { setForm(next); setRun(null); };
@@ -152,7 +159,8 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
       }
       const c = group.contract;
       const request = { version_id: id, baseline_snapshot_id: baselineId, target_snapshot_id: targetId,
-        context: { mode: 'flat_snapshot', scope: c.scope, contract_hash: c.contract_hash, unit_label: c.unit_label, values_comparable: true } };
+        context: { mode: 'flat_snapshot', scope: c.scope, contract_hash: c.contract_hash, unit_label: c.unit_label, values_comparable: true },
+        ...(sources ? { labels: 'sources' } : {}) };
       const key = await comparisonRequestKey(data.project.id, { snapshot_change: request });
       setRun(await api.post<Run>('/flat/snapshot-changes', request, { 'Idempotency-Key': key }));
       const calc = description ? description.replace(/\.$/, '') : saved.find(s => s.id === id)?.label || 'Calculation';
@@ -187,11 +195,39 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
   return (
     <section className="guided-card comparison-loads" aria-labelledby="snapshot-change">
       <h2 id="snapshot-change">Same calculation, two data loads</h2>
-      <p className="lead">Run one calculation on an earlier and a later load of the same dataset and see which records were added, removed or changed. Records are matched by their ID column, and their changes add up exactly to the change in the total.</p>
-      {groups.length === 0 ? (
+      <p className="lead">{sources
+        ? 'Run one calculation on two separately uploaded datasets for the same period (e.g. a Finance export and a Product export) and see which records exist in only one of them or differ in value.'
+        : 'Run one calculation on an earlier and a later load of the same dataset and see which records were added, removed or changed.'} Records are matched by their ID column, and their changes add up exactly to the difference in the total.</p>
+      {sourceChoices.length >= 2 && (
+        <fieldset className="plain-fieldset kind-switch">
+          <legend className="form-label">What are the two files?</legend>
+          <label><input type="radio" name="load-kind" checked={!sources} onChange={() => { setKind('loads'); setRun(null); setProblem(null); setContractId(''); }} /> Two points in time (earlier → later)</label>
+          <label><input type="radio" name="load-kind" checked={sources} onChange={() => {
+            setKind('sources'); setRun(null); setProblem(null);
+            setBaselineId(sourceChoices[0]?.snapshot.id || ''); setTargetId(sourceChoices[1]?.snapshot.id || '');
+            setVersionId(''); setMode('form'); setForm({ filters: [] }); setSql(defaultSql(sourceChoices[0].flat));
+          }} /> Two sources for the same period (A → B)</label>
+        </fieldset>
+      )}
+      {sources ? (
+        <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+          <div className="comparison-load-pair">
+            <label>Source A
+              <select value={baselineId} onChange={e => { setBaselineId(e.target.value); setVersionId(''); setRun(null); setProblem(null); }}>
+                {sourceChoices.map(c => <option key={c.snapshot.id} value={c.snapshot.id}>{loadLabel(c.snapshot)}</option>)}
+              </select>
+            </label>
+            <label>Source B
+              <select value={targetId} onChange={e => { setTargetId(e.target.value); setRun(null); setProblem(null); }}>
+                {sourceChoices.map(c => <option key={c.snapshot.id} value={c.snapshot.id}>{loadLabel(c.snapshot)}</option>)}
+              </select>
+            </label>
+          </div>
+          <p className="hint">The calculation is written for source A and run on both. Source B needs the same record ID column, the same amount (unit and decimals) and the filter columns you use; you'll be told plainly if anything differs.</p>
+        </div>
+      ) : groups.length === 0 ? (
         <div className="guided-explain">No dataset has two loads yet. On the Datasets page, open a dataset and choose <b>Add a newer load</b>; or upload a file with the same columns and settings and keep “Add this file as a new load” ticked.</div>
       ) : (
-        <>
           <div className="dataset-list" role="group" aria-label="Datasets with several loads">
             {groups.map(g => (
               <button key={g.contract.id} type="button" className="dataset-row" aria-pressed={g.contract.id === contractId} onClick={() => setContractId(g.contract.id)}>
@@ -200,9 +236,10 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
               </button>
             ))}
           </div>
+      )}
           {group && contract && (
             <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
-              <div className="comparison-load-pair">
+              {!sources && <div className="comparison-load-pair">
                 <label>Earlier load
                   <select value={baselineId} onChange={e => { setBaselineId(e.target.value); setRun(null); }}>
                     {group.snapshots.map(s => <option key={s.id} value={s.id}>{loadLabel(s)}</option>)}
@@ -213,7 +250,7 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
                     {group.snapshots.map(s => <option key={s.id} value={s.id}>{loadLabel(s)}</option>)}
                   </select>
                 </label>
-              </div>
+              </div>}
               {saved.length > 0 && (
                 <label>Start from a saved calculation (optional)
                   <select value={versionId} onChange={e => { setVersionId(e.target.value); setRun(null); }}>
@@ -287,7 +324,9 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
                     </>
                   ) : (
                     <label>SQL (a total with SUM or a record count with COUNT(*), optionally with WHERE)
-                      <textarea rows={3} value={sql} onChange={e => { setSql(e.target.value); setRun(null); }} spellCheck={false} />
+                      <SqlEditor rows={3} value={sql} onChange={next => { setSql(next); setRun(null); }}
+                        columns={contract ? flatSqlColumns(contract) : []}
+                        tables={contract ? ['snapshot', ...(datasetTableName(contract) ? [datasetTableName(contract)] : [])] : []} />
                     </label>
                   )}
                 </div>
@@ -295,13 +334,11 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
               <div className="guided-nav">
                 <span className="example">{blocker}</span>
                 <button className="button primary" disabled={Boolean(blocker) || busy || (run !== null && pending(run.state))} onClick={compare}>
-                  {busy || (run && pending(run.state)) ? 'Comparing…' : 'Compare the two loads'} <ArrowRight size={15} />
+                  {busy || (run && pending(run.state)) ? 'Comparing…' : sources ? 'Compare the two sources' : 'Compare the two loads'} <ArrowRight size={15} />
                 </button>
               </div>
             </div>
           )}
-        </>
-      )}
       {problem && (
         <div className="alert error" role="alert">
           <span><strong>{problem.title}:</strong> {problem.message}{problem.guidance && <> — {problem.guidance}</>}</span>
@@ -314,7 +351,7 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
             <thead><tr><th>What happened to the record</th><th className="figure-cell">Records</th><th className="figure-cell">Change in the total</th></tr></thead>
             <tbody>
               {KINDS.filter(k => summary[k]?.records).map(k => (
-                <tr key={k}><td>{CHANGE_LABEL[k]}</td><td className="figure-cell">{summary[k].records.toLocaleString('en-US')}</td><td className="figure-cell">{money(summary[k].delta)}</td></tr>
+                <tr key={k}><td>{sources && k !== 'unchanged' ? categoryLabel(k as CategoryKey, { loads: true, sources: true }) : CHANGE_LABEL[k]}</td><td className="figure-cell">{summary[k].records.toLocaleString('en-US')}</td><td className="figure-cell">{money(summary[k].delta)}</td></tr>
               ))}
             </tbody>
           </table>

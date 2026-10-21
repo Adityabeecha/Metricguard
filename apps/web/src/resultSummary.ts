@@ -132,10 +132,13 @@ export function summarizeResult(
     /** Records that differ between the two sides (changed-only listings and two-load comparisons). */
     differing?: number },
   /** 'loads': the same calculation on an earlier and a later load of one dataset. */
-  compare: 'calculations' | 'loads' = 'calculations',
+  compare: 'calculations' | 'loads' | 'sources' = 'calculations',
 ): ResultSummary {
-  const loads = compare === 'loads';
-  const current = loads ? 'earlier load' : 'current calculation', proposed = loads ? 'later load' : 'proposed calculation';
+  const loads = compare === 'loads' || compare === 'sources';
+  const current = compare === 'sources' ? 'source A' : loads ? 'earlier load' : 'current calculation';
+  const proposed = compare === 'sources' ? 'source B' : loads ? 'later load' : 'proposed calculation';
+  // "Source A" is a name and takes no article; the others read "the later load", "the current calculation".
+  const the = (noun: string, start = false) => compare === 'sources' ? (start ? noun[0].toUpperCase() + noun.slice(1) : noun) : `${start ? 'The' : 'the'} ${noun}`;
   const uncertainties: string[] = [];
   const delta = result.delta_target_minus_baseline;
   const defined = result.baseline_value != null && result.target_value != null && delta != null;
@@ -166,8 +169,8 @@ export function summarizeResult(
     direction = (exactGap ?? delta!).startsWith('-') ? 'down' : 'up';
     const amount = isRatio && result.ratio?.unit === 'share' ? `${percentOf(absDecimal(delta!))} percentage points` : withUnit(absDecimal(delta!), unit);
     headline = isRatio && isZeroDecimal(delta)
-      ? `The ${proposed} is ${direction === 'down' ? 'lower' : 'higher'} by less than the displayed precision. Exact change: ${exactGap}${result.ratio?.unit === 'share' ? ' (multiply by 100 for percentage points)' : ''}.`
-      : `The ${proposed} is ${amount} ${direction === 'down' ? 'lower' : 'higher'} than the ${current}.`;
+      ? `${the(proposed, true)} is ${direction === 'down' ? 'lower' : 'higher'} by less than the displayed precision. Exact change: ${exactGap}${result.ratio?.unit === 'share' ? ' (multiply by 100 for percentage points)' : ''}.`
+      : `${the(proposed, true)} is ${amount} ${direction === 'down' ? 'lower' : 'higher'} than ${the(current)}.`;
   }
 
   const changedRecords = (records?.rows || []).filter(r => r.delta != null && !isZeroDecimal(r.delta));

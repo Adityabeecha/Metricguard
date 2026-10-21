@@ -95,8 +95,9 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
                   <button className="button secondary small" onClick={() => onOpenRun(run)}>Write conclusion <ArrowRight size={12} /></button>
                   {isDismissed
                     ? <button className="button secondary small" onClick={() => setDismissedRun(run.id, false)}>Restore</button>
-                    : <button className="icon-button button secondary small" aria-label={`Dismiss ${caseNumber(run.id)} from this list`} title="Dismiss from this list"
-                        onClick={() => setDismissedRun(run.id, true)}><X size={14} /></button>}
+                    : <button className="button secondary small" aria-label={`Hide ${caseNumber(run.id)} from this list`}
+                        title="Hide from this list. Nothing is deleted; you can restore it below."
+                        onClick={() => setDismissedRun(run.id, true)}><X size={14} /> Hide</button>}
                 </span>
               </div>
             );
@@ -178,6 +179,10 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
                         deleteNote="The comparison and its evidence stay; only this saved case is removed."
                         onRename={async title => { await api.renameInvestigation(item.id, title); await onChanged(); }}
                         onDelete={async () => { await api.deleteInvestigation(item.id); await onChanged(); }} />
+                    )}{item.source === 'draft' && (
+                      <ItemActions name={item.title} kind="draft"
+                        deleteNote="Only the unfinished draft is removed; any comparison it ran stays in your history."
+                        onDelete={async () => { await api.deleteInvestigationDraft(workspaceId, item.id); await reload(); }} />
                     )}</td>
                   </tr>
                 ))}

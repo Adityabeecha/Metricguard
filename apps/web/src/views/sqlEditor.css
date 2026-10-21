@@ -1,0 +1,26 @@
+/* SQL editor: a highlighted layer under a transparent textarea, with the dataset's columns as chips. */
+.sql-editor { display: grid; gap: 6px; }
+.sql-schema { display: flex; flex-wrap: wrap; gap: 4px; }
+.sql-chip { display: inline-flex; align-items: baseline; gap: 5px; padding: 2px 7px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--panel); color: var(--ink); font: 500 12px var(--font-mono); cursor: pointer; }
+.sql-chip:hover, .sql-chip:focus-visible { border-color: var(--link); }
+.sql-chip.table { border-style: dashed; }
+.sql-type { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.sql-input { position: relative; }
+.sql-editor .sql-input textarea, .sql-editor .sql-input .sql-layer {
+  box-sizing: border-box; width: 100%; margin: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 6px;
+  font: 400 13px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2;
+}
+.sql-editor .sql-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; color: var(--ink); background: var(--panel); border-color: transparent; }
+.sql-editor .sql-input textarea { position: relative; min-height: 0; box-shadow: none; resize: vertical; background: transparent; color: transparent; caret-color: var(--ink); }
+.sql-input textarea::placeholder { color: var(--muted); }
+.tok-keyword { color: var(--link); font-weight: 600; }
+.tok-function { color: var(--link); }
+.tok-string { color: var(--ok, #2f7d4f); }
+.tok-number { color: var(--kraft, #9a6a2f); }
+.tok-column { color: var(--ink); text-decoration: underline dotted var(--line-strong); text-underline-offset: 3px; }
+.tok-table { color: var(--ink); font-weight: 600; }
+.tok-operator { color: var(--text-2); }
+
+/* Warehouse form: test connection row. */
+.warehouse-test { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; margin: 4px 0 8px; }
+.warehouse-save { display: grid; gap: 4px; font-size: 12px; }

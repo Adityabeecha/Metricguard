@@ -1253,9 +1253,15 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 before['manifest']['manifest_hash'] == after['manifest']['manifest_hash']:
             raise DomainError('NOT_COMPARABLE', 'Choose two different data loads to compare.', 422)
         contract_hash = before.get('contract_hash')
-        if not contract_hash or after.get('contract_hash') != contract_hash:
-            raise DomainError('SNAPSHOT_CONTRACT_MISMATCH', 'The two snapshots were loaded under different dataset contracts '
-                              '(row key, columns or units differ); compare loads of the same dataset.', 422)
+        if not contract_hash or not after.get('contract_hash'):
+            raise DomainError('SNAPSHOT_CONTRACT_MISMATCH', 'Both datasets must be single-table uploads.', 422)
+        if after.get('contract_hash') != contract_hash:
+            # Two separately uploaded sources: allowed when this calculation means the same on both.
+            from packages.metricguard_core.flat_change import source_mismatches
+            problems = source_mismatches(before['manifest']['contract'], after['manifest']['contract'], version.get('ir') or {})
+            if problems:
+                raise DomainError('SNAPSHOT_CONTRACT_MISMATCH', 'These two datasets cannot be compared with this calculation: '
+                                  + '; '.join(problems) + '.', 422)
         if version.get('contract_hash') != contract_hash or body.context.contract_hash != contract_hash:
             raise DomainError('NOT_COMPARABLE', 'The definition is bound to a different dataset contract than these snapshots.', 422)
         try:
@@ -1269,7 +1275,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 raise DomainError('SNAPSHOT_MISSING', 'One of these snapshots is missing and cannot be replayed.')
         context = {**body.context.model_dump(mode='json'), 'comparison': 'snapshot_change',
                    'manifest_hash': before['manifest']['manifest_hash'],
-                   'target_manifest_hash': after['manifest']['manifest_hash']}
+                   'target_manifest_hash': after['manifest']['manifest_hash'],
+                   **({'labels': 'sources'} if body.labels == 'sources' else {})}
         return {'baseline_version_id': body.version_id, 'target_version_id': body.version_id,
                 'snapshot_id': body.baseline_snapshot_id, 'target_snapshot_id': body.target_snapshot_id,
                 'context': context, 'relationship': 'candidate'}
@@ -1535,10 +1542,11 @@ def create_app(database_url=None, data_dir=None, mode=None):
             return store.queue(payload, idempotency_key, execution_mode, project_id=pid)
         if item['context'].get('comparison') == 'snapshot_change':
             context = {k: v for k, v in item['context'].items()
-                       if k not in ('comparison', 'manifest_hash', 'target_manifest_hash')}
+                       if k not in ('comparison', 'manifest_hash', 'target_manifest_hash', 'labels')}
             body = FlatSnapshotChangeInput.model_validate({
                 'version_id': item['baseline_version_id'], 'baseline_snapshot_id': item['snapshot_id'],
-                'target_snapshot_id': item.get('target_snapshot_id'), 'context': context})
+                'target_snapshot_id': item.get('target_snapshot_id'), 'context': context,
+                'labels': item['context'].get('labels', 'loads')})
             payload = validated_snapshot_change(body, auth=auth, pid=pid)
             if payload['context'] != item['context']:
                 raise DomainError('REPLAY_PIN_MISMATCH', 'A saved snapshot changed; replay is unavailable.')
@@ -2432,10 +2440,19 @@ def create_app(database_url=None, data_dir=None, mode=None):
     def extract_postgres_source(pid: str, payload: PostgresExtractionInput, request: Request):
         auth = get_auth_context(request, store)
         verify_project_access(store, pid, auth, allowed_roles=('owner', 'analyst'))
+        source_uri = payload.source_uri
+        if payload.connection_id:
+            from .warehouse_connections import resolve
+            kind, _, secret = resolve(store, pid, payload.connection_id)
+            if kind != 'postgres':
+                raise DomainError('INVALID_CONNECTION', 'That saved connection is not a PostgreSQL connection.')
+            source_uri = secret['source_uri']
+        if not source_uri:
+            raise DomainError('INVALID_CONNECTION', 'Enter the connection string or choose a saved connection.')
 
         collector = PostgresCollector(store=store, data_dir=data_dir)
         selection = PostgresSourceSelection(
-            source_uri=payload.source_uri,
+            source_uri=source_uri,
             schema_name=payload.schema_name,
             table_name=payload.table_name,
             columns=payload.columns,
@@ -2467,8 +2484,17 @@ def create_app(database_url=None, data_dir=None, mode=None):
         verify_object_access(store, contract_record, auth, allowed_roles=('owner', 'analyst'))
         contract = {key: value for key, value in contract_record.items()
                     if key not in {'id', 'created_at', 'version_number', 'project_id'}}
-        body = payload.model_dump(exclude={'contract_id', 'snapshot_name', 'schema_name'})
+        body = payload.model_dump(exclude={'contract_id', 'snapshot_name', 'schema_name', 'connection_id'})
         body['schema'] = payload.schema_name
+        if payload.connection_id:
+            from .warehouse_connections import resolve
+            saved_kind, public, secret = resolve(store, pid, payload.connection_id)
+            if saved_kind != kind:
+                raise DomainError('INVALID_CONNECTION', 'That saved connection is for a different kind of warehouse.')
+            body.update({k: v for k, v in public.items() if k in ('account', 'database', 'warehouse', 'role', 'token_type', 'project', 'location') and v})
+            body['token'] = secret['token']
+        if not body.get('token'):
+            raise DomainError('INVALID_CONNECTION', 'Paste an access token or choose a saved connection.')
         stage = data_dir / 'uploads' / f'{uuid4()}.csv'
         stage.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -2479,8 +2505,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 raise DomainError(error.code, error.message, 422 if error.code != 'AUTHENTICATION_FAILED' else 401) from None
             store.check_storage_quota(pid, stage.stat().st_size, data_dir)
             source_hash = hashlib.sha256(stage.read_bytes()).hexdigest()
-            label = (f'{payload.database}.{payload.schema_name}.{payload.table}' if kind == 'snowflake'
-                     else f'{payload.project}.{payload.dataset}.{payload.table}')
+            label = (f"{body.get('database')}.{payload.schema_name}.{payload.table}" if kind == 'snowflake'
+                     else f"{body.get('project')}.{payload.dataset}.{payload.table}")
             metadata = {'flat_contract': contract, 'warehouse_source': {
                 'kind': kind, 'table': label, 'rows_read': rows, 'sample_rows': payload.sample_rows,
                 'cutoff': {'column': payload.cutoff_column, 'value': payload.cutoff_value} if payload.cutoff_column else None,
@@ -2504,6 +2530,9 @@ def create_app(database_url=None, data_dir=None, mode=None):
         auth = get_auth_context(request, store)
         verify_project_access(store, pid, auth, allowed_roles=('owner', 'analyst', 'reader'))
         return store.list_extractions(pid)
+
+    from .warehouse_connections import install_warehouse_connection_routes
+    install_warehouse_connection_routes(app, store)
 
     from .case_shares import install_case_share_routes
     install_case_share_routes(app, store, {

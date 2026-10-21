@@ -29,6 +29,8 @@ import {
 } from '../api';
 import { isDefinedComparison, isExactZero } from '../investigationUtils';
 import { MetricContractsPanel } from './MetricContractsPanel';
+import { SqlEditor } from './SqlEditor';
+import { datasetTableName, flatSqlColumns } from '../comparisonBuilder';
 
 interface MetricsViewProps {
   data: Bootstrap;
@@ -1154,16 +1156,13 @@ export function MetricsView({
                         <label className="form-label" htmlFor="impl-raw-sql" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>
                           Raw SQL query
                         </label>
-                        <textarea
-                          id="impl-raw-sql"
-                          className="form-textarea code-textarea"
-                          rows={5}
-                          placeholder="SELECT SUM(amount) FROM snapshot WHERE status = 'COMPLETED'"
-                          value={implRawSql}
-                          onChange={(e) => setImplRawSql(e.target.value)}
-                          required
-                          style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: '12px' }}
-                        />
+                        {(() => {
+                          const picked = availableFlatContracts.find(c => c.id === implContractId);
+                          const table = picked ? datasetTableName(picked) : '';
+                          return <SqlEditor id="impl-raw-sql" rows={5} value={implRawSql} onChange={setImplRawSql}
+                            columns={picked ? flatSqlColumns(picked) : []} tables={picked ? ['snapshot', ...(table ? [table] : [])] : []}
+                            placeholder={`SELECT SUM(amount) FROM ${table || 'snapshot'} WHERE status = 'completed'`} />;
+                        })()}
                       </div>
                     </>
                   )}

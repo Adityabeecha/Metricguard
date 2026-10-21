@@ -26,7 +26,7 @@ export function UsagePanel({ workspaceId }: { workspaceId: string }) {
         <div><dt>Upload size</dt><dd className="n">{usage.max_upload_mb == null ? number(null) : `${number(usage.max_upload_mb)} MB`}</dd></div>
         <div><dt>Comparisons in the last 24 hours</dt><dd className="n">{number(usage.runs_last_24h)}{usage.max_runs_per_day != null ? ` of ${number(usage.max_runs_per_day)}` : ' (no daily limit)'}</dd></div>
         <div><dt>Storage used</dt><dd className="n">{(usage.storage_bytes / (1024 * 1024)).toLocaleString(undefined, { maximumFractionDigits: 2 })} MiB</dd></div>
-      </dl><p className="hint">Includes your datasets and saved evidence.</p></>}
+      </dl><p className="hint">Storage includes your datasets and saved evidence. Every comparison you run counts toward the daily limit, whether or not you save it as a case.</p></>}
     </div>
   </section>;
 }

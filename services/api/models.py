@@ -185,6 +185,8 @@ class FlatSnapshotChangeInput(Input):
     baseline_snapshot_id: str
     target_snapshot_id: str
     context: FlatContext
+    # 'loads': two points in time (earlier -> later); 'sources': two sources for the same period (A -> B).
+    labels: Literal['loads', 'sources'] = 'loads'
 
 
 class RelationalTableInput(Input):
@@ -341,7 +343,8 @@ class ProjectQuotaInput(Input):
 
 
 class PostgresExtractionInput(Input):
-    source_uri: str = Field(min_length=1, max_length=2000)
+    source_uri: str | None = Field(default=None, min_length=1, max_length=2000)
+    connection_id: str | None = Field(default=None, max_length=64)
     schema_name: str = Field(default='public', min_length=1, max_length=128)
     table_name: str = Field(min_length=1, max_length=128)
     columns: list[str] | dict[str, str] | None = None
@@ -654,7 +657,8 @@ class WarehouseExtractionInput(Input):
     """Snowflake or BigQuery extraction of one table into a single-table dataset (see warehouse_rest)."""
     contract_id: str
     snapshot_name: str = Field(min_length=1, max_length=160)
-    token: str = Field(min_length=8, max_length=8192, repr=False)
+    token: str | None = Field(default=None, min_length=8, max_length=8192, repr=False)
+    connection_id: str | None = Field(default=None, max_length=64)
     table: str = Field(min_length=1, max_length=128)
     # Snowflake
     account: str | None = Field(default=None, max_length=128)

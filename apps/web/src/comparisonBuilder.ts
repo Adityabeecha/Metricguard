@@ -441,3 +441,20 @@ export function unknownValueWarnings(f: Filter, column: FilterColumn | undefined
     return `“${v}” does not occur in ${column.label}${near ? `; did you mean “${near}”?` : '.'}`;
   });
 }
+
+/** The dataset's own name as a SQL table name (same rule as the server's flat.dataset_table_name). */
+export function datasetTableName(contract: { name?: string } | null | undefined): string {
+  const name = String(contract?.name || '').trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  return /^[a-z_][a-z0-9_]{0,62}$/.test(name) ? name : '';
+}
+
+/** Columns a single-table SQL calculation may use, with their role or type, for the SQL editor's column list. */
+export function flatSqlColumns(contract: FlatContract): Array<{ name: string; type: string; role?: string }> {
+  const amounts = amountColumns(contract);
+  const out: Array<{ name: string; type: string; role?: string }> = [{ name: contract.row_key, type: 'text', role: 'row ID' }];
+  for (const name of amounts.length ? amounts : (contract.measure ? [contract.measure] : [])) out.push({ name, type: 'decimal', role: 'amount' });
+  for (const name of contract.categories || []) {
+    if (!out.some(c => c.name === name)) out.push({ name, type: contract.dimension_types?.[name] || 'text' });
+  }
+  return out;
+}

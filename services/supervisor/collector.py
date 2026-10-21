@@ -310,10 +310,13 @@ class PostgresCollector:
     def _connect_readonly(self, uri: str) -> psycopg.Connection:
         """Establish connection with REPEATABLE READ READ ONLY transaction isolation."""
         try:
-            conn = psycopg.connect(uri, autocommit=False)
+            from services.supervisor.warehouse_inspect import guarded_conninfo
+            conn = psycopg.connect(guarded_conninfo(uri), autocommit=False)
             conn.read_only = True
             conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
             return conn
+        except CollectorError:
+            raise
         except Exception as exc:
             raise CollectorError('CONNECTION_FAILED', f"Failed to connect to PostgreSQL source: {redact_credentials(str(exc))}") from None
 

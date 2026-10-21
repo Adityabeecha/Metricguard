@@ -99,3 +99,19 @@ def test_flat_synthetic_row_boundary_is_atomic(tmp_path, monkeypatch):
                 ingest_flat(source, destination, contract())
             assert not destination.exists()
             assert not destination.with_name(destination.name + '.manifest.json').exists()
+
+
+def test_dataset_name_works_as_the_table_name_with_identical_ir():
+    """`FROM orders_october` and `FROM snapshot` compile to the same calculation (and hashes)."""
+    from packages.metricguard_core.flat import dataset_table_name, parse_flat, validate_contract
+    contract = validate_contract({
+        'version': 5, 'mode': 'flat_snapshot', 'name': 'Orders October', 'row_key': 'id', 'measure': 'amount',
+        'precision': 18, 'scale': 2, 'categories': ['status'], 'dimension_types': {'status': 'string'},
+        'nullable_categories': [], 'measure_meaning': 'Amount', 'unit_label': 'INR', 'values_comparable': True,
+        'scope': 'entire_supplied_snapshot', 'null_policy': 'blank_nullable', 'predicate_policy': 'flat-boolean-v1'})
+    assert dataset_table_name(contract) == 'orders_october'
+    for sql in ("SELECT SUM(amount) FROM {} WHERE status = 'paid'", 'SELECT AVG(amount) FROM {}', 'SELECT COUNT(*) FROM {}'):
+        assert parse_flat(sql.format('orders_october'), contract) == parse_flat(sql.format('snapshot'), contract)
+    with pytest.raises(CoreError):
+        parse_flat('SELECT SUM(amount) FROM other_table', contract)
+    assert dataset_table_name({'name': '2026 loads!'}) == ''

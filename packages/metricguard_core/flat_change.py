@@ -133,6 +133,47 @@ def check_definition(ir, contract):
     return ir
 
 
+def _fields(value) -> set[str]:
+    """Every column a calculation's filters name (any nesting)."""
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in ('field', 'column') and isinstance(item, str):
+                found.add(item)
+            else:
+                found |= _fields(item)
+    elif isinstance(value, list):
+        for item in value:
+            found |= _fields(item)
+    return found
+
+
+def source_mismatches(contract, other, ir) -> list[str]:
+    """Why one calculation cannot be run unchanged on a second, separately uploaded dataset ([] when it can).
+
+    The engine runs the first dataset's calculation over both files, so the second must have the same
+    record ID, the amount being totalled (same scale and unit) and every filter column with the same type.
+    """
+    problems = []
+    if other['version'] not in SUPPORTED_CONTRACT_VERSIONS or other['version'] != contract['version']:
+        problems.append('the two datasets were added with different settings (upload both with the same options)')
+    if other['row_key'] != contract['row_key']:
+        problems.append(f"the record ID column differs ({contract['row_key']} vs {other['row_key']})")
+    if ir.get('aggregate', 'sum') == 'sum':
+        mine, theirs = amount_column(contract, ir['measure']), amount_column(other, ir['measure'])
+        if theirs is None:
+            problems.append(f"the second dataset has no amount column {ir['measure']}")
+        elif mine and (mine['scale'] != theirs['scale'] or mine['unit_label'].strip() != theirs['unit_label'].strip()):
+            problems.append(f"the amount {ir['measure']} has a different unit or number of decimals")
+    types, other_types = contract.get('dimension_types') or {}, other.get('dimension_types') or {}
+    for name in sorted(_fields(ir)):
+        if name not in (other.get('categories') or []):
+            problems.append(f'the second dataset has no filter column {name}')
+        elif types.get(name, 'string') != other_types.get(name, 'string'):
+            problems.append(f'the filter column {name} has a different type')
+    return problems
+
+
 def compare_snapshots(baseline_database, target_database, ir, context):
     """Evaluate one flat SUM or COUNT(*) definition on two snapshots and explain the change by record."""
     started = time.monotonic()
@@ -140,11 +181,13 @@ def compare_snapshots(baseline_database, target_database, ir, context):
     check_rows(baseline_manifest['row_count'])
     check_rows(target_manifest['row_count'])
     contract = validate_contract(baseline_manifest['contract'])
-    if validate_contract(target_manifest['contract'])['contract_hash'] != contract['contract_hash']:
-        _error('snapshot_contract_mismatch',
-               'The two snapshots were loaded under different dataset contracts (row key, columns or units differ); '
-               'compare loads of the same dataset.')
+    target_contract = validate_contract(target_manifest['contract'])
     ir = check_definition(ir, contract)
+    if target_contract['contract_hash'] != contract['contract_hash']:
+        # Two separately uploaded sources: allowed when the calculation means the same on both.
+        problems = source_mismatches(contract, target_contract, ir)
+        if problems:
+            _error('snapshot_contract_mismatch', 'These two datasets cannot be compared with this calculation: ' + '; '.join(problems) + '.')
     if not isinstance(context, dict) or any(context.get(key) != value for key, value in {
             'mode': 'flat_snapshot', 'scope': contract['scope'], 'contract_hash': contract['contract_hash'],
             'unit_label': contract['unit_label'], 'values_comparable': True, 'comparison': 'snapshot_change'}.items()):

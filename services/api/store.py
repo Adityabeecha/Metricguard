@@ -101,6 +101,11 @@ workspace_invites = Table('workspace_invites', metadata,
     Column('email', String, nullable=False), Column('role', String, nullable=False),
     Column('created_by', String), Column('created_at', String, nullable=False),
     Column('accepted_at', String), Column('accepted_user_id', String), Column('revoked_at', String))
+# Saved warehouse connections: credentials encrypted (see services/api/warehouse_connections.py).
+warehouse_connections = Table('warehouse_connections', metadata,
+    Column('id', String, primary_key=True), Column('project_id', ForeignKey('projects.id'), nullable=False),
+    Column('kind', String, nullable=False), Column('label', String, nullable=False), Column('public', JSON, nullable=False),
+    Column('secret', String, nullable=False), Column('created_by', String), Column('created_at', String, nullable=False))
 # In-app feedback ("Report a problem / suggest"): free text only, read by the operator in the database.
 feedback = Table('feedback', metadata,
     Column('id', String, primary_key=True), Column('user_id', String, nullable=False),

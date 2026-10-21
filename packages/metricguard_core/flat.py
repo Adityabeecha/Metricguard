@@ -600,6 +600,17 @@ def _ingest_flat(source, destination, contract, preparation, folder, sinks):
         raise
 
 
+def dataset_table_name(contract) -> str:
+    """The dataset's own name as a SQL table name (e.g. "orders_october"), or '' when it can't be one."""
+    name = re.sub(r'[^a-z0-9_]+', '_', str(contract.get('name') or '').strip().lower()).strip('_')
+    return name if re.fullmatch(r'[a-z_][a-z0-9_]{0,62}', name or '') else ''
+
+
+def table_names(contract) -> set[str]:
+    """FROM accepts `snapshot` or the dataset's own name; both compile to the same calculation and hashes."""
+    return {'snapshot', *([dataset_table_name(contract)] if dataset_table_name(contract) else [])}
+
+
 def _identifier(node):
     if not isinstance(node, exp.Identifier) or node.args.get('quoted'):
         _error('unsupported_sql', 'Only unquoted registered identifiers are supported')
@@ -761,8 +772,8 @@ def parse_flat(sql, contract):
            if key not in {'expressions', 'from_', 'where'}) or len(list(tree.walk())) > (250 if ver == 7 else 200) or len(tree.expressions) != 1:
         _error('unsupported_sql', 'Only a supported SUM, COUNT(*), COUNT(DISTINCT), AVG, or ratio of supported aggregates over the whole snapshot is supported')
     source = tree.args.get('from_')
-    if not isinstance(source, exp.From) or not isinstance(source.this, exp.Table) or any(value is not None and value is not False and value != [] for key, value in source.this.args.items() if key != 'this') or _identifier(source.this.this) != 'snapshot':
-        _error('unsupported_sql', 'FROM snapshot is required without joins or aliases')
+    if not isinstance(source, exp.From) or not isinstance(source.this, exp.Table) or any(value is not None and value is not False and value != [] for key, value in source.this.args.items() if key != 'this') or _identifier(source.this.this) not in table_names(contract):
+        _error('unsupported_sql', f"Query the dataset as FROM snapshot (or FROM {dataset_table_name(contract) or 'snapshot'}), without joins or aliases")
     aggregate = tree.expressions[0]
     if isinstance(aggregate, exp.Alias):
         if ver == 7:
