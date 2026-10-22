@@ -3,7 +3,7 @@ import { clearConnectedIdentity, connectWithKey } from './AuthScreens';
 import { useDialog } from './useDialog';
 import { KeyRound, LogOut, Settings, UserRound, X } from 'lucide-react';
 import { api, ApiError, getIdentityEpoch, hasApiCredential, onIdentityChange, type ConnectedIdentity } from './api';
-import { accountInitials, accountMenuActions, endAccountSession, signOutDestination } from './authFlow';
+import { accountInitials, accountMenuActions, endAccountSession, guestNotice, signOutDestination } from './authFlow';
 import './account-menu.css';
 
 /** Re-renders when the in-memory credential is connected, replaced or disconnected. */
@@ -194,4 +194,13 @@ export function AccountMenu({ workspaceId, authRequired, onSettings }: AccountPr
       )}
     </div>
   );
+}
+
+/** Shown to guest accounts (open sign-up) on every workspace page. */
+export function GuestNotice({ workspaceId }: { workspaceId: string }) {
+  const { identity } = useConnectedIdentity(workspaceId);
+  const [, tick] = useState(0);
+  useEffect(() => { const t = window.setInterval(() => tick(n => n + 1), 60000); return () => window.clearInterval(t); }, []);
+  const text = guestNotice(identity?.guest_expires_at);
+  return text ? <div className="alert notice guest-notice" role="status"><span>{text}</span></div> : null;
 }

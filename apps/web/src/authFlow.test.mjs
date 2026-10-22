@@ -108,3 +108,13 @@ test('hosted signed-out gates redirect while local access and invalid keys retai
   assert.equal(shouldRedirectToSignIn(required, true, true), false);
   assert.equal(shouldRedirectToSignIn({ kind: 'denied' }, true, false), false);
 });
+
+test('guest notice counts down and is empty for full accounts', async () => {
+  const { guestNotice } = await import('./authFlow.ts');
+  const now = 1_000_000_000_000;
+  assert.equal(guestNotice(null, now), '');
+  assert.equal(guestNotice(undefined, now), '');
+  assert.match(guestNotice(now / 1000 + 8 * 3600, now), /erased in 8 h\. Storage is limited to 25 MB/);
+  assert.match(guestNotice(now / 1000 + 95 * 60, now), /in 1 h 35 min/);
+  assert.match(guestNotice(now / 1000 + 20, now), /any minute now/);
+});

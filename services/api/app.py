@@ -170,6 +170,9 @@ def create_app(database_url=None, data_dir=None, mode=None):
     hosting = hosting_settings()
     from .oauth import install_oauth_routes
     install_oauth_routes(app, store, data_dir, secure_cookies=hosting['secure_cookies'])
+    from .guests import full_access_emails, start_sweeper
+    if full_access_emails():
+        start_sweeper(store, data_dir)  # erases expired guest accounts every few minutes
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=['localhost', '127.0.0.1', '[::1]', 'testserver', 'api', *hosting['hosts']])
 
     @app.middleware('http')
@@ -2165,6 +2168,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
             'session': bool(auth.get('via_session')),
             'home_workspace_id': home['id'] if home else None,
             'user': {'id': user.get('id'), 'name': user.get('name'), 'email': user.get('email')},
+            # Guests: when everything this account owns is erased (Unix seconds); null for full accounts.
+            'guest_expires_at': store.guest_expiry(user['id']),
             'project_id': project_id,
             'role': role,
         }

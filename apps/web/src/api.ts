@@ -513,6 +513,8 @@ export type ConnectedIdentity = {
   home_workspace_id?: string | null;
   session?: boolean;
   user: { id: string; name: string | null; email: string | null } | null;
+  /** Guest accounts only: when everything the account owns is erased (Unix seconds). */
+  guest_expires_at?: number | null;
   project_id: string | null;
   role: 'owner' | 'analyst' | 'reader' | null;
 };

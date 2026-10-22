@@ -74,3 +74,12 @@ export function safeWorkspaceReturn(value: string | null): string | null {
 export function shouldRedirectToSignIn(gate: Pick<GateState, 'kind'>, authRequired: boolean, connected: boolean): boolean {
   return gate.kind === 'signin' && authRequired && !connected;
 }
+
+/** The guest-account notice, or '' for a full account. */
+export function guestNotice(expiresAt: number | null | undefined, nowMs = Date.now()): string {
+  if (typeof expiresAt !== 'number') return '';
+  const minutes = Math.max(0, Math.round((expiresAt * 1000 - nowMs) / 60000));
+  const left = minutes < 1 ? 'any minute now' : minutes < 60 ? `in ${minutes} min`
+    : `in ${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
+  return `Guest account: your workspace and everything in it is erased ${left}. Storage is limited to 25 MB in total.`;
+}

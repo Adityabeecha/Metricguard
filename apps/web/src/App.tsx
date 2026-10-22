@@ -13,7 +13,7 @@ import {
 import { api, ApiError, hasApiCredential, type Bootstrap, type Run } from './api';
 import { GateScreen, restoreSession, WorkspaceChooser } from './AuthScreens';
 import { chooseWorkspaceAfterConnect, classifyLoadError, readReloadEnded, type GateState } from './authState';
-import { AccountMenu, describeAuthError, useIdentityEpoch } from './identity';
+import { AccountMenu, GuestNotice, describeAuthError, useIdentityEpoch } from './identity';
 import { ThemeSwitch } from './ThemeSwitch';
 import { Logo } from './Logo';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -413,6 +413,7 @@ function WorkspaceApp() {
 
         {/* Dynamic Route Content */}
         <div className="content" key={identityEpoch}>
+          <GuestNotice workspaceId={route.workspaceId} />
           {error && (
             <div className="alert error" role="alert">
               <span>

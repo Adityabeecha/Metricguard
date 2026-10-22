@@ -808,6 +808,12 @@ textarea:focus,
   color: inherit;
 }
 
+.alert.guest-notice {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px dashed var(--line-strong);
+}
+
 .alert.error {
   background: var(--danger-tint);
   color: var(--danger);

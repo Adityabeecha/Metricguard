@@ -95,6 +95,9 @@ oauth_identities = Table('oauth_identities', metadata,
     Column('user_id', ForeignKey('users.id'), nullable=False))
 oauth_states = Table('oauth_states', metadata,
     Column('nonce_hash', String, primary_key=True), Column('expires_at', Float, nullable=False))
+# Guest accounts (open sign-up, email not on the full-access list): erased once expires_at passes.
+guest_accounts = Table('guest_accounts', metadata,
+    Column('user_id', ForeignKey('users.id'), primary_key=True), Column('expires_at', Float, nullable=False))
 # Workspace invitations by email: the invited address joins the workspace when it signs in.
 workspace_invites = Table('workspace_invites', metadata,
     Column('id', String, primary_key=True), Column('project_id', ForeignKey('projects.id'), nullable=False),
@@ -1100,8 +1103,15 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
             joined.append(invite['project_id'])
         return joined
 
-    def oauth_sign_in(self, provider: str, subject: str, email: str, name: str) -> tuple[dict, str]:
-        """Atomically link a verified identity, creating the account and its personal workspace the first time."""
+    def oauth_sign_in(self, provider: str, subject: str, email: str, name: str,
+                      guest: dict | None = None) -> tuple[dict, str]:
+        """Atomically link a verified identity, creating the account and its personal workspace the first time.
+
+        guest = {'seconds': int, 'storage_bytes': int} makes a NEW account a guest: erased after
+        that many seconds, with a storage quota on its workspace. guest=None signs in with full
+        access and turns an existing guest into a full account. Accounts created before guest
+        mode existed have no guest row and are never erased.
+        """
         import secrets
         email = email.strip().casefold()
         for attempt in range(3):
@@ -1117,11 +1127,15 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                     pending = self._pending_invites(conn, email)
                     if matches:
                         user = dict(matches[0])
+                        if not guest:
+                            conn.execute(delete(guest_accounts).where(guest_accounts.c.user_id == user['id']))
                     else:
                         user = {'id': str(uuid4()), 'name': name[:160] or 'Analyst', 'email': email,
                                 'api_key_hash': hashlib.sha256(secrets.token_urlsafe(48).encode()).hexdigest(),
                                 'is_active': True, 'created_at': now()}
                         conn.execute(insert(users).values(**user))
+                        if guest:
+                            conn.execute(insert(guest_accounts).values(user_id=user['id'], expires_at=time.time() + guest['seconds']))
                     if not identity:
                         conn.execute(insert(oauth_identities).values(provider=provider, subject=subject, user_id=user['id']))
                     pid = 'personal-' + user['id']
@@ -1129,12 +1143,22 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                         conn.execute(insert(projects).values(id=pid, name=f"{user['name']}'s workspace"))
                         conn.execute(insert(project_members).values(id=str(uuid4()), project_id=pid,
                             user_id=user['id'], role='owner', created_at=now(), revoked_at=None))
+                        if guest and not matches:
+                            conn.execute(insert(records).values(id=str(uuid4()), project_id=pid, kind='quota', created_at=now(),
+                                data={'id': str(uuid4()), 'project_id': pid, 'created_at': now(),
+                                      'max_storage_bytes': guest['storage_bytes'], 'guest': True}))
                     else:
                         member = conn.execute(select(project_members).where(project_members.c.project_id == pid,
                             project_members.c.user_id == user['id'], project_members.c.role == 'owner',
                             project_members.c.revoked_at.is_(None))).first()
                         if member is None:
                             raise DomainError('OAUTH_FAILED', 'Personal workspace access is unavailable.', 403)
+                    if matches and not guest:
+                        # Promoted to full access (or already full): lift any guest storage quota.
+                        for row in conn.execute(select(records.c.id, records.c.data).where(
+                                records.c.project_id == pid, records.c.kind == 'quota')).mappings().all():
+                            if (row['data'] or {}).get('guest'):
+                                conn.execute(delete(records).where(records.c.id == row['id']))
                     joined = self._accept_invites(conn, user['id'], pending)
                     if joined:
                         pid = joined[-1]  # land in the workspace they were just invited to
@@ -1143,6 +1167,15 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                 if attempt == 2:
                     raise DomainError('OAUTH_FAILED', 'Account sign-in conflicted. Start sign-in again.', 409)
         raise AssertionError('unreachable')
+
+    def guest_expiry(self, user_id: str) -> float | None:
+        with self.engine.connect() as conn:
+            return conn.execute(select(guest_accounts.c.expires_at).where(guest_accounts.c.user_id == user_id)).scalar_one_or_none()
+
+    def expired_guests(self) -> list[str]:
+        with self.engine.connect() as conn:
+            return list(conn.execute(select(guest_accounts.c.user_id).where(guest_accounts.c.expires_at <= time.time())
+                                     .order_by(guest_accounts.c.expires_at).limit(50)).scalars())
 
     def get_user(self, user_id: str) -> dict:
         with self.engine.connect() as conn:
@@ -1443,20 +1476,14 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
         if not quota or not quota.get('max_storage_bytes'):
             return
         max_bytes = quota['max_storage_bytes']
-        current_bytes = 0
-        with self.engine.connect() as conn:
-            snaps = conn.execute(select(snapshots).where(snapshots.c.project_id == project_id)).mappings().all()
-            for s in snaps:
-                art = Path(s['data'].get('artifact_path', ''))
-                if art.is_file():
-                    current_bytes += art.stat().st_size
-            run_rows = conn.execute(select(runs).where(runs.c.project_id == project_id)).mappings().all()
-            ev_dir = data_dir / 'evidence'
-            if ev_dir.is_dir():
-                for r in run_rows:
-                    for ev in ev_dir.glob(f"{r['id']}-*.jsonl"):
-                        current_bytes += ev.stat().st_size
+        # Same count as the Usage panel, including copies only held in durable storage.
+        from .usage import workspace_usage
+        current_bytes = workspace_usage(self, project_id, data_dir)['storage_bytes']
         if current_bytes + new_bytes > max_bytes:
+            if quota.get('guest'):
+                mb = lambda n: f'{n / (1024 * 1024):.1f} MB'
+                raise DomainError('QUOTA_EXCEEDED', f'Guest accounts can store up to {mb(max_bytes)} in total. This workspace uses '
+                                  f'{mb(current_bytes)} and this file needs {mb(new_bytes)}. Delete a dataset to make room.', 413)
             raise DomainError('QUOTA_EXCEEDED', f"Project storage quota exceeded ({current_bytes + new_bytes} > {max_bytes} bytes).", 413)
 
     @staticmethod

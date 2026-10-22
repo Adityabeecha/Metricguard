@@ -15,6 +15,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse, JSONResponse
 
 from .auth import SESSION_COOKIE, SESSION_SECONDS
+from .guests import guest_terms
 from .store import DomainError
 
 STATE_SECONDS = 600
@@ -171,7 +172,7 @@ def install_oauth_routes(app, store, data_dir, secure_cookies=False):
             if len(codes) != 1 or not 1 <= len(codes[0]) <= 4096:
                 raise ValueError('code')
             subject, email, name = verified_profile(provider, codes[0], payload, config)
-            user, pid = store.oauth_sign_in(provider, subject, email, name)
+            user, pid = store.oauth_sign_in(provider, subject, email, name, guest_terms(email))
             session = store.create_session(user['id'], SESSION_SECONDS)
             old = request.cookies.get(SESSION_COOKIE)
             if old:
