@@ -1,7 +1,7 @@
 import type { GateState } from './authState';
 
 export type OAuthProvider = 'google' | 'github';
-export type AuthProviders = { providers: OAuthProvider[]; signup_mode: 'invite' | 'open'; auth_required: boolean };
+export type AuthProviders = { providers: OAuthProvider[]; auth_required: boolean };
 
 /** Only an explicit server capability enables the local key workflow. */
 export function localKeyAccess(authRequired: boolean | null | undefined): boolean {
@@ -54,7 +54,6 @@ export function connectionControls(identity: { session?: boolean } | null, conne
 
 export function oauthErrorMessage(code: string | null): string {
   if (!code) return '';
-  if (code === 'waitlist') return "You're on the waitlist — we'll email you when your invite is ready";
   if (code === 'cancelled') return 'Sign-in was cancelled. Choose a provider to try again.';
   return 'We couldn’t sign you in. Please try again.';
 }

@@ -97,7 +97,7 @@ function Homepage() {
         <p className="public-lead">Compare two calculations, follow the record-level difference, and hand over sealed evidence anyone with access can replay.</p>
         <div className="hero-actions"><a className="button primary public-cta" href="/signup">Sign up — free beta <ArrowRight size={18} aria-hidden="true" /></a><a className="button secondary public-cta" href="/demo/MG-F3A3">Open the sample case <ArrowRight size={18} aria-hidden="true" /></a></div>
         <p className="hero-sub-links"><a className="home-how-link" href="#how">See how it works <ArrowRight size={14} aria-hidden="true" /></a></p>
-        <p className="public-beta">Beta · by invitation</p>
+        <p className="public-beta">Free during the beta · sign up with Google or GitHub</p>
       </div>
       <HeroReconciliation />
     </div></section>
@@ -193,7 +193,7 @@ function HeroReconciliation() {
 function LegalPage({ kind }: { kind: 'privacy' | 'terms' }) {
   return <article className="public-legal">
     <h1>{kind === 'privacy' ? 'Privacy' : 'Terms of use'}</h1>
-    <p className="public-lead">MetricGuard is an invitation-only beta for investigating metric differences.</p>
+    <p className="public-lead">MetricGuard is a free beta for investigating metric differences.</p>
     {kind === 'privacy' ? <>
       <h2>What we store</h2><p>Your account email and name, workspace membership, uploaded datasets, calculation definitions, comparison results, supporting evidence and saved conclusions. Sign-in uses Google or GitHub; MetricGuard does not store your provider password.</p>
       <h2>Where data is stored</h2><p>The hosted setup uses Neon (Postgres) for account and application records, Cloudflare R2 for datasets and evidence, and Northflank to run the application. Region: {HOSTING_REGION}. Local installations store data on the computer running MetricGuard.</p>

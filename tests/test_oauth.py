@@ -16,8 +16,6 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setenv('METRICGUARD_ALLOW_UNVERIFIED_LOCAL', 'false')
     monkeypatch.setenv('METRICGUARD_APP_URL', 'https://metricguard.example')
     monkeypatch.setenv('METRICGUARD_SESSION_SECRET', 'test-only-secret-' * 4)
-    monkeypatch.setenv('METRICGUARD_SIGNUP', 'invite')
-    monkeypatch.setenv('METRICGUARD_INVITE_EMAILS', ' INVITED@example.com ')
     for provider in ('GOOGLE', 'GITHUB'):
         monkeypatch.setenv(provider + '_CLIENT_ID', 'test-id')
         monkeypatch.setenv(provider + '_CLIENT_SECRET', 'test-client-secret')
@@ -93,18 +91,19 @@ def test_bad_or_missing_state_never_exchanges_or_creates(setup, state):
 
 
 @pytest.mark.parametrize('provider', ['google', 'github'])
-def test_unverified_and_invite_gate_create_nothing(setup, provider):
+def test_unverified_email_creates_nothing_and_any_verified_email_signs_up(setup, provider):
     client, store, _, profile = setup
     profile['verified'] = False
     _, state = begin(client, provider)
     assert callback(client, provider, state).headers['location'].endswith('error=failed')
-    profile.update(verified=True, email='not-invited@example.com')
-    _, state = begin(client, provider)
-    assert callback(client, provider, state).headers['location'].endswith('error=waitlist')
     with store.engine.connect() as db:
         assert db.execute(select(users).where(users.c.id != 'local-analyst')).first() is None
-    # The refused, provider-verified email is on the waitlist, so the page's message is true.
-    assert [r['email'] for r in store.access_request_list()] == ['not-invited@example.com']
+    # Sign-up is open: a new, provider-verified email gets an account and its own workspace straight away.
+    profile.update(verified=True, email='anyone@example.com')
+    _, state = begin(client, provider)
+    location = callback(client, provider, state).headers['location']
+    assert location.startswith('https://metricguard.example/w/personal-') and location.endswith('/investigations')
+    assert store.get_user_by_session(client.cookies.get('mg_session'))['email'] == 'anyone@example.com'
 
 
 def test_existing_user_ignores_invite_gate_and_api_key_still_works(setup):
@@ -180,7 +179,6 @@ def test_tampered_cookie_and_expired_state_do_not_exchange(setup, monkeypatch):
 
 def test_open_signup_and_second_provider_reuse_one_personal_workspace(setup, monkeypatch):
     client, store, _, profile = setup
-    monkeypatch.setenv('METRICGUARD_SIGNUP', 'open')
     profile['email'] = 'new@example.com'
     _, state = begin(client, 'google')
     google = callback(client, 'google', state)
@@ -257,7 +255,7 @@ def test_public_auth_pages_are_served_by_local_api(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, 'ROOT', tmp_path)
     app = create_app(database_url=f'sqlite:///{tmp_path / "shell.db"}', data_dir=tmp_path / 'data')
     with TestClient(app) as client:
-        for path in ('/signin', '/signup', '/signin?error=waitlist', '/privacy', '/terms'):
+        for path in ('/signin', '/signup', '/signin?error=failed', '/privacy', '/terms'):
             response = client.get(path)
             assert response.status_code == 200
             assert 'OAuth application shell' in response.text
@@ -324,4 +322,7 @@ def test_only_owners_manage_invites_and_revoked_invites_do_not_admit(setup):
     assert client.delete(f"/api/v1/projects/{pid}/invites/{invite['id']}", headers=headers).status_code == 200
     profile.update(email='gone@example.com')
     _, state = begin(client, 'google')
-    assert callback(client, 'google', state).headers['location'].endswith('error=waitlist')
+    # A revoked invite no longer joins the team; the person still signs up into their own workspace.
+    assert callback(client, 'google', state).headers['location'].startswith('https://metricguard.example/w/personal-')
+    user = store.get_user_by_session(client.cookies.get('mg_session'))
+    assert store.get_project_member(pid, user['id']) is None

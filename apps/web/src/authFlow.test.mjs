@@ -81,7 +81,7 @@ test('key actions wait for identity verification to avoid flashing on cookie-ses
 });
 
 test('OAuth errors use friendly fixed copy and never echo untrusted callback text', () => {
-  assert.equal(oauthErrorMessage('waitlist'), "You're on the waitlist — we'll email you when your invite is ready");
+  assert.equal(oauthErrorMessage('waitlist'), 'We couldn’t sign you in. Please try again.'); // no waitlist: sign-up is open
   assert.match(oauthErrorMessage('cancelled'), /cancelled/i);
   assert.match(oauthErrorMessage('failed'), /try again/i);
   assert.equal(oauthErrorMessage('raw provider secret'), oauthErrorMessage('failed'));

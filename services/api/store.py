@@ -111,10 +111,6 @@ feedback = Table('feedback', metadata,
     Column('id', String, primary_key=True), Column('user_id', String, nullable=False),
     Column('project_id', String), Column('page', String), Column('app_version', String),
     Column('message', String, nullable=False), Column('created_at', String, nullable=False))
-# Beta waitlist: an email asking for an invitation. Requesting never grants access.
-access_requests = Table('access_requests', metadata,
-    Column('email', String, primary_key=True), Column('created_at', String, nullable=False),
-    Column('last_requested_at', String, nullable=False), Column('request_count', Integer, nullable=False))
 
 project_members = Table('project_members', metadata,
     Column('id', String, primary_key=True),
@@ -1020,24 +1016,6 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                 oauth_states.c.expires_at > time.time()))
             return changed.rowcount == 1
 
-    def request_access(self, email: str, max_rows: int = 5000) -> None:
-        """Record a waitlist email once (repeats only bump a counter); the list is capped."""
-        email = email.strip().casefold()
-        stamp = now()
-        with self.engine.begin() as conn:
-            known = conn.execute(update(access_requests).where(access_requests.c.email == email).values(
-                last_requested_at=stamp, request_count=access_requests.c.request_count + 1)).rowcount
-            if known:
-                return
-            if conn.execute(select(func.count()).select_from(access_requests)).scalar_one() >= max_rows:
-                raise DomainError('ACCESS_REQUESTS_FULL', 'The waitlist is full right now. Please try again later.', 429)
-            try:
-                with conn.begin_nested():
-                    conn.execute(insert(access_requests).values(email=email, created_at=stamp,
-                                                                last_requested_at=stamp, request_count=1))
-            except IntegrityError:
-                pass  # a concurrent request recorded the same email
-
     def record_feedback(self, user_id: str, message: str, project_id: str | None, page: str | None,
                         app_version: str | None, per_day: int = 10) -> dict:
         message = (message or '').strip() if isinstance(message, str) else ''
@@ -1054,10 +1032,6 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                     'message': message, 'created_at': now()}
             conn.execute(insert(feedback).values(**item))
         return {'id': item['id'], 'received': True}
-
-    def access_request_list(self) -> list[dict]:
-        with self.engine.connect() as conn:
-            return [dict(r) for r in conn.execute(select(access_requests).order_by(access_requests.c.created_at)).mappings()]
 
     def create_invite(self, project_id: str, email: str, role: str, created_by: str | None) -> dict:
         """Invite an email to a workspace (one pending invite per address; inviting again updates the role)."""
@@ -1126,9 +1100,8 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
             joined.append(invite['project_id'])
         return joined
 
-    def oauth_sign_in(self, provider: str, subject: str, email: str, name: str,
-                      signup_mode: str, invited: set[str]) -> tuple[dict, str]:
-        """Atomically link a verified identity and create its personal workspace once."""
+    def oauth_sign_in(self, provider: str, subject: str, email: str, name: str) -> tuple[dict, str]:
+        """Atomically link a verified identity, creating the account and its personal workspace the first time."""
         import secrets
         email = email.strip().casefold()
         for attempt in range(3):
@@ -1140,13 +1113,11 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                                            select(users).where(func.lower(users.c.email) == email)).mappings().all()
                     if len(matches) > 1 or (matches and not matches[0]['is_active']):
                         raise DomainError('OAUTH_FAILED', 'This account cannot sign in.', 403)
-                    # A workspace invite for this verified email also lets a new person in.
+                    # Workspace invites for this verified email are accepted on sign-in.
                     pending = self._pending_invites(conn, email)
                     if matches:
                         user = dict(matches[0])
                     else:
-                        if signup_mode != 'open' and email not in invited and not pending:
-                            raise DomainError('OAUTH_WAITLIST', 'An invitation is required.', 403)
                         user = {'id': str(uuid4()), 'name': name[:160] or 'Analyst', 'email': email,
                                 'api_key_hash': hashlib.sha256(secrets.token_urlsafe(48).encode()).hexdigest(),
                                 'is_active': True, 'created_at': now()}

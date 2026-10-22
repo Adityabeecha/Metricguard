@@ -96,8 +96,6 @@ Build from GitHub with **`infra/Dockerfile.server`** (port 8000; the image honou
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth web client credentials | secret; both required to offer Google |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth App credentials | secret; both required to offer GitHub |
 | `METRICGUARD_SESSION_SECRET` | at least 32 random bytes/characters, stable across API replicas | secret; signs 10-minute OAuth state cookies; generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
-| `METRICGUARD_SIGNUP` | `invite` (default) or `open` | unknown values fail closed to invite |
-| `METRICGUARD_INVITE_EMAILS` | comma-separated invited email addresses | case-insensitive; existing active users can sign in regardless |
 | `METRICGUARD_MAX_ROWS` | `50000` *(image)* | rows per dataset (every import type, prepared datasets and two-load comparisons) |
 | `METRICGUARD_MAX_UPLOAD_MB` | `25` *(image)* | upload size, refused before the body is read |
 | `METRICGUARD_MAX_ACTIVE_RUNS_PER_WORKSPACE` | `1` *(image)* | queued + running comparisons per workspace (409 with a friendly message) |
@@ -161,7 +159,7 @@ All callback URLs use `METRICGUARD_APP_URL`, never an untrusted Host header. Set
 2. Set the Homepage URL to your public app origin and Authorization callback URL to `https://metricguard.vercel.app/api/v1/auth/oauth/github/callback`. Use a separate OAuth App for the local callback `http://127.0.0.1:8000/api/v1/auth/oauth/github/callback`.
 3. Set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and the same API session secret. Requested scopes are `read:user user:email`; only the primary verified address from `/user/emails` is accepted, including private primary emails.
 
-Set `METRICGUARD_SIGNUP=invite` and `METRICGUARD_INVITE_EMAILS` before the beta. Visit `/signin` or `/signup`; only configured provider buttons appear. The API-key alternative remains available. A new identity gets one empty personal workspace and the existing HttpOnly, SameSite=Strict `/api` session cookie. OAuth state uses a separate signed HttpOnly, SameSite=Lax cookie for the cross-site callback and an atomically consumed nonce. The beta waitlist message does not send mail; invitations and email follow-up remain manual.
+**Sign-up is open (2026-10-22):** anyone with a verified Google or GitHub email gets an account and a personal workspace on first sign-in; there is no invite list or waitlist (no email service is needed). `METRICGUARD_SIGNUP` and `METRICGUARD_INVITE_EMAILS` are no longer read and can be deleted. Visit `/signin` or `/signup`; only configured provider buttons appear. The API-key alternative remains available. A new identity gets one empty personal workspace and the existing HttpOnly, SameSite=Strict `/api` session cookie. OAuth state uses a separate signed HttpOnly, SameSite=Lax cookie for the cross-site callback and an atomically consumed nonce.
 
 Settings offers sign-out and account deletion with a typed `DELETE` confirmation. Deletion requires a valid browser session plus `x-metricguard-client: web`; an API key alone cannot erase an account. Sole-owner workspaces with no other unrevoked memberships are erased through local/R2-aware `durable.remove`. Shared workspaces and their records remain; only the departing membership is removed, and required audit attribution is anonymised. Active work returns 409; cleanup failure returns 503 and keeps retry metadata. Recently cancelled worker attempts also require a drain interval based on execution timeout plus grace; this is not a positive worker-stop acknowledgement. Live PostgreSQL/R2 deletion and real provider redirects require deployed verification.
 
@@ -209,7 +207,7 @@ Each step ends in something you can check. Steps 1–4 are backend, 5–6 fronte
 - **Delete my data.** A Settings button that deletes the workspace, its datasets in R2 and its cases.
 - **Region.** Put Northflank, Neon and R2 in the same region (for example EU or US), or every comparison pays cross-region latency.
 - **Warehouse connections.** Snowflake, BigQuery and PostgreSQL sources connect *out* from Northflank. Some customer databases only allow known IP addresses, and the free tier has no fixed outbound IP. Mark warehouse sources "may not work with IP allow-lists" during the beta.
-- **Isolation.** Without per-run containers, a comparison runs next to the API. Keep sign-up invite-only until runs move to Northflank jobs (option 2 in section 3).
+- **Isolation.** Without per-run containers, a comparison runs next to the API. Keep sign-up invite-only until runs move to Northflank jobs (option 2 in section 3). Sign-up was opened on 2026-10-22 by decision; free-tier limits (rows, upload size, one active run and 30 runs per day per workspace) bound the load, and calculations are parsed into a restricted form rather than run as raw SQL.
 - **Cold starts.** Neon sleeps after 5 minutes idle; the first request after a pause takes a little longer. That's fine for a beta.
 - **Leaving the free tier.** When you charge money: Vercel Pro ($20/month) or another host, and a paid Northflank plan (1 vCPU / 2 GB is $24/month at Northflank's published rate of $0.01667 per vCPU-hour and $0.00833 per GB-hour).
 

@@ -1,8 +1,8 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { ArrowRight, Github, RefreshCw } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Github, RefreshCw } from 'lucide-react';
 import { api, ApiError, hasApiCredential, setSessionSignedIn } from './api';
 import { ConnectForm, KeyHelp } from './AuthScreens';
-import { loadAuthProviders, requestAccess } from './authApi';
+import { loadAuthProviders } from './authApi';
 import { authPageTitle, localKeyAccess, oauthErrorMessage, safeWorkspaceReturn, type AuthProviders } from './authFlow';
 import { useIdentityEpoch } from './identity';
 import { Logo } from './Logo';
@@ -78,7 +78,7 @@ export function SignInScreen({ mode }: { mode: 'signin' | 'signup' }) {
         <section className="auth-card" aria-labelledby="auth-heading">
           <h1 id="auth-heading">{showKeyForm ? 'Connect with an API key' : mode === 'signup' ? 'Create your account' : 'Sign in to MetricGuard'}</h1>
           <p className="auth-purpose">Explain metric changes with evidence you can verify.</p>
-          {callbackMessage && <p className={`auth-message ${params.get('error') === 'waitlist' ? 'notice' : 'error'}`} role="status">{callbackMessage}</p>}
+          {callbackMessage && <p className="auth-message error" role="status">{callbackMessage}</p>}
           {problem && <p className="auth-message error" role="alert">{problem}</p>}
           {showKeyForm ? (
             <>
@@ -101,10 +101,7 @@ export function SignInScreen({ mode }: { mode: 'signin' | 'signup' }) {
                   ? 'Social sign-in is not configured on this server. Connect with an issued API key below.'
                   : 'Sign-in is not configured on this server. Contact the workspace owner for access.'}</p>}
               </div>
-              {providers?.signup_mode === 'invite' && <>
-                <p className="auth-invite">Access is by invitation. Continue with your invited email address.</p>
-                <RequestAccess />
-              </>}
+              {mode === 'signup' && providers && providers.providers.length > 0 && <p className="auth-invite">Choose Google or GitHub to create your account and open your workspace. No password needed. <a href="/demo/MG-F3A3">See a sample case first</a></p>}
               <p className="auth-alternate">{mode === 'signup' ? 'Already have an account?' : 'New to MetricGuard?'} <a href={alternateUrl}>{mode === 'signup' ? 'Sign in' : 'Create an account'}</a></p>
               {localKeyAccess(providers?.auth_required) && <button type="button" className="auth-text-button" onClick={() => { setUseKey(true); setProblem(''); }}>Use an API key instead</button>}
             </>
@@ -115,29 +112,3 @@ export function SignInScreen({ mode }: { mode: 'signin' | 'signup' }) {
   );
 }
 
-/** For visitors without an invite: the public sample case, and a way to join the waitlist. */
-function RequestAccess() {
-  const [email, setEmail] = useState('');
-  const [state, setState] = useState<'idle' | 'sending' | 'sent'>('idle');
-  const [problem, setProblem] = useState('');
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setState('sending'); setProblem('');
-    try { await requestAccess(email); setState('sent'); }
-    catch (error) { setProblem(error instanceof Error ? error.message : String(error)); setState('idle'); }
-  };
-  return <div className="auth-request">
-    <p className="auth-request-lead">No invite yet? <a href="/demo/MG-F3A3">Open the sample case <ArrowRight size={13} aria-hidden="true" /></a></p>
-    {state === 'sent'
-      ? <p className="auth-message notice" role="status">Thanks — we'll email you when there's a place.</p>
-      : <form className="auth-request-form" onSubmit={submit}>
-        <label htmlFor="request-email">Request access</label>
-        <div>
-          <input id="request-email" type="email" autoComplete="email" required maxLength={254} placeholder="you@company.com"
-            value={email} onChange={e => setEmail(e.target.value)} aria-describedby={problem ? 'request-problem' : undefined} />
-          <button type="submit" className="button secondary" disabled={state === 'sending' || !email.trim()}>{state === 'sending' ? 'Sending…' : 'Request'}</button>
-        </div>
-        {problem && <p id="request-problem" className="auth-message error" role="alert">{problem}</p>}
-      </form>}
-  </div>;
-}
