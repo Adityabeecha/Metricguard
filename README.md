@@ -61,6 +61,7 @@ Browser (React)  ──►  API (FastAPI)  ──►  job queue  ──►  supe
 
 ## More detail
 
+- **[User guide](docs/user-guide.md): how to use MetricGuard end to end, from sign-up to sharing a case (no analyst background needed)**
 - [V8 closeout record](docs/v8-closeout-record.md): what this usability release verified, and what it did not
 - [Demo script](docs/demo-script.md) · [Olist public-data case](docs/pilot/olist-public-case.md) · [CLI and CI usage](docs/cli-usage.md)
 - [Project map](docs/project-graph.md) · [Technical README (setup details, supported grammar)](docs/technical-readme.md) · [API and input contracts](docs/contracts.md)
