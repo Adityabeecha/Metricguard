@@ -1,5 +1,7 @@
 # MetricGuard working instructions
 
+**New assistant session?** Start with [docs/HANDOFF.md](docs/HANDOFF.md): current status, open items, and the user's working rules.
+
 Read [docs/project-graph.md](docs/project-graph.md) first for a small map of the product, code, and source documents. The entire planning pack describes **one v1**: M0–M5 are milestones and MG01–MG26 are work items. Use [docs/v1-release-evidence.md](docs/v1-release-evidence.md) for v1 status and [docs/v2-release-evidence.md](docs/v2-release-evidence.md) for the later locally implemented v2; its two-real-case pilot gate is still open. Consult a planning chapter only when the task needs its detailed contract.
 
 The generated code graph is [graphify-out/graph.json](graphify-out/graph.json). Before broad code browsing, ask a focused question with `graphify query "<question>" --budget 800`, or use `graphify explain "<symbol or file>"` / `graphify path "<A>" "<B>"`. Then inspect the returned source files and tests. The graph is navigation evidence, not a substitute for current source or tests. [graphify-out/GRAPH_TREE.html](graphify-out/GRAPH_TREE.html) is a browsable view. If Graphify is unavailable, follow the project map and use `rg`.
