@@ -556,29 +556,45 @@ def _ingest_flat(source, destination, contract, preparation, folder, sinks):
                 selected = ', '.join(_quote(name) for name in columns)
                 cursor = con.execute(f'SELECT {selected} FROM read_parquet(?)', [str(source.resolve())])
                 width = len(amount_specs)
+                problems: list[str] = []
+                number = 0
                 while batch := cursor.fetchmany(10000):
                     for raw in batch:
                         if len(rows) >= MAX_FLAT_ROWS: _error('too_many_rows', f'Flat snapshot exceeds {MAX_FLAT_ROWS} rows')
-                        key = _text_value(raw[0], contract['row_key'], len(rows) + 1)
-                        if not key or rows.seen(key): _error('invalid_row', 'Missing or duplicate row key')
-                        amounts = [_amount(None if value is None else format(value, 'f'),
-                                           {**contract, 'precision': c['precision'], 'scale': c['scale'], 'measure': c['name']}, len(rows) + 1)
-                                   for c, value in zip(amount_specs, raw[1:1 + width])]
-                        cat_vals = []
-                        for name, value in zip(contract['categories'], raw[1 + width:]):
-                            dt = dim_types[name]
-                            if value is None:
-                                norm_val = None
-                            elif dt == 'boolean':
-                                norm_val = 'true' if value else 'false'
-                            elif dt in {'date', 'timestamp'} and hasattr(value, 'isoformat'):
-                                norm_val = value.isoformat()
-                            else:
-                                norm_val = str(value)
-                            cat_vals.append(_validate_flat_cell(norm_val, name, dt, len(rows) + 1))
-                        row = (key, *amounts, *cat_vals)
-                        if NULL_MARKER in row: _error('invalid_row', 'Source contains reserved NULL marker')
-                        rows.append(row)
+                        number += 1
+                        try:
+                            key = _text_value(raw[0], contract['row_key'], number)
+                            if not key or rows.seen(key): _error('invalid_row', f'Missing or duplicate row key {_shown(key)} at row {number}')
+                            amounts = [_amount(None if value is None else format(value, 'f'),
+                                               {**contract, 'precision': c['precision'], 'scale': c['scale'], 'measure': c['name']}, number)
+                                       for c, value in zip(amount_specs, raw[1:1 + width])]
+                            cat_vals = []
+                            for name, value in zip(contract['categories'], raw[1 + width:]):
+                                dt = dim_types[name]
+                                if value is None:
+                                    norm_val = None
+                                elif dt == 'boolean':
+                                    norm_val = 'true' if value else 'false'
+                                elif dt in {'date', 'timestamp'} and hasattr(value, 'isoformat'):
+                                    norm_val = value.isoformat()
+                                else:
+                                    norm_val = str(value)
+                                cat_vals.append(_validate_flat_cell(norm_val, name, dt, number))
+                            row = (key, *amounts, *cat_vals)
+                            if NULL_MARKER in row: _error('invalid_row', 'Source contains reserved NULL marker')
+                            rows.append(row)
+                        except CoreError as exc:
+                            if exc.code != 'invalid_row':
+                                raise
+                            problems.append(exc.message)
+                            if len(problems) >= MAX_REPORTED_PROBLEMS:
+                                break
+                    if len(problems) >= MAX_REPORTED_PROBLEMS:
+                        break
+                if problems:
+                    raise CoreError('invalid_row', problems[0] if len(problems) == 1 else
+                                    f'{len(problems)}{"+" if len(problems) >= MAX_REPORTED_PROBLEMS else ""} problems found in the file. '
+                                    + ' '.join(f'{n}) {m}' for n, m in enumerate(problems, 1)))
             else:
                 expected = 'DECIMAL(' + str(contract['precision']) + ',' + str(contract['scale']) + ')'
                 if ver >= 4:
@@ -595,32 +611,48 @@ def _ingest_flat(source, destination, contract, preparation, folder, sinks):
                         _error('invalid_schema', f'Registered Parquet fields require VARCHAR keys/categories and {expected} measure')
                 selected = ', '.join(_quote(name) for name in columns)
                 cursor = con.execute(f'SELECT {selected} FROM read_parquet(?)', [str(source.resolve())])
+                problems: list[str] = []
+                number = 0
                 while batch := cursor.fetchmany(10000):
                     for raw in batch:
                         if len(rows) >= MAX_FLAT_ROWS: _error('too_many_rows', f'Flat snapshot exceeds {MAX_FLAT_ROWS} rows')
-                        key = _text_value(raw[0], contract['row_key'], len(rows) + 1)
-                        if not key or rows.seen(key): _error('invalid_row', 'Missing or duplicate row key')
-                        amount = _amount(None if raw[1] is None else format(raw[1], 'f'), contract, len(rows) + 1)
-                        if NULL_MARKER in raw: _error('invalid_row', 'Source contains reserved NULL marker')
-                        if ver >= 4:
-                            cat_vals = []
-                            for name, value in zip(contract['categories'], raw[2:]):
-                                dt = dim_types[name]
-                                if value is None:
-                                    norm_val = None
-                                elif dt == 'boolean':
-                                    norm_val = 'true' if value else 'false'
-                                elif dt in {'date', 'timestamp'} and hasattr(value, 'isoformat'):
-                                    norm_val = value.isoformat()
-                                else:
-                                    norm_val = str(value)
-                                cat_vals.append(_validate_flat_cell(norm_val, name, dt, len(rows) + 1))
-                        else:
-                            cat_vals = [
-                                _text_value(value, name, len(rows) + 1)
-                                for name, value in zip(contract['categories'], raw[2:])
-                            ]
-                        rows.append((key, amount, *cat_vals))
+                        number += 1
+                        try:
+                            key = _text_value(raw[0], contract['row_key'], number)
+                            if not key or rows.seen(key): _error('invalid_row', f'Missing or duplicate row key {_shown(key)} at row {number}')
+                            amount = _amount(None if raw[1] is None else format(raw[1], 'f'), contract, number)
+                            if NULL_MARKER in raw: _error('invalid_row', 'Source contains reserved NULL marker')
+                            if ver >= 4:
+                                cat_vals = []
+                                for name, value in zip(contract['categories'], raw[2:]):
+                                    dt = dim_types[name]
+                                    if value is None:
+                                        norm_val = None
+                                    elif dt == 'boolean':
+                                        norm_val = 'true' if value else 'false'
+                                    elif dt in {'date', 'timestamp'} and hasattr(value, 'isoformat'):
+                                        norm_val = value.isoformat()
+                                    else:
+                                        norm_val = str(value)
+                                    cat_vals.append(_validate_flat_cell(norm_val, name, dt, number))
+                            else:
+                                cat_vals = [
+                                    _text_value(value, name, number)
+                                    for name, value in zip(contract['categories'], raw[2:])
+                                ]
+                            rows.append((key, amount, *cat_vals))
+                        except CoreError as exc:
+                            if exc.code != 'invalid_row':
+                                raise
+                            problems.append(exc.message)
+                            if len(problems) >= MAX_REPORTED_PROBLEMS:
+                                break
+                    if len(problems) >= MAX_REPORTED_PROBLEMS:
+                        break
+                if problems:
+                    raise CoreError('invalid_row', problems[0] if len(problems) == 1 else
+                                    f'{len(problems)}{"+" if len(problems) >= MAX_REPORTED_PROBLEMS else ""} problems found in the file. '
+                                    + ' '.join(f'{n}) {m}' for n, m in enumerate(problems, 1)))
     else:
         _error('invalid_schema', 'Only CSV and Parquet extracts are supported')
     rows.close()

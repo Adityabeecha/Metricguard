@@ -198,7 +198,22 @@ export function AccountMenu({ workspaceId, authRequired, onSettings }: AccountPr
 }
 
 /** Shown to guest accounts (open sign-up) on every workspace page. */
+/** While someone is using the app, ask who they are every 30 minutes; the server renews a session that is running out. */
+function useSessionKeepAlive() {
+  useEffect(() => {
+    let lastActivity = Date.now();
+    const seen = () => { lastActivity = Date.now(); };
+    const events = ['pointerdown', 'keydown', 'scroll'] as const;
+    events.forEach(name => window.addEventListener(name, seen, { passive: true }));
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && Date.now() - lastActivity < 30 * 60000) void api.identity().catch(() => undefined);
+    }, 30 * 60000);
+    return () => { window.clearInterval(timer); events.forEach(name => window.removeEventListener(name, seen)); };
+  }, []);
+}
+
 export function GuestNotice({ workspaceId }: { workspaceId: string }) {
+  useSessionKeepAlive();  // GuestNotice is on every workspace page, guest or not
   const { identity } = useConnectedIdentity(workspaceId);
   const [, tick] = useState(0);
   useEffect(() => { const t = window.setInterval(() => tick(n => n + 1), 60000); return () => window.clearInterval(t); }, []);

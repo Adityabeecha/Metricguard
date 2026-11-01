@@ -250,6 +250,8 @@ Under the result, in **Save as a case**:
 
 The case is now in **Cases**. Each case keeps the exact data fingerprint and calculations, so anyone can open it and use **Replay & verify** to recompute it and confirm the answer is still exact. A table then shows each value it compared (both totals, the difference, the remainder, the record count and the evidence fingerprint) and marks any that differ.
 
+Owners and analysts can edit a conclusion; readers can only read it. Earlier conclusions stay on record.
+
 Search cases by name, conclusion or dataset, and sort by last updated, name or the size of the difference.
 
 **Managing cases**
@@ -281,19 +283,22 @@ Open a case and click **Share**. **Copy summary** includes the saved case link. 
 
 A **metric** is a business number with a name, like *Net revenue* or *Paid orders*, plus the calculation your team has approved for it.
 
-- **Create one from a result:** click **Save as metric**, choose **New metric…** or an existing one, and pick **Which calculation?**
-- **Or go to Metrics → Create metric:** give it a name and an importance (**Critical**, **Important** or **Standard**), then link a calculation to a dataset.
-- Each metric shows its **Approved value** and the **Difference from approved** when new data arrives.
-- Metric details are grouped as **Approved calculation**, **Latest check** and **History**. Expand **All versions and links** under History to browse linked calculations and earlier versions. **Seen at** is when a version was observed; **Linked version** identifies the approved calculation version.
-- When you add a newer load of a dataset, use **Check your metrics on the new load** to see which metrics moved and why.
+- **Create one from a result:** click **Save as metric**, pick **Which calculation?** (**Proposed** or **Current**), choose **New metric…** or an existing metric, then click **Save as metric**.
+- **Or go to Metrics → Create metric:** enter a **Metric name** and choose an **Importance** (**Critical**, **Important**, **Standard** or **Unclassified**). You can link an initial calculation or leave **Don't link a calculation yet** selected.
+- Open a metric to see **Approved calculation**, **Latest check** and **History**, in that order. **Latest check** compares a checked calculation with the approved calculation on the same data; **Approved value** and **Difference from approved** describe that check. Adding data alone doesn't run a check.
+- Use **Link a calculation** to add one. Trial calculations appear under **History → All versions and links**; **Approve calculation** makes one the approved calculation.
+- Expand **All versions and links** to browse **Links**, **Version history**, **Decisions & changes** and **Checks**. **Seen at** is when a version was observed; **Linked version** identifies the linked calculation version.
+- After adding a newer load, go to **Changes → Check metrics on a new load** to see which metrics moved and why.
 
 ---
 
 ## 12. Changes
 
-**Changes** lists comparisons over time: new data loads, and edits to metric definitions. You can **compare two versions of a saved metric** to see how a definition change moved the number, checked on frozen data.
+**Changes** lists completed checks and comparisons. To compare saved calculation versions, open the metric in **Metrics** and use its calculation links and version history.
 
-Teams using dbt or Power BI can also check those changes. That's an advanced setup; see [CLI and CI usage](cli-usage.md).
+Under **Check metrics on a new load**, choose an **Earlier load** and **Later load**, then click **Preview metric checks**. Review the proposed checks and click **Start metric checks**. Keep this page open while the checks run one after another; leaving stops the remaining checks from starting. Completed results stay under **Metric checks on new loads**; use **Review evidence** to open one.
+
+Teams using dbt or Power BI can import two revisions in **Settings → Integrations**, then use **Run metric diff** in Changes. With no imported revisions, Changes shows the import guidance instead of empty definition-change sections. See [CLI and CI usage](cli-usage.md) for that setup.
 
 ---
 
@@ -303,11 +308,12 @@ Teams using dbt or Power BI can also check those changes. That's an advanced set
 
 1. Go to **Settings → Members**. Only workspace owners can invite.
 2. Under **Invite by email**, enter the person's email and choose a **Role**:
-   - **Owner:** everything, including inviting people and saving database connections.
-   - **Analyst — compare and save:** add data, run comparisons, save cases.
+   - **Analyst — compare and save:** add data, run comparisons, save cases and edit conclusions.
    - **Reader — view only:** open and read cases.
-3. **Tell them yourself** (chat, email, Slack). MetricGuard doesn't send emails. Ask them to sign in at **https://metricguard.vercel.app** with Google or GitHub, using **that same email address**. They join your workspace automatically. Until they do, they show as **Waiting to sign in**.
+3. Click **Invite**. Under **Waiting to sign in**, use **Copy invite message**, then send the message yourself (chat, email, Slack). MetricGuard doesn't send emails. They must sign in with Google or GitHub using **that same email address**; they then join your workspace automatically.
 4. To take access away, use **Remove** (members) or **Revoke** (invites not yet used).
+
+Owners can also invite people and save database connections. The invite form offers Analyst and Reader roles.
 
 ### Switch workspaces
 
@@ -317,10 +323,11 @@ If you belong to more than one workspace, use the workspace switcher in the side
 
 ## 14. Settings, usage and feedback
 
-- **Settings → Workspace information:** the workspace name and ID.
+- **Settings → System & Workspace → Workspace information:** the workspace name and ID.
 - **Settings → Usage:** your current limits and how much you've used: rows per dataset, upload size, comparisons in the last 24 hours, and storage used. Bars show storage and comparison usage when limits are set; guest accounts also show the time until erasure.
-- **Settings → Account:** sign out, or permanently **delete your account**. You must type `DELETE` to confirm. Deleting erases your personal workspace and everything in it. Shared workspaces stay, minus you.
-- **Settings → Appearance:** light or dark mode.
+- **Settings → System & Workspace → Account:** use **Sign out** or **Delete account**. Read the deletion summary, type `DELETE` under **Type DELETE to confirm**, then click **Delete account permanently**. Sole-owner workspaces with no other members are erased with their data. Shared workspaces and their records stay; your membership is removed.
+- **Settings → System & Workspace → Appearance:** choose **Light**, **Dark** or **System**.
+- **Settings → Integrations:** import dbt or Power BI revisions, or manage database connections.
 - **Feedback** (sidebar): tell the team what's confusing or broken. Mention the page you were on.
 
 ---

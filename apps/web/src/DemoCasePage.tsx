@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { ArrowRight } from 'lucide-react';
 import { runningTotals } from './exactDecimal';
 import { groupDigits } from './resultSummary';
-import { DEMO_CASE as C, DEMO_COLUMNS, demoBreakdown, demoChanges, demoTotals, type DemoColumn } from './demoCase';
+import { DEMO_CASE as C, DEMO_COLUMNS, demoBreakdown, demoChanges, demoReplayResult, demoTotals, type DemoColumn } from './demoCase';
 import { Bridge } from './views/evidence/Bridge';
 import { HashPrint } from './views/evidence/HashPrint';
 import { Stamp } from './views/evidence/Stamp';
+import { categoryDescription } from './views/evidence/categories';
+import { replayChecks } from './views/evidence/replayChecks';
 
 type Tab = 'records' | 'breakdown' | 'definitions' | 'notes';
 const minus = (v: string) => v.replace(/^-/, '−');
@@ -21,6 +23,8 @@ export function DemoCasePage() {
   const running = runningTotals(changes.map(c => c.delta));
   const groups = demoBreakdown(column);
   const balanced = !/[1-9]/.test(t.residual);
+  const checks = replayChecks(demoReplayResult(), demoReplayResult());
+  const excludedDescription = categoryDescription('excluded', {});
 
   return <article className="demo-case">
     <p className="demo-banner" role="note">
@@ -46,9 +50,10 @@ export function DemoCasePage() {
     </section>
 
     <Bridge
+      unit={C.unit}
       start={{ label: 'Current', value: Number(t.current), text: money(t.current) }}
       end={{ label: 'Proposed', value: Number(t.proposed), text: money(t.proposed) }}
-      steps={[{ key: 'excluded', label: 'Excluded by proposed', value: Number(t.listed), text: money(t.listed), records: changes.length }]}
+      steps={[{ key: 'excluded', label: 'Excluded by proposed', description: excludedDescription, value: Number(t.listed), text: money(t.listed), records: changes.length }]}
       residualText={money(t.residual)} balanced={balanced}
       onPick={() => setTab('records')}
       description={`Current ${money(t.current)}, excluded by proposed ${money(t.listed)} (${changes.length} records), unexplained ${money(t.residual)}, equals proposed ${money(t.proposed)}${balanced ? '; balanced' : ''}.`} />
@@ -63,6 +68,7 @@ export function DemoCasePage() {
 
     {tab === 'records' && <section className="ledger" aria-labelledby="demo-a">
       <div className="ledger-head"><h3 id="demo-a"><span className="exhibit">A</span> Records that explain the difference</h3></div>
+      <p className="helper-muted">Excluded by proposed: {excludedDescription}</p>
       <table className="ledger-table">
         <thead><tr><th scope="col">Order</th><th scope="col">Current → Proposed</th><th scope="col" className="num">Change</th><th scope="col" className="num">Running total</th></tr></thead>
         <tbody>{changes.map((c, i) => <tr key={c.row.row_id}>
@@ -115,6 +121,19 @@ export function DemoCasePage() {
         <li>This is a sample with eight synthetic orders. Your own cases work the same way on up to 50,000 rows on the free beta.</li>
       </ul>
     </div>}
+
+    <section aria-labelledby="demo-replay-title">
+      <h2 id="demo-replay-title">Replay &amp; verify</h2>
+      <p>The sample's saved and replayed values are identical.</p>
+      <table className="ledger-table replay-checks">
+        <caption className="sr-only">Sample saved case and replay checks</caption>
+        <thead><tr><th>Checked</th><th>Saved case</th><th>Replay</th><th>Result</th></tr></thead>
+        <tbody>{checks.map(check => <tr key={check.label}>
+          <td data-label="Checked">{check.label}</td><td className="n" data-label="Saved case">{check.saved}</td>
+          <td className="n" data-label="Replay">{check.replayed}</td><td data-label="Result">{check.same ? 'Same' : 'Differs'}</td>
+        </tr>)}</tbody>
+      </table>
+    </section>
 
     <section className="demo-custody" aria-labelledby="demo-custody-title">
       <h2 id="demo-custody-title">Custody log</h2>

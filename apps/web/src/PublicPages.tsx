@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { ArrowRight, Database, Fingerprint, LockKeyhole } from 'lucide-react';
 import { api } from './api';
 import { Logo } from './Logo';
@@ -9,10 +9,11 @@ import { HashPrint } from './views/evidence/HashPrint';
 import { Stamp } from './views/evidence/Stamp';
 import { homeRedirect, type SitePage } from './router';
 import { DemoCasePage } from './DemoCasePage';
-import { GuidePage } from './GuidePage';
 import { scrollToHash } from './publicScroll';
 import { CONTACT_EMAIL, HOSTING_REGION } from './publicFacts';
 import './public.css';
+
+const GuidePage = lazy(() => import('./GuidePage').then(m => ({ default: m.GuidePage })));
 
 type PublicPage = Exclude<SitePage, 'workspace' | 'signin' | 'signup' | 'shared-case'>;
 
@@ -53,7 +54,7 @@ export function PublicPages({ page }: { page: PublicPage }) {
         : <><a className="public-signin" href="/signin">Sign in</a><a className="button primary" href="/signup">Sign up</a></>}</div>
     </div></header>
     <main id="public-content" className={page === 'home' ? 'public-home-main' : 'public-width'}>
-      {page === 'home' ? <Homepage /> : page === 'demo' ? <DemoCasePage /> : page === 'not-found' ? <NotFound /> : page === 'guide' ? <GuidePage /> : <LegalPage kind={page} />}
+      {page === 'home' ? <Homepage /> : page === 'demo' ? <DemoCasePage /> : page === 'not-found' ? <NotFound /> : page === 'guide' ? <Suspense fallback={<p role="status">Loading…</p>}><GuidePage /></Suspense> : <LegalPage kind={page} />}
     </main>
     <footer className="public-footer public-width"><div><span>© MetricGuard</span><span>Built for data analysts</span></div><nav aria-label="Legal"><a href="/guide">User guide</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://github.com/Adityabeecha/Metricguard" rel="noreferrer">GitHub</a></nav></footer>
   </div>;

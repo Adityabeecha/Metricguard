@@ -28,6 +28,7 @@ from sqlglot import exp
 
 from .free_tier import check_rows, check_upload_size
 from .common import CoreError, digest, file_hash
+from .flat import MAX_REPORTED_PROBLEMS
 from .numeric import ScaledInteger
 from .relational import (EXECUTION_POLICY, IDENT, MAX_BYTES, MAX_ROWS, MODE, SCOPE, HASH,
                          context_for, fail, quote)
@@ -403,6 +404,10 @@ def prove_grain(con, contract):
             'grain_preserved': True, 'dimensions': per_dimension}
 
 
+# Row-level refusals collected (up to MAX_REPORTED_PROBLEMS) before the upload is refused.
+ROW_PROBLEMS = {'invalid_row', 'invalid_keys', 'invalid_amount', 'scale_mismatch'}
+
+
 def _amount(value, c):
     from .relational_snapshot import amount
     return amount(value, c)
@@ -459,28 +464,41 @@ def ingest(source, destination, payload):
                         keys, count = set(), 0
                         with (Path(folder) / entry_name(role)).open('w', encoding='utf-8', newline='') as output:
                             writer = csv.writer(output); writer.writerow(columns)
+                            problems: list[CoreError] = []
                             for line, raw in enumerate(reader, 2):
                                 check_rows(count + 1, exact=False)
                                 if count >= row_limit(c):
                                     fail('too_many_rows', f'{role} CSV exceeds {row_limit(c)} rows.')
-                                if None in raw or any(v is None for v in raw.values()):
-                                    fail('invalid_row', f'{role} CSV has an inconsistent field count at line {line}.')
-                                values = {name: None if raw[name] == token else raw[name] for name in columns}
-                                for name, value in values.items():
-                                    if value is not None and (len(value) > 256 or '\x00' in value or value == NULL_MARKER):
-                                        fail('invalid_row', f'{role}.{name} exceeds 256 characters or contains a reserved value at line {line}.')
-                                key = values[spec['key']]
-                                if not key or key in keys:
-                                    fail('invalid_keys', f'{role} key is missing or duplicated at line {line}; no deduplication is performed.')
-                                if c['version'] == 2:
-                                    keys.add(key)
-                                if role == 'fact':
-                                    values[c['measure']['column']] = _amount(values[c['measure']['column']], c)
-                                    for d in c['dimensions']:
-                                        if values[d['fact_foreign_key']] == '':
-                                            fail('invalid_keys', f'An empty foreign key must use the declared NULL token at line {line}.')
-                                writer.writerow(NULL_MARKER if values[n] is None else values[n] for n in columns)
-                                count += 1
+                                try:
+                                    if None in raw or any(v is None for v in raw.values()):
+                                        fail('invalid_row', f'{role} CSV has an inconsistent field count at line {line}.')
+                                    values = {name: None if raw[name] == token else raw[name] for name in columns}
+                                    for name, value in values.items():
+                                        if value is not None and (len(value) > 256 or '\x00' in value or value == NULL_MARKER):
+                                            fail('invalid_row', f'{role}.{name} exceeds 256 characters or contains a reserved value at line {line}.')
+                                    key = values[spec['key']]
+                                    if not key or key in keys:
+                                        fail('invalid_keys', f'{role} key is missing or duplicated at line {line}; no deduplication is performed.')
+                                    if c['version'] == 2:
+                                        keys.add(key)
+                                    if role == 'fact':
+                                        values[c['measure']['column']] = _amount(values[c['measure']['column']], c)
+                                        for d in c['dimensions']:
+                                            if values[d['fact_foreign_key']] == '':
+                                                fail('invalid_keys', f'An empty foreign key must use the declared NULL token at line {line}.')
+                                    writer.writerow(NULL_MARKER if values[n] is None else values[n] for n in columns)
+                                    count += 1
+                                except CoreError as exc:
+                                    if exc.code not in ROW_PROBLEMS:
+                                        raise
+                                    # Keep reading so one upload reports several problems, not one per attempt.
+                                    problems.append(exc if 'line' in exc.message else CoreError(exc.code, f"{exc.message.rstrip('.')} (line {line})."))
+                                    if len(problems) >= MAX_REPORTED_PROBLEMS:
+                                        break
+                            if problems:
+                                raise CoreError(problems[0].code, problems[0].message if len(problems) == 1 else
+                                    f'{len(problems)}{"+" if len(problems) >= MAX_REPORTED_PROBLEMS else ""} problems found in the {role} file. '
+                                    + ' '.join(f'{n}) {e.message}' for n, e in enumerate(problems, 1)))
                     row_counts[role] = count
                 except (UnicodeError, csv.Error) as error:
                     raise CoreError('invalid_csv', f'{role} source is not a supported UTF-8 CSV.') from error

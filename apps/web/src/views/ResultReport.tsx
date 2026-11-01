@@ -1,7 +1,7 @@
 import { evidenceCountLabel, twoLoadCountNotes, evidenceSealLabel } from './evidence/evidencePresentation';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type ConcentrationItem, type DistinctSummary, type EvidenceConcentration, type EntityRecords, type EvidenceBreakdown, type Evidence, type EvidenceSummary, type FlatEvidence, type RatioBlock, type RelationalEvidence, type RelationalRun, type Result, type Run, type Snapshot, type Version } from '../api';
-import { resultUnit, fractionDisplay, groupDigits, percentOf, summarizeResult, type RecordDelta } from '../resultSummary';
+import { resultUnit, fractionDisplay, digitStyleFor, groupDigits, percentOf, summarizeResult, type RecordDelta } from '../resultSummary';
 import { RelationalEvidencePanel } from './RelationalEvidencePanel';
 import { caseNumber } from '../investigationLibrary';
 import { decimalSum } from '../exactDecimal';
@@ -178,7 +178,7 @@ function EntityRecordsButton({ runId, entity,client }: { runId: string; entity: 
 }
 
 /** Exact split of the change by one filter column, largest first. */
-function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, sources, onPickGroup, client = workspaceEvidenceClient }: { runId: string; unit: string; percent?: boolean; onColumns: (c: string[]) => void; preferred?: string[] ; loads?: boolean; sources?: boolean; onPickGroup?: (group: LedgerGroup) => void; client?: EvidenceDataClient }) {
+function Breakdown({ runId, unit, percent, ratio, onColumns, preferred = [] , loads, sources, onPickGroup, client = workspaceEvidenceClient }: { runId: string; unit: string; percent?: boolean; ratio?: boolean; onColumns: (c: string[]) => void; preferred?: string[] ; loads?: boolean; sources?: boolean; onPickGroup?: (group: LedgerGroup) => void; client?: EvidenceDataClient }) {
   const [column, setColumn] = useState('');
   // Day/Week/Month per date column, remembered while switching columns; Concentration uses the latest choice.
   const [groupings, setGroupings] = useState<Record<string, '' | 'week' | 'month'>>({});
@@ -228,8 +228,8 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, so
   const [cur, pro] = sources ? ['Source A', 'Source B'] : loads ? ['Earlier load', 'Later load'] : ['Current', 'Proposed'];
   const groupLabel = (g: { value: unknown; no_match?: boolean }) =>
     g.no_match ? `No matching ${data.column?.split('.')[0] === 'dimension' ? 'lookup' : data.column?.split('.')[0]} row` : showValue(g.value);
-  const shown = (v: string | null | undefined) => v == null ? '—' : percent ? groupDigits(percentOf(v)) : groupDigits(v);
-  const changeShown = (v: string | null | undefined) => v == null ? '—' : minus(percent ? `${groupDigits(percentOf(v))} pts` : `${groupDigits(v)}${unit ? ` ${unit}` : ''}`);
+  const shown = (v: string | null | undefined) => v == null ? '—' : percent ? groupDigits(percentOf(v)) : groupDigits(v, digitStyleFor(unit));
+  const changeShown = (v: string | null | undefined) => v == null ? '—' : minus(percent ? `${groupDigits(percentOf(v))} pts` : `${groupDigits(v, digitStyleFor(unit))}${unit ? ` ${unit}` : ''}`);
   const recordTotal = data.total_records || 0;
   const groups = [...(data.groups || [])];
   const moved = groups.filter(g => g.change != null && /[1-9]/.test(g.change));
@@ -295,8 +295,8 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, so
                 </td>
                 <td className="num" data-label="Changed records">{groupDigits(String(line.changed))} <small>of {groupDigits(String(line.records))}</small></td>
                 {sideTotals && <>
-                  <td className="num" data-label={cur}>{line.other ? '' : data.ratio ? shown(line.current) : minus(groupDigits(line.current ?? '—'))}</td>
-                  <td className="num" data-label={pro}>{line.other ? '' : data.ratio ? shown(line.proposed) : minus(groupDigits(line.proposed ?? '—'))}</td>
+                  <td className="num" data-label={cur}>{line.other ? '' : data.ratio ? shown(line.current) : minus(groupDigits(line.current ?? '—', digitStyleFor(unit)))}</td>
+                  <td className="num" data-label={pro}>{line.other ? '' : data.ratio ? shown(line.proposed) : minus(groupDigits(line.proposed ?? '—', digitStyleFor(unit)))}</td>
                 </>}
               </tr>
             );
@@ -310,7 +310,7 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, so
       {data.coverage_note && <small style={{ display: 'block' }}>{sideTotals ? data.coverage_note : 'Only records whose inclusion changed are listed for this large dataset, so each value’s change is exact; its totals on each side are not shown.'}</small>}
       {data.grouping === 'day' && <small style={{ display: 'block' }}>Timestamps are grouped by calendar day.</small>}
       {unavailableNote}
-      {concentration && <Concentration data={concentration} exclude={preferred} unit={unit} percent={percent} onPick={onPickGroup} />}
+      {concentration && <Concentration data={concentration} exclude={preferred} unit={unit} percent={percent} ratio={ratio} onPick={onPickGroup} />}
     </div>
   );
 }
@@ -322,21 +322,22 @@ function openingColumn(concentration: EvidenceConcentration | null | undefined, 
 }
 
 /** Values and pairs of values that hold far more of the difference than of the records (filter columns left out). */
-function Concentration({ data, exclude, unit, percent, onPick }: { data: EvidenceConcentration; exclude: string[]; unit: string; percent?: boolean; onPick?: (group: LedgerGroup) => void }) {
+function Concentration({ data, exclude, unit, percent, ratio, onPick }: { data: EvidenceConcentration; exclude: string[]; unit: string; percent?: boolean; ratio?: boolean; onPick?: (group: LedgerGroup) => void }) {
+  const measure = ratio ? 'effect on the ratio' : 'difference';
   const outside = (item: ConcentrationItem) => item.columns.every(c => !exclude.some(f => c === f || c.endsWith(`.${f}`)));
   const lines = [...data.items, ...data.pairs].filter(outside)
     .sort((a, b) => (b.lift || 0) - (a.lift || 0) || b.difference_share - a.difference_share).slice(0, 8);
   if (!data.available) return null;
   if (!lines.length) return <section className="concentration" aria-labelledby="concentration-title">
     <h4 id="concentration-title">Concentration across other columns</h4>
-    <p className="where-legend">No value or pair of values holds much more of the difference than of the records: the difference is spread evenly across the other columns.</p>
+    <p className="where-legend">No value or pair of values holds much more of the {measure} than of the records: the {measure} is spread evenly across the other columns.</p>
   </section>;
   const valueText = (v: unknown, noMatch?: boolean) => noMatch ? 'no matching row' : showValue(v);
   const label = (item: ConcentrationItem) => item.columns.map((c, i) => `${columnLabel(c)} = ${valueText(item.values[i], item.no_match?.[i])}`).join(' × ');
-  const changeText = (v: string | null) => v == null ? '—' : minus(percent ? `${groupDigits(percentOf(v))} pts` : `${groupDigits(v)}${unit ? ` ${unit}` : ''}`);
+  const changeText = (v: string | null) => v == null ? '—' : minus(percent ? `${groupDigits(percentOf(v))} pts` : `${groupDigits(v, digitStyleFor(unit))}${unit ? ` ${unit}` : ''}`);
   return <section className="concentration" aria-labelledby="concentration-title">
     <h4 id="concentration-title">Concentration across other columns</h4>
-    <p className="where-legend">Values and combinations that hold far more of the difference than of the records.</p>
+    <p className="where-legend">Values and combinations that hold far more of the {measure} than of the records.</p>
     <ul>
       {lines.map(item => <li key={label(item)}>
         {onPick && item.changed_records > 0
@@ -345,8 +346,8 @@ function Concentration({ data, exclude, unit, percent, onPick }: { data: Evidenc
               column2: item.columns[1], value2: item.columns[1] ? item.values[1] ?? null : undefined, noMatch2: item.no_match?.[1],
               label: item.columns.map((_, i) => valueText(item.values[i], item.no_match?.[i])).join(' × '), totalText: changeText(item.change) })}>{label(item)}</button>
           : <b>{label(item)}</b>}
-        <p>{label(item)} holds {(item.difference_share * 100).toFixed(1)}% of the difference{item.record_share != null ? ` but only ${(item.record_share * 100).toFixed(1)}% of the records` : ''}.</p>
-        <span className="concentration-figures">{(item.difference_share * 100).toFixed(1)}% of the difference · {item.record_share != null ? `${(item.record_share * 100).toFixed(1)}% of records` : 'Record share unavailable'} · {changeText(item.change)}</span>
+        <p>{label(item)} holds {(item.difference_share * 100).toFixed(1)}% of the {measure}{item.record_share != null ? ` but only ${(item.record_share * 100).toFixed(1)}% of the records` : ''}.</p>
+        <span className="concentration-figures">{(item.difference_share * 100).toFixed(1)}% of the {measure} · {item.record_share != null ? `${(item.record_share * 100).toFixed(1)}% of records` : 'Record share unavailable'} · {changeText(item.change)}</span>
       </li>)}
     </ul>
     {(data.capped || []).map(note => <small key={note} style={{ display: 'block' }}>{note}</small>)}
@@ -462,7 +463,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   </>;
   const goPage = (n: number) => setOffset((Math.min(Math.max(1, n), pages) - 1) * PAGE);
   const show = (v: string | null) => (v == null ? (ratio ? 'Undefined' : 'Undefined (no values)')
-    : percent ? `${groupDigits(percentOf(v))}%` : unit ? `${groupDigits(v)} ${unit}` : groupDigits(v));
+    : percent ? `${groupDigits(percentOf(v))}%` : unit ? `${groupDigits(v, digitStyleFor(unit))} ${unit}` : groupDigits(v));
   const num = (v: string | null | undefined) => (v == null ? '—' : groupDigits(v));
   const keyHeader = kind === 'count_distinct' ? (result.distinct?.entity_column ?? 'Value') : 'Record';
   const listLabel = loads ? 'Records that differ between the loads' : result.evidence_coverage ? 'Listed records'
@@ -518,7 +519,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   const categories = evidence.summary?.categories ?? null;
   const labels = { loads, sources, distinct: kind === 'count_distinct' };
   const fmt = (v: string | null | undefined) => v == null ? '—'
-    : minus(percent ? `${groupDigits(percentOf(v))} pts` : `${groupDigits(v)}${unit ? ` ${unit}` : ''}`);
+    : minus(percent ? `${groupDigits(percentOf(v))} pts` : `${groupDigits(v, digitStyleFor(unit))}${unit ? ` ${unit}` : ''}`);
   const stepValue = (c: { change: string; effect?: string | null }) => (ratio ? (c.effect ?? '0') : c.change);
   const residual = ratio ? '0' : (result.residual ?? '0');
   const balanced = !/[1-9]/.test(residual);
@@ -550,7 +551,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
           <h2 id="answer-title" className="sr-only">Answer</h2>
           <div className="answer-figure">
             <span className="figure" aria-label="Change, proposed minus current">
-              {result.delta_target_minus_baseline == null ? 'Undefined' : minus(groupDigits(percent ? percentOf(result.delta_target_minus_baseline) : result.delta_target_minus_baseline))}
+              {result.delta_target_minus_baseline == null ? 'Undefined' : minus(groupDigits(percent ? percentOf(result.delta_target_minus_baseline) : result.delta_target_minus_baseline, digitStyleFor(unit)))}
             </span>
             {result.delta_target_minus_baseline != null && <span className="figure-unit">{percent ? 'pts' : unit}</span>}
           </div>
@@ -567,7 +568,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
         <SealCard run={run} snapshot={snapshot} status={sealStatus} onCustody={onCustody} saved={savedCase} />
       </div>
 
-      {bridge && !expired && <Bridge {...bridge} onPick={pickCategory} recordsAffectTotal={loads} />}
+      {bridge && !expired && <Bridge {...bridge} unit={unit} onPick={pickCategory} recordsAffectTotal={loads} />}
 
       {bridge && !expired && <section className="print-only"><h3>Reconciliation</h3><table className="ledger-table"><tbody><tr><th>{bridge.start.label}</th><td>{bridge.start.text}</td></tr>{bridge.steps.map(step => <tr key={step.key}><th>{step.label}</th><td>{step.text}</td></tr>)}<tr><th>Unexplained</th><td>{bridge.residualText}</td></tr><tr><th>{bridge.end.label}</th><td>{bridge.end.text}</td></tr></tbody></table></section>}
       {loads && !expired && twoLoadCountNotes(result.change_summary, categories).map(note => <p className="helper-muted" key={note}>{note}</p>)}
@@ -600,7 +601,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
       {tab === 'breakdown' && kind === 'count_distinct' && result.distinct && <DistinctPanel distinct={result.distinct} />}
 
       {/* Kept mounted so its column list feeds the record table's "Show columns"; hidden outside its tab. */}
-      {run.result && !expired && <div hidden={tab !== 'breakdown'}><Breakdown runId={run.id} unit={unit} percent={percent} onColumns={setColumns} preferred={breakdownColumns} loads={loads} sources={sources} onPickGroup={pickGroup} client={evidenceClient} /></div>}
+      {run.result && !expired && <div hidden={tab !== 'breakdown'}><Breakdown runId={run.id} unit={unit} percent={percent} ratio={Boolean(result.ratio)} onColumns={setColumns} preferred={breakdownColumns} loads={loads} sources={sources} onPickGroup={pickGroup} client={evidenceClient} /></div>}
 
       {expired && (tab === 'records' || tab === 'breakdown') && <p className="disabled-reason" role="status">Detailed records expired — rerun to see them</p>}
       {tab === 'records' && summaryLoading && (

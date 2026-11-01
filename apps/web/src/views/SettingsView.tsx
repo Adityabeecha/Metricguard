@@ -7,6 +7,8 @@ import { ThemeSwitch } from '../ThemeSwitch';
 import { UsagePanel } from './UsagePanel';
 import { AccountSettings } from './AccountSettings';
 import { MembersPanel } from './MembersPanel';
+import { AdminPanel } from './AdminPanel';
+import { api } from '../api';
 
 interface SettingsViewProps {
   data: Bootstrap;
@@ -21,6 +23,9 @@ export function SettingsView({
   activeTab = 'system',
   onTabChange,
 }: SettingsViewProps) {
+  // The owner-only "Beta admin" tab; the server decides, and refuses everyone else regardless.
+  const [admin, setAdmin] = useState(false);
+  useEffect(() => { api.identity().then(i => setAdmin(Boolean((i as { is_admin?: boolean }).is_admin))).catch(() => setAdmin(false)); }, []);
   // Gating mechanism for developer and evaluation tooling:
   // Developer UI should ONLY exist when an external development/build configuration explicitly permits it:
   // - Local Vite dev server: (import.meta as any).env?.DEV is true
@@ -90,6 +95,7 @@ export function SettingsView({
         </button>
         <button type="button" className={`section-tab-button ${currentTab === 'members' ? 'active' : ''}`} onClick={() => handleTabClick('members')}>Members</button>
         <button type="button" className={`section-tab-button ${currentTab === 'usage' ? 'active' : ''}`} onClick={() => handleTabClick('usage')}>Usage</button>
+        {admin && <button type="button" className={`section-tab-button ${currentTab === 'admin' ? 'active' : ''}`} onClick={() => handleTabClick('admin')}>Beta admin</button>}
         {developerMode && (
           <button
             type="button"
@@ -102,6 +108,7 @@ export function SettingsView({
       </div>
 
       {currentTab === 'usage' && <UsagePanel workspaceId={data.project.id} />}
+      {currentTab === 'admin' && admin && <AdminPanel />}
       {currentTab === 'members' && <MembersPanel workspaceId={data.project.id} workspaceName={data.project.name} />}
       {currentTab === 'system' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>

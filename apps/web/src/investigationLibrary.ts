@@ -210,3 +210,9 @@ export function writeDismissedRuns(workspaceId: string, ids: ReadonlySet<string>
   // Keep the newest few hundred; older dismissed runs have long scrolled out of the list.
   try { localStorage.setItem(dismissedKey(workspaceId), JSON.stringify([...ids].slice(-500))); } catch { /* per-browser convenience only */ }
 }
+
+/** Comparisons still queued or running (not replays), newest first, so leaving the page loses nothing. */
+export function runningRuns<R extends { id: string; created_at: string; state?: string; purpose?: string }>(runs: R[]): R[] {
+  return [...runs].filter(r => (r.state === 'queued' || r.state === 'running') && !/replay/.test(r.purpose || ''))
+    .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+}

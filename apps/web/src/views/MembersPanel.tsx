@@ -1,12 +1,12 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api } from '../api';
 
 type Member = { user_id: string; name?: string | null; email?: string | null; role: string; revoked_at?: string | null; guest_expires_at?: number | null };
 type Invite = { id: string; email: string; role: string; created_at: string };
 
 /** The text an owner sends a teammate: no secret, just where and how to sign in. */
-export function inviteMessage(workspace: string, email: string, origin: string): string {
-  return `You're invited to the “${workspace}” workspace on MetricGuard. Sign in with Google or GitHub using ${email}: ${origin}/signin`;
+export function inviteMessage(workspace: string, role: string, email: string, origin: string): string {
+  return `You're invited to the MetricGuard workspace '${workspace}' as ${role}. Sign in at ${origin}/signin with Google or GitHub using ${email}, and you'll join it automatically.`;
 }
 
 /** Settings → Members: who is in this workspace, and invites by email (owners only). */
@@ -20,6 +20,8 @@ export function MembersPanel({ workspaceId, workspaceName }: { workspaceId: stri
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
   const [copied, setCopied] = useState('');
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
   const [local, setLocal] = useState(false);
   const owner = role === 'owner';
 
@@ -45,8 +47,21 @@ export function MembersPanel({ workspaceId, workspaceName }: { workspaceId: stri
     finally { setBusy(false); }
   };
   const copy = async (item: Invite) => {
-    try { await navigator.clipboard.writeText(inviteMessage(workspaceName, item.email, window.location.origin)); setCopied(item.id); setTimeout(() => setCopied(''), 2000); }
-    catch { setProblem('Copy failed. Select the address and copy it yourself.'); }
+    const text = inviteMessage(workspaceName, item.role, item.email, window.location.origin);
+    try {
+      try { await navigator.clipboard.writeText(text); }
+      catch {
+        const opener = document.activeElement as HTMLElement | null;
+        const area = document.createElement('textarea'); area.value = text; area.readOnly = true;
+        area.style.position = 'fixed'; area.style.left = '-9999px';
+        document.body.appendChild(area); area.select();
+        try { if (!document.execCommand('copy')) throw new Error('Copy failed'); }
+        finally { area.remove(); opener?.focus(); }
+      }
+      setProblem(''); setCopied(item.id);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(''), 2000);
+    } catch { setProblem('Copy failed. Please try again.'); }
   };
   const revoke = async (item: Invite) => {
     try { await api.del(`/projects/${encodeURIComponent(workspaceId)}/invites/${encodeURIComponent(item.id)}`); await load(); }
@@ -93,7 +108,7 @@ export function MembersPanel({ workspaceId, workspaceName }: { workspaceId: stri
             {invites.map(item => <li key={item.id}>
               <span><b>{item.email}</b> · {item.role}</span>
               <span className="invite-actions">
-                <button type="button" className="link-button" onClick={() => void copy(item)}>{copied === item.id ? 'Message copied' : 'Copy invite message'}</button>
+                <button type="button" className="link-button" onClick={() => void copy(item)}>{copied === item.id ? 'Copied' : 'Copy invite message'}</button>
                 <button type="button" className="link-button" onClick={() => void revoke(item)}>Revoke</button>
               </span>
             </li>)}

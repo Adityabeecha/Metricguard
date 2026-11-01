@@ -82,11 +82,18 @@ export type ResultSummary = {
  * Thousands separators for an exact decimal string, without parsing it as a float:
  * "-1000269" → "-1,000,269", "16008872.12" → "16,008,872.12". Non-numeric text is returned unchanged.
  */
-export function groupDigits(value: string): string {
+export function groupDigits(value: string, style: 'western' | 'indian' = 'western'): string {
   const match = /^([-+]?)(\d+)(\.\d+)?$/.exec(value);
   if (!match) return value;
   const [, sign, whole, fraction = ''] = match;
-  return `${sign}${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${fraction}`;
+  const grouped = style === 'indian' && whole.length > 3
+    ? `${whole.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${whole.slice(-3)}`
+    : whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${sign}${grouped}${fraction}`;
+}
+
+export function digitStyleFor(unit: string | null | undefined): 'western' | 'indian' {
+  return unit?.trim().toUpperCase() === 'INR' || unit?.trim() === '₹' ? 'indian' : 'western';
 }
 
 export function isZeroDecimal(value: string | null | undefined): boolean {
@@ -97,8 +104,8 @@ export function absDecimal(value: string): string {
   return value.replace(/^[-+]/, '');
 }
 
-function withUnit(value: string, unit: string): string {
-  const shown = groupDigits(value);
+function withUnit(value: string, unit: string, style: 'western' | 'indian' = 'western'): string {
+  const shown = groupDigits(value, style);
   return unit ? `${shown} ${unit}` : shown;
 }
 
@@ -167,7 +174,7 @@ export function summarizeResult(
     uncertainties.push(`Equal ${noun}s on this frozen dataset do not prove the two calculations are equivalent on other data.`);
   } else {
     direction = (exactGap ?? delta!).startsWith('-') ? 'down' : 'up';
-    const amount = isRatio && result.ratio?.unit === 'share' ? `${percentOf(absDecimal(delta!))} percentage points` : withUnit(absDecimal(delta!), unit);
+    const amount = isRatio && result.ratio?.unit === 'share' ? `${percentOf(absDecimal(delta!))} percentage points` : withUnit(absDecimal(delta!), unit, digitStyleFor(unit));
     headline = isRatio && isZeroDecimal(delta)
       ? `${the(proposed, true)} is ${direction === 'down' ? 'lower' : 'higher'} by less than the displayed precision. Exact change: ${exactGap}${result.ratio?.unit === 'share' ? ' (multiply by 100 for percentage points)' : ''}.`
       : `${the(proposed, true)} is ${amount} ${direction === 'down' ? 'lower' : 'higher'} than ${the(current)}.`;

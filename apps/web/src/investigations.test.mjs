@@ -206,3 +206,10 @@ test('unsupported grammar errors use plain language', () => {
   const result = classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: 'This calculation is outside the supported grammar.' });
   assert.equal(result.message, "This calculation uses SQL MetricGuard can't check exactly yet.");
 });
+
+test('running comparisons stay listed until they finish, replays excluded', async () => {
+  const { runningRuns } = await import('./investigationLibrary.ts');
+  const runs = [{ id: 'a', created_at: '2026-11-01T10:00', state: 'succeeded' }, { id: 'b', created_at: '2026-11-01T10:01', state: 'queued' },
+    { id: 'c', created_at: '2026-11-01T10:02', state: 'running' }, { id: 'd', created_at: '2026-11-01T10:03', state: 'running', purpose: 'investigation_replay' }];
+  assert.deepEqual(runningRuns(runs).map(r => r.id), ['c', 'b']);
+});

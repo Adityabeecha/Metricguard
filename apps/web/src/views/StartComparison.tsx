@@ -19,7 +19,7 @@ import { ConditionHelp, ConditionValue } from './ConditionFields';
 import { WarehouseSource } from './WarehouseSource';
 import { SnapshotChange, loadLabel } from './SnapshotChange';
 import { comparisonRequestKey, groupSavedCalculations } from '../guidedWorkflow';
-import { shouldResetCalculations, COMPARISON_KINDS, comparisonDatasetGroups, conditionValues, emptyCalculationSides, initialComparisonLoad, matchCountKey, valueSuggestion } from '../comparisonSelection';
+import { shouldResetCalculations, COMPARISON_KINDS, comparisonDatasetGroups, emptyCalculationSides, initialComparisonLoad, matchCountKey } from '../comparisonSelection';
 import { useRecordedBy } from '../useRecordedBy';
 import './comparisonSelection.css';
 import { SampleDatasetButton } from './FirstRun';
@@ -307,45 +307,6 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     return () => clearTimeout(timer);
   }, [baselineLive, targetLive, stage, choice?.snapshot.id]);
   const liveCount = (side: Side) => { const sql = side === 'baseline' ? baselineLive : targetLive; return sql ? counts[countKey(sql)] : undefined; };
-  // When a guided calculation matches nothing, count each condition on its own to find the one that
-  // removes every record, and suggest an existing value that differs only in capitals.
-  const [knownValues, setKnownValues] = useState<Record<string, string[]>>({});
-  const conditionSql = (side: Side, index: number) => {
-    const form = sides[side].form;
-    try { return choice?.flat ? buildFlatSql(choice.flat, { ...form, filters: [form.filters[index]] }).trim() : ''; } catch { return ''; }
-  };
-  const emptyForms = (['baseline', 'target'] as Side[]).filter(side => {
-    const c = liveCount(side);
-    return c && c !== 'error' && c.matched === 0 && sides[side].mode === 'form' && sides[side].form.filters.length > 0;
-  });
-  useEffect(() => {
-    if (!choice?.flat || !emptyForms.length) return;
-    for (const side of emptyForms) {
-      sides[side].form.filters.forEach((filter, index) => {
-        const sql = conditionSql(side, index);
-        if (sql && sides[side].form.filters.length > 1) void lookupCount(sql);
-        if (conditionValues(filter.op, filter.value).length && !(filter.column in knownValues)) {
-          api.columnValues(choice.snapshot.id, filter.column)
-            .then(r => setKnownValues(v => ({ ...v, [filter.column]: r.values.map(x => x.value) })), () => undefined);
-        }
-      });
-    }
-  }, [emptyForms.join(), baselineLive, targetLive, choice?.snapshot.id]);
-  const emptyDiagnosis = (side: Side): string[] => {
-    const form = sides[side].form, notes: string[] = [];
-    form.filters.forEach((filter, index) => {
-      const alone = form.filters.length > 1 ? counts[countKey(conditionSql(side, index))] : undefined;
-      if (alone && alone !== 'error' && alone.matched === 0) notes.push(`On its own, the condition on ${filter.column} matches no records.`);
-      for (const typed of conditionValues(filter.op, filter.value)) {
-        const better = valueSuggestion(typed, knownValues[filter.column] || []);
-        if (better) notes.push(`No '${typed}' in ${filter.column}. Did you mean '${better}'?`);
-      }
-    });
-    if (form.match !== 'any' && form.filters.length > 1 && !notes.length && form.filters.every((_, i) => { const a = counts[countKey(conditionSql(side, i))]; return a && a !== 'error' && a.matched > 0; })) {
-      notes.push('Each condition matches some records, but no record meets all of them together.');
-    }
-    return notes;
-  };
   const emptySides = emptyCalculationSides(choice?.snapshot.id || '', { baseline: baselineLive, target: targetLive }, counts);
   const calcBlocker = validationBlocker || (emptySides.length ? 'No records match. Edit the conditions before comparing.' : '');
   const activeCalculation = useRef('');
@@ -833,7 +794,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                     if (!c || c === 'error') return null;
                     return c.matched === 0
                       ? <span className="form-hint warn" role="status">These conditions include none of the {groupDigits(String(c.total))} records. Check the values before running.
-                          {(s.mode === 'form' ? emptyDiagnosis(side) : sqlConditionNotes(c)).map(note => <span key={note}><br />{note}</span>)}</span>
+                          {sqlConditionNotes(c).map(note => <span key={note}><br />{note}</span>)}</span>
                       : <span className="example" role="status">Includes {groupDigits(String(c.matched))} of {groupDigits(String(c.total))} records.</span>;
                   })()}
                   {sideProblems(side).map(p => <span key={p} className="form-hint">To finish — {p}</span>)}
@@ -923,7 +884,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
 }
 
 
-/** Typed SQL that matches nothing: the server counted each condition alone (see flat_profile.match_count). */
+/** A calculation (guided or typed SQL) that matches nothing: the server counted each condition alone (flat_profile.match_count). */
 export function sqlConditionNotes(counts: MatchCounts | null | undefined): string[] {
   const conditions = counts?.conditions || [];
   const notes = conditions.filter(c => c.matched === 0).map(c => c.suggestion

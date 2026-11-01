@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { onWakingChange } from './wakingServer';
 import {
   Database,
@@ -26,22 +26,22 @@ import {
   type RouteState,
 } from './router';
 import { CaseReport } from './views/CaseReport';
-import { ChangesView } from './views/ChangesView';
 import { DataSourcesView } from './views/DataSourcesView';
 import { InvestigationLibrary } from './views/InvestigationLibrary';
-import { MetricsView } from './views/MetricsView';
-import { SettingsView } from './views/SettingsView';
 import { StartComparison } from './views/StartComparison';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
-import { SignInScreen } from './SignInScreen';
 import { loadAuthProviders } from './authApi';
 import { shouldRedirectToSignIn } from './authFlow';
 import { sitePage, sharedCaseToken } from './router';
-import { PublicCasePage } from './PublicCasePage';
-import { PublicPages } from './PublicPages';
 import { useDialog } from './useDialog';
 import { FeedbackDialog } from './views/FeedbackDialog';
 
+const ChangesView = lazy(() => import('./views/ChangesView').then(m => ({ default: m.ChangesView })));
+const MetricsView = lazy(() => import('./views/MetricsView').then(m => ({ default: m.MetricsView })));
+const SettingsView = lazy(() => import('./views/SettingsView').then(m => ({ default: m.SettingsView })));
+const SignInScreen = lazy(() => import('./SignInScreen').then(m => ({ default: m.SignInScreen })));
+const PublicCasePage = lazy(() => import('./PublicCasePage').then(m => ({ default: m.PublicCasePage })));
+const PublicPages = lazy(() => import('./PublicPages').then(m => ({ default: m.PublicPages })));
 
 const NAV_ITEMS: Array<{ id: Page; label: string; icon: React.ReactNode }> = [
   { id: 'investigations', label: 'Cases', icon: <FolderOpen size={17} /> },
@@ -65,10 +65,11 @@ export function App() {
     return () => window.removeEventListener('popstate', sync);
   }, []);
   const page = sitePage(pathname);
-  if (page === 'shared-case') return <><WakingNotice /><PublicCasePage token={sharedCaseToken(pathname)!} /></>;
-  if (page === 'signin' || page === 'signup') return <><WakingNotice /><SignInScreen mode={page} /></>;
-  if (page !== 'workspace') return <><WakingNotice /><PublicPages page={page} /></>;
-  return <><WakingNotice /><WorkspaceApp /></>;
+  return <><WakingNotice /><ErrorBoundary resetKey={pathname} onHome={() => window.location.assign('/')} homeLabel="Go to homepage" onRetry={() => window.location.reload()}><Suspense fallback={<p role="status">Loading…</p>}>
+    {page === 'shared-case' ? <PublicCasePage token={sharedCaseToken(pathname)!} />
+      : page === 'signin' || page === 'signup' ? <SignInScreen mode={page} />
+      : page !== 'workspace' ? <PublicPages page={page} /> : <WorkspaceApp />}
+  </Suspense></ErrorBoundary></>;
 }
 
 function WorkspaceApp() {
@@ -438,6 +439,7 @@ function WorkspaceApp() {
             </div>
           )}
 
+        <Suspense fallback={<p role="status">Loading…</p>}>
           <ErrorBoundary resetKey={window.location.pathname + window.location.search} onHome={() => navigate({ page: 'investigations' })}>
           {!data ? (
             <GateScreen
@@ -554,6 +556,7 @@ function WorkspaceApp() {
             </>
           )}
           </ErrorBoundary>
+        </Suspense>
         </div>
       </main>
     </div>

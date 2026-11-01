@@ -61,11 +61,13 @@ All six images are actual UI captures in light mode at 1280x800. They are linked
 | `add-dataset.png` | 89,883 |
 | `column-questions.png` | 113,925 |
 | `two-calculations.png` | 81,555 |
-| `reconciliation.png` | 84,371 |
-| `where-it-sits.png` | 100,917 |
+| `reconciliation.png` | 32,271 |
+| `where-it-sits.png` | 38,881 |
 | `share-case.png` | 92,400 |
 
 All are below 250,000 bytes. Markdown image tests cover escaped alt text, lazy loading, inline code, external paths and directory traversal. The npm test command now includes the Markdown tests rather than passing their filename as an unused argument to another test.
+
+J1 refreshed the reconciliation and Where it sits images on 2026-11-01 after adding Indian digit grouping for INR. These retain the same actual isolated case, totals, light mode and 1280×800 viewport; the table above gives their current sizes. Original I2 evidence captures remain under `output/i2/`.
 
 ## Automated checks and scope
 

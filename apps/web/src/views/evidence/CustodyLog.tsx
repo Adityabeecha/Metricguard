@@ -89,6 +89,15 @@ export function CustodyLog({ detail, replays, live, replaying, blocker, onReplay
               <div className="when">{when(detail.created_at)} · {detail.actor_label}</div>
             </div>
           </li>
+          {((detail as { decision_history?: Array<{ decision: string; replaced_at: string; replaced_by?: string | null }> }).decision_history || []).map(h => (
+            <li key={`conclusion-${h.replaced_at}`} className="done">
+              <div>
+                <div className="what">Conclusion edited (the evidence is unchanged)</div>
+                <div className="when">{when(h.replaced_at)}{h.replaced_by ? ` · ${h.replaced_by}` : ''}</div>
+                <div className="detail">Earlier conclusion: <q style={{ whiteSpace: 'pre-wrap' }}>{h.decision}</q></div>
+              </div>
+            </li>
+          ))}
           {replays.map(r => {
             const ok = replayMatches(run, r);
             const failed = r.state === 'failed';

@@ -83,7 +83,7 @@ def public_result(result):
 def case_dto(store, case, run):
     snapshot = store.snapshot(case['snapshot_id'])
     manifest = snapshot.get('manifest') or {}
-    dto = pick(case, 'id title decision created_at relationship baseline_version_id target_version_id run_id snapshot_id target_snapshot_id')
+    dto = pick(case, 'id title decision created_at updated_at relationship baseline_version_id target_version_id run_id snapshot_id target_snapshot_id')
     dto['workspace_name'] = store.get_project(case['project_id'])['name']
     dto['context'] = pick(case.get('context'), CONTEXT)
     dto['snapshot'] = pick(snapshot, 'id name row_count manifest_hash source_hash contract_hash mapping_hash currency timezone scope grain cutoff_at status created_at unit_label')

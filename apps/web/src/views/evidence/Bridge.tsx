@@ -1,6 +1,7 @@
 import { evidenceCountLabel } from './evidencePresentation';
 import { Stamp } from './Stamp';
 import { bridgeGeometry } from './bridgeGeometry';
+import { digitStyleFor, groupDigits } from '../../resultSummary';
 
 export type BridgeStep = { key: string; label: string; value: string|number; text: string; records: number; description?: string };
 export type BridgeProps = {
@@ -13,6 +14,7 @@ export type BridgeProps = {
   description: string;
   onPick?: (key: string) => void;
   recordsAffectTotal?: boolean;
+  unit?: string;
 };
 
 const W = 900, CHART = 170, TOP = 28, LABELS = 78;
@@ -22,7 +24,9 @@ const W = 900, CHART = 170, TOP = 28, LABELS = 78;
  * category, the unexplained remainder and the proposed total. Numbers on the bars are the exact
  * strings from the server; the drawing only positions them.
  */
-export function Bridge({ start, end, steps, residualText, balanced, description, onPick, recordsAffectTotal = false }: BridgeProps) {
+export function Bridge({ start, end, steps, residualText, balanced, description, onPick, recordsAffectTotal = false, unit }: BridgeProps) {
+  const shown = (text: string) => digitStyleFor(unit) === 'indian'
+    ? text.replace(/\d[\d,]*(?:\.\d+)?/g, value => groupDigits(value.replace(/,/g, ''), 'indian')) : text;
   const plot=bridgeGeometry(String(start.value),steps.map(s=>String(s.value)),String(end.value));
   const {levels,startsAtZero}=plot;
   const y = (v: bigint) => TOP + CHART - plot.ratio(v) * CHART;
@@ -37,7 +41,7 @@ export function Bridge({ start, end, steps, residualText, balanced, description,
     <g key={`total-${i}`}>
       <rect x={x(i)} y={y(v)} width={bw} height={Math.max(1, bottom - y(v))} className="bridge-total" />
       {broken && <path d={`M${x(i) - 2} ${bottom - 14} l${bw / 4 + 1} -5 l${bw / 4} 5 l${bw / 4} -5 l${bw / 4 + 1} 5 v6 h${-bw - 4} z`} className="bridge-break" />}
-      <text x={x(i) + bw / 2} y={y(v) - 8} className="bridge-figure" textAnchor="middle">{text}</text>
+      <text x={x(i) + bw / 2} y={y(v) - 8} className="bridge-figure" textAnchor="middle">{shown(text)}</text>
       <text x={x(i) + bw / 2} y={bottom + 20} className="bridge-label" textAnchor="middle">{label}</text>
     </g>
   );
@@ -65,7 +69,7 @@ export function Bridge({ start, end, steps, residualText, balanced, description,
               <title>{s.description}</title>
               <line x1={x(col - 1) + bw} x2={x(col)} y1={y(from)} y2={y(from)} className="bridge-connector" />
               <rect x={x(col)} y={top} width={bw} height={height} className={plot.steps[i] < 0n ? 'bridge-down' : 'bridge-up'} />
-              <text x={x(col) + bw / 2} y={top - 8} className="bridge-figure" textAnchor="middle">{s.text}</text>
+              <text x={x(col) + bw / 2} y={top - 8} className="bridge-figure" textAnchor="middle">{shown(s.text)}</text>
               <text x={x(col) + bw / 2} y={bottom + 20} className="bridge-label" textAnchor="middle">{s.label}</text>
               <text x={x(col) + bw / 2} y={bottom + 38} className="bridge-records" textAnchor="middle">{evidenceCountLabel(s.records)}{recordsAffectTotal && <tspan x={x(col) + bw / 2} dy="15">{s.records === 1 ? 'that changes the total' : 'that change the total'}</tspan>}</text>
             </g>
@@ -78,7 +82,7 @@ export function Bridge({ start, end, steps, residualText, balanced, description,
             <g>
               <line x1={x(col - 1) + bw} x2={x(col) + bw} y1={y(level)} y2={y(level)} className="bridge-connector" />
               <line x1={x(col)} x2={x(col) + bw} y1={y(level)} y2={y(level)} className="bridge-residual" />
-              <text x={x(col) + bw / 2} y={y(level) - 8} className="bridge-figure" textAnchor="middle">{residualText}</text>
+              <text x={x(col) + bw / 2} y={y(level) - 8} className="bridge-figure" textAnchor="middle">{shown(residualText)}</text>
               <text x={x(col) + bw / 2} y={bottom + 20} className="bridge-label" textAnchor="middle">Unexplained</text>
             </g>
           );
@@ -89,16 +93,16 @@ export function Bridge({ start, end, steps, residualText, balanced, description,
 
       {/* Phones: the same steps as a ruled list. */}
       <ol className="bridge-list" aria-label="Reconciliation steps">
-        <li className="total"><span>{start.label}</span><b>{start.text}</b></li>
+        <li className="total"><span>{start.label}</span><b>{shown(start.text)}</b></li>
         {steps.map(s => (
           <li key={s.key} title={s.description}>
             <button type="button" disabled={!onPick} onClick={() => onPick?.(s.key)}>
-              <span>{s.label}<small>{evidenceCountLabel(s.records, recordsAffectTotal)}</small></span><b>{s.text}</b>
+              <span>{s.label}<small>{evidenceCountLabel(s.records, recordsAffectTotal)}</small></span><b>{shown(s.text)}</b>
             </button>
           </li>
         ))}
-        <li><span>Unexplained</span><b>{residualText}</b></li>
-        <li className="total"><span>{end.label}</span><b>{end.text}</b></li>
+        <li><span>Unexplained</span><b>{shown(residualText)}</b></li>
+        <li className="total"><span>{end.label}</span><b>{shown(end.text)}</b></li>
       </ol>
 
       <figcaption className="bridge-caption">

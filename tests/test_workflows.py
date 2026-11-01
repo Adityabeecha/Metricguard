@@ -65,6 +65,9 @@ def test_browser_upload_is_queued_and_published_only_after_worker(tmp_path):
         assert completed['snapshot_id']
         assert client.get('/api/v1/bootstrap').json()['snapshots'][0]['id'] == completed['snapshot_id']
         assert list((tmp_path / 'uploads').glob('*.csv')) == []
+        again = client.post('/api/v1/snapshots', files={'file': ('orders.csv', FIXTURE.read_bytes())},
+                            data={'name': 'Third label', 'scope': 'v2_test'}).json()
+        assert again['id'] == completed['snapshot_id'] and again['already_added'] is True  # server says nothing new was added
 
 
 def test_parquet_upload_runs_through_isolated_ingestion_and_comparison(tmp_path):

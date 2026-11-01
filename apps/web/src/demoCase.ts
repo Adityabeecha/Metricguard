@@ -58,6 +58,13 @@ export function demoTotals(rows: DemoRow[] = DEMO_ROWS) {
   return { current, proposed, delta, listed, residual, records: rows.length, blank: rows.filter(r => r.sales_amount == null).length };
 }
 
+/** Facts shown by the sample's saved/replayed checks; both use these same frozen rows. */
+export function demoReplayResult() {
+  const totals = demoTotals();
+  return { baseline_value: totals.current, target_value: totals.proposed, delta_target_minus_baseline: totals.delta,
+    residual: totals.residual, evidence_artifact: { row_count: totals.records, sha256: DEMO_CASE.hashes.evidence } };
+}
+
 /** Exhibit B: the difference split by one column, largest share first. */
 export function demoBreakdown(column: DemoColumn, rows: DemoRow[] = DEMO_ROWS) {
   const changes = demoChanges(rows);

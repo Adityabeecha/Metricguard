@@ -48,6 +48,10 @@ def test_public_case_share_is_allowlisted_and_revocable(tmp_path, monkeypatch):
         assert client.patch(public, json={'decision': 'changed'}).status_code == 405
         assert client.get(f"/api/v1/comparisons/{run['id']}").status_code == 401
         monkeypatch.setenv('METRICGUARD_ALLOW_UNVERIFIED_LOCAL', 'true')
+        assert client.patch(f"/api/v1/investigations/{case['id']}", json={'decision': 'Void order removed; checked twice.'}).status_code == 200
+        edited = client.get(public).json()
+        assert edited['decision'] == 'Void order removed; checked twice.' and edited['updated_at']
+        assert 'decision_history' not in edited and 'Void order removed.' not in client.get(public).text  # earlier text stays private
         assert client.delete(f"{base}/{share['id']}").status_code == 200
         assert client.get(public).status_code == 404
         assert client.get(f'{public}/evidence-summary').status_code == 404

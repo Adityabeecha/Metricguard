@@ -42,7 +42,8 @@ export function PublicCasePage({ token }: { token: string }) {
             baselineLabel="Current calculation" targetLabel="Proposed calculation"
             baselineSql={detail.baseline_version.raw_sql} targetSql={detail.target_version.raw_sql}
             versions={[detail.baseline_version, detail.target_version]}
-            note={<div className="case-conclusion"><h2>Conclusion</h2><p style={{ whiteSpace: 'pre-wrap' }}>{detail.decision}</p></div>} />
+            note={<div className="case-conclusion"><h2>Conclusion</h2><p style={{ whiteSpace: 'pre-wrap' }}>{detail.decision}</p>
+              {(detail as { updated_at?: string }).updated_at && <p className="example">Conclusion edited {new Date((detail as { updated_at?: string }).updated_at!).toLocaleString()}; the evidence is unchanged.</p>}</div>} />
           <details className="public-custody"><summary>Custody log</summary><CasePrintCustody detail={detail} /></details>
           <div className="print-only print-custody"><CasePrintCustody detail={detail} /></div>
           <footer className="print-only print-footer">{window.location.href} | Printed {new Date().toLocaleString()}</footer>

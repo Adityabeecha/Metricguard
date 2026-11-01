@@ -25,3 +25,17 @@ def test_the_api_answers_429_with_retry_after(tmp_path, monkeypatch):
         assert client.get('/api/v1/shared-cases/' + 'x' * 43).status_code == 404
         limited = client.get('/api/v1/shared-cases/' + 'x' * 43)
         assert limited.status_code == 429 and limited.headers['retry-after'] and limited.json()['error']['code'] == 'TOO_MANY_REQUESTS'
+
+
+def test_hosted_limits_count_each_visitor_by_vercels_real_ip(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from services.api import rate_limit
+    from services.api.app import create_app
+    monkeypatch.setenv('METRICGUARD_ORIGIN_SECRET', 'proxy-secret')
+    monkeypatch.setattr(rate_limit.Limiter.__init__, '__defaults__', ((('/api/v1/shared-cases/', 1, 60),),))
+    with TestClient(create_app(database_url=f"sqlite:///{tmp_path / 'app.db'}", data_dir=tmp_path)) as client:
+        path = '/api/v1/shared-cases/' + 'x' * 43
+        visitor = lambda ip: {'x-origin-secret': 'proxy-secret', 'x-real-ip': ip}
+        assert client.get(path, headers=visitor('203.0.113.5')).status_code == 404
+        assert client.get(path, headers=visitor('203.0.113.5')).status_code == 429
+        assert client.get(path, headers=visitor('198.51.100.7')).status_code == 404  # another visitor is not blocked

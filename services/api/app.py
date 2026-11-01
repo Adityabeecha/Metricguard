@@ -171,6 +171,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
     hosting = hosting_settings()
     from .oauth import install_oauth_routes
     install_oauth_routes(app, store, data_dir, secure_cookies=hosting['secure_cookies'])
+    from .admin import install_admin_routes, is_admin
+    install_admin_routes(app, store)
     from .guests import full_access_emails, start_sweeper
     if full_access_emails():
         start_sweeper(store, data_dir)  # erases expired guest accounts every few minutes
@@ -183,7 +185,10 @@ def create_app(database_url=None, data_dir=None, mode=None):
 
     @app.middleware('http')
     async def address_limits(request: Request, call_next):
-        wait = limiter.check(request.url.path, request.client.host if request.client else 'unknown')
+        # Hosted, only Vercel can reach the API (origin secret), and Vercel sets x-real-ip to the visitor's
+        # address; locally, the socket address is the visitor.
+        address = (request.headers.get('x-real-ip', '').strip() if hosting['origin_secret'] else '') or             (request.client.host if request.client else 'unknown')
+        wait = limiter.check(request.url.path, address)
         if wait is not None:
             return JSONResponse({'error': {'code': 'TOO_MANY_REQUESTS', 'message': f'Too many requests from your network. Try again in {max(1, round(wait / 60))} minute{"s" if wait > 90 else ""}.'}},
                                 status_code=429, headers={'Retry-After': str(wait)})
@@ -960,7 +965,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
                         existing.get('execution_policy') == 'flat_snapshot_v1' and
                         existing.get('manifest', {}).get('flat_preparation') == preparation):
                     stage.unlink(missing_ok=True)
-                    return public_snapshot(existing)
+                    return {**public_snapshot(existing), 'already_added': True}  # identical bytes: nothing new
         except Exception:
             stage.unlink(missing_ok=True)
             raise
@@ -1023,7 +1028,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             if (existing['source_hash'] == source_hash and
                     existing.get('contract_hash') == contract['contract_hash'] and
                     existing.get('mapping_hash') == mapping['mapping_hash']):
-                return public_snapshot(existing)
+                return {**public_snapshot(existing), 'already_added': True}  # identical bytes: nothing new
         stage = data_dir / 'uploads' / f'{uuid4()}{suffix}'
         stage.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -1116,7 +1121,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         digest = hashlib.sha256(content).hexdigest()
         for snapshot in store.bootstrap(pid)['snapshots']:
             if snapshot['source_hash'] == digest and all(snapshot[k] == v for k, v in {'currency': currency, 'timezone': timezone, 'scope': scope, 'cutoff_at': cutoff_at}.items()):
-                return public_snapshot(snapshot)
+                return {**public_snapshot(snapshot), 'already_added': True}  # identical bytes: nothing new
         if execution_mode != 'isolated':
             raise DomainError('ISOLATION_REQUIRED', 'New datasets require isolated ingestion. Start the Docker runner and local supervisor, then switch to isolated mode.')
         stage = data_dir / 'uploads' / f'{uuid4()}{suffix}'
@@ -1708,6 +1713,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
         kind = column_type(run, column)
         if kind in ('date', 'timestamp') and grouping in ('week', 'month'):
             return grouping
+        if run.get('execution_policy') == 'relational_snapshot_v1' and grouping in ('week', 'month'):
+            return grouping  # untyped lookup text: values that are not dates stay as they are
         return 'day' if kind == 'timestamp' else None
 
     @app.get('/api/v1/comparisons/{ident}/evidence-breakdown')
@@ -1753,7 +1760,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
         bucket = date_bucket(run, chosen, grouping)
         try:
             split = evidence_cache.breakdown(path, key, verify_all, chosen, context, limit=top, ratio=result.get('ratio'), bucket=bucket)
-            split = {**split, 'groupable': column_type(run, chosen) in ('date', 'timestamp')}
+            split = {**split, 'groupable': column_type(run, chosen) in ('date', 'timestamp') or (
+                run.get('execution_policy') == 'relational_snapshot_v1' and (bool(grouping) or split.get('looks_like_dates', False)))}
             if bucket:
                 split = {**split, 'grouping': bucket}
             if result.get('evidence_coverage'):
@@ -2255,6 +2263,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
             'user': {'id': user.get('id'), 'name': user.get('name'), 'email': user.get('email')},
             # Guests: when everything this account owns is erased (Unix seconds); null for full accounts.
             'guest_expires_at': guest_expires_at,
+            # Owner-only beta view (Settings → Beta admin) for emails in METRICGUARD_ADMIN_EMAILS.
+            'is_admin': is_admin(auth),
             'guest_storage_bytes': (store.get_project_quota(home['id']) or {}).get('max_storage_bytes')
                                    if guest_expires_at is not None and home else None,
             'project_id': project_id,

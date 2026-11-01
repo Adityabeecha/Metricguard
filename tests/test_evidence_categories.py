@@ -206,3 +206,11 @@ def test_pairs_that_repeat_a_single_value_are_left_out(tmp_path):
     result = concentration(path, key, lambda: None, ['city', 'country'], context, {})
     assert [i['values'] for i in result['items']][:2] == [['pune'], ['in']] or [i['values'] for i in result['items']][:2] == [['in'], ['pune']]
     assert result['pairs'] == []
+
+
+def test_text_columns_of_dates_are_marked_groupable(tmp_path):
+    evidence_cache.clear()
+    path, key = artifact(tmp_path, ROWS)
+    dated = {k: {'day': f'2026-10-0{i + 1}', 'region': 'north'} for i, k in enumerate('ABCDEF')}
+    assert evidence_cache.breakdown(path, key, lambda: None, 'day', dated)['looks_like_dates'] is True
+    assert evidence_cache.breakdown(path, key, lambda: None, 'region', dated)['looks_like_dates'] is False

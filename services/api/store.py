@@ -682,6 +682,15 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
             for row in conn.execute(select(snapshot_imports).where(snapshot_imports.c.state.in_(['queued', 'running']), snapshot_imports.c.project_id == pid)).mappings():
                 if row['data']['source_hash'] == source_hash and row['data']['metadata'] == metadata:
                     return {**self._import(row), 'reused': True}
+            # Imports and previews share the container with comparisons; cap them across all workspaces too.
+            from packages.metricguard_core.free_tier import configured_limit
+            cap = configured_limit('METRICGUARD_MAX_ACTIVE_IMPORTS_GLOBAL')
+            if cap:
+                if conn.dialect.name == 'postgresql':
+                    conn.exec_driver_sql('SELECT pg_advisory_xact_lock(74210932)')
+                if conn.execute(select(func.count()).select_from(snapshot_imports).where(
+                        snapshot_imports.c.state.in_(['queued', 'running']))).scalar_one() >= cap:
+                    raise DomainError('SERVER_BUSY', 'The beta is busy importing other files right now. Try again in a few minutes.', 503)
             conn.execute(insert(snapshot_imports).values(id=ident, project_id=pid,
                 state='queued', attempt=0, created_at=now(), source_path=str(source_path),
                 data={'name': name, 'source_hash': source_hash, 'metadata': metadata}))

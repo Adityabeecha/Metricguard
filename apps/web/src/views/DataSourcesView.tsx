@@ -94,6 +94,10 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
 
   // Validation State (Step 3)
   const [validationProgress, setValidationProgress] = useState('');
+  const [uploadNotice, setUploadNotice] = useState('');
+  const uploadRequest = useRef<AbortController | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  useEffect(() => () => uploadRequest.current?.abort(), []);
   const [validationError, setValidationError] = useState<HumanizedError | null>(null);
   const [createdSnapshot, setCreatedSnapshot] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState(false);
@@ -157,6 +161,8 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
 
   // Reset modal and temporary creation state when workspace changes
   useEffect(() => {
+    uploadRequest.current?.abort();
+    setUploadNotice('');
     previewQueue.current.cancel();
     setBusy(false);
     setSelectedFile(null); setFilePreview(null);
@@ -283,6 +289,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
   const openAddModal = () => {
     previewQueue.current.cancel();
     setBusy(false);
+    setUploadNotice(''); setValidationProgress('');
     setSourceType('file');
     setStep('upload');
     setSelectedFile(null);
@@ -318,6 +325,8 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
 
   // Keep an early pick until its upload limits arrive.
   const handleFilePicked = (file: File) => {
+    uploadRequest.current?.abort();
+    setUploadNotice('');
     setSelectedFile(file);
     setFilePreview(null);
     setExtraAmounts([]); setExtraUnits({}); setMinuendColumn(''); setSubtrahendColumn('');
@@ -347,7 +356,12 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
         const form = new FormData();
         form.append('file', file);
         form.append('project_id', projectId);
-        let record = await api.previewDataset(form, projectId, percent => { if (isCurrent()) setValidationProgress(`Uploading: ${percent}%`); });
+        const request = new AbortController();
+        uploadRequest.current = request;
+        setValidationProgress('Uploading: 0%');
+        let record = await api.previewDataset(form, projectId, percent => {
+          if (isCurrent()) setValidationProgress(percent < 100 ? `Uploading: ${percent}%` : 'Reading the file…');
+        }, request.signal).finally(() => { if (uploadRequest.current === request) uploadRequest.current = null; });
         if (!isCurrent()) return;
         setValidationProgress(isExcel ? 'Reading the first worksheet...' : 'Analyzing Parquet schema...');
         for (let waited = 0; !record.preview && ['queued', 'running'].includes(record.state) && waited < 120; waited++) {
@@ -398,7 +412,10 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
           });
         }
       } catch (err: unknown) {
-        if (isCurrent()) setValidationError(humanizeError(err, { filename: file.name }));
+        if (isCurrent()) {
+          if (err instanceof Error && err.name === 'AbortError') showCancelledUpload();
+          else setValidationError(humanizeError(err, { filename: file.name }));
+        }
       } finally {
         if (isCurrent()) setBusy(false);
       }
@@ -448,16 +465,20 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
   async function uploadAndWait(contractId: string, name: string): Promise<Snapshot> {
     snapshotsBeforeUpload.current = [...snapshots];
     setDuplicateMessage('');
+    setUploadNotice('');
     const form = new FormData();
     form.append('file', selectedFile!);
     form.append('name', name);
     form.append('contract_id', contractId);
     form.append('project_id', projectId);
     if (preparationFile) form.append('preparation_manifest', preparationFile);
-    const size = selectedFile!.size;
-    setValidationProgress(size > 5 * 1024 * 1024 ? `Uploading ${formatBytes(size)}…` : 'Checking rows, column types, and data consistency…');
+    const request = new AbortController();
+    uploadRequest.current = request;
+    setValidationProgress('Uploading: 0%');
     setImportStarted(Date.now());
-    const result = await api.uploadFlat(form, projectId, percent => setValidationProgress(`Uploading: ${percent}%`));
+    const result = await api.uploadFlat(form, projectId, percent => setValidationProgress(percent < 100
+      ? `Uploading: ${percent}%` : 'Checking rows, column types, and data consistency…'), request.signal)
+      .finally(() => { if (uploadRequest.current === request) uploadRequest.current = null; });
     setValidationProgress('Checking rows, column types, and data consistency...');
     if ('id' in result && !('state' in result)) return result as Snapshot;  // an identical load already exists
     const queued = result as SnapshotImport;
@@ -494,10 +515,19 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
 
   function failImport(err: unknown) {
     if (currentProject.current !== projectId) return;
+    if (err instanceof Error && err.name === 'AbortError') { showCancelledUpload(); return; }
     const human = humanizeError(err, { key: confirmedKey, measure: confirmedMeasure, filename: selectedFile?.name });
     setValidationError(human);
     setStep('error');
     if (!modalOpen.current) setPageNotice(`The import of “${snapshotName || selectedFile?.name}” failed: ${human.message}`);
+  }
+
+  function showCancelledUpload() {
+    setStep('upload'); setSelectedFile(null); setFilePreview(null); setUnitConfirmed(false);
+    setValidationError(null); setValidationProgress('');
+    if (fileInput.current) fileInput.current.value = '';
+    setUploadNotice('Upload cancelled. Nothing was added.');
+    if (!modalOpen.current) setPageNotice('Upload cancelled. Nothing was added.');
   }
 
   // A newer load of an existing dataset: same definition, so the two loads can be compared.
@@ -1204,6 +1234,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                         </span>
                         <input
                           type="file"
+                          ref={fileInput}
                           disabled={busy}
                           accept=".csv,.parquet,.xlsx,text/csv,application/vnd.apache.parquet,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                           onChange={(e) => {
@@ -1213,14 +1244,15 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                         />
                       </label>
 
-                      {selectedFile && validationProgress.startsWith('Uploading:') && <p role="status">{validationProgress}</p>}
+                      {selectedFile && validationProgress.startsWith('Uploading:') && <p role="status">{validationProgress} <button type="button" className="button secondary small" onClick={() => uploadRequest.current?.abort()}>Cancel upload</button></p>}
+                      {uploadNotice && <p role="status">{uploadNotice}</p>}
                       {selectedFile && !uploadLimits && !limitsProblem && <p className="helper-muted" role="status">Checking upload limits…</p>}
                       {busy && <p className="helper-muted" role="status">Reading your file…</p>}
                       {selectedFile && uploadLimits && <p className="helper-muted">{uploadLimitText(uploadLimits)}</p>}
                       {selectedFile?.name.toLowerCase().endsWith('.xlsx') && <p className="helper-muted">Only the first worksheet is read. If your data is on another sheet, move it to the first sheet or save that sheet as CSV.</p>}
                       {limitsProblem && <p role="alert" className="disabled-reason">{limitsProblem}</p>}
                       {previewProblem && <p role="alert" className="disabled-reason">{previewProblem}</p>}
-                      {loadProblem && <p className="disabled-reason" role="alert">{loadProblem}</p>}
+                      {loadProblem && <><p className="disabled-reason" role="alert">{loadProblem}</p><p className="field-hint">Checked on the first rows of the file; the import checks every row.</p></>}
                       {suggestedLoad && !loadContract && <fieldset className="onboarding-load-choice">
                         <legend>Is this a newer load of “{suggestedLoad.name}”?</legend>
                         <p>The columns and types match. Choose Yes only if the row IDs and amounts have the same meaning and use {suggestedLoad.unit_label}. Every row will be checked using the existing settings.</p>
@@ -1874,6 +1906,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                   <RefreshCw className="spinning" size={32} />
                   <h3>Checking dataset…</h3>
                   <p>{validationProgress || 'Checking rows, column types, and data consistency…'}{importElapsed >= 3 && ` (${importElapsed} s)`}</p>
+                  {validationProgress.startsWith('Uploading:') && <button type="button" className="button secondary" onClick={() => uploadRequest.current?.abort()}>Cancel upload</button>}
                   {importElapsed >= 10 && (
                     <p className="field-hint">Large files can take a minute or two. You can close this window: the import keeps running, and the dataset appears in the list when it is ready.</p>
                   )}

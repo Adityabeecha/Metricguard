@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 from collections import OrderedDict
 from decimal import Decimal, InvalidOperation, localcontext
@@ -355,6 +356,9 @@ def row_values(row: dict, context: dict[str, dict] | None) -> dict:
     return out
 
 
+_DATE_TEXT = re.compile(r'^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2}(\.\d+)?)?)?$')
+
+
 def date_group(value, bucket: str | None):
     """A date/timestamp value's group: its day, the Monday of its ISO week, or its month (YYYY-MM)."""
     if bucket not in ('day', 'week', 'month') or not isinstance(value, str) or len(value) < 10:
@@ -565,8 +569,12 @@ def breakdown(path: Path, key: tuple, verify_all: Callable[[], Any], column: str
             total_change += change
         ordered = sorted(groups.values(), key=lambda g: (-abs(g['change']), str(g['value'])))
         rest = ordered[limit:]
+        dated = [g['value'] for g in ordered if isinstance(g['value'], str)]
         result = {
             'column': column,
+            # Text columns whose every value is a calendar date (lookup tables carry no types).
+            'looks_like_dates': bool(dated) and len(dated) == sum(1 for g in ordered if g['value'] not in (None, NO_MATCH))
+                                and all(_DATE_TEXT.match(v) for v in dated),
             'total_change': str(total_change),
             'total_records': sum(g['records'] for g in ordered),
             'other_records': sum(g['records'] for g in rest),

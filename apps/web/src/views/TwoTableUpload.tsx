@@ -47,6 +47,9 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
   const [job, setJob] = useState<SnapshotImport | null>(null);
   const [busy, setBusy] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadCancelled, setUploadCancelled] = useState(false);
+  const uploadRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => uploadRequest.current?.abort(), []);
   const [problem, setProblem] = useState<ClassifiedInvestigationError | null>(null);
   const [extras, setExtras] = useState<ExtraLookup[]>([]);
   const previewRequests = useRef<Record<Role, number>>({ fact: 0, dimension: 0 });
@@ -150,6 +153,9 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
 
   async function submit() {
     setBusy(true); setProblem(null); setUploadProgress(null);
+    setUploadCancelled(false);
+    const request = new AbortController();
+    uploadRequest.current = request;
     try {
       const factTable = tableName(files.fact, 'fact_records');
       let dimTable = tableName(files.dimension, 'dim_records');
@@ -182,7 +188,8 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
         for (const x of lookups) form.append(`lookup_${x.table}`, x.file);
         form.append('contract_id', contract.id);
         form.append('name', (name.trim() || [files.fact!.name, ...lookups.map(x => x.file.name)].join(' + ')).slice(0, 160));
-        const result = await api.uploadRelational(form, setUploadProgress);
+        setUploadProgress(0);
+        const result = await api.uploadRelational(form, percent => setUploadProgress(percent < 100 ? percent : null), request.signal);
         if ('state' in result) setJob(result as SnapshotImport);
         else { await refresh(); onCreated((result as RelationalSnapshot).id); }
         return;
@@ -201,12 +208,15 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
       form.append('dimension_file', files.dimension!);
       form.append('contract_id', contract.id);
       form.append('name', (name.trim() || `${files.fact!.name} + ${files.dimension!.name}`).slice(0, 160));
-      const result = await api.uploadRelational(form, setUploadProgress);
+      setUploadProgress(0);
+      const result = await api.uploadRelational(form, percent => setUploadProgress(percent < 100 ? percent : null), request.signal);
       if ('state' in result) setJob(result as SnapshotImport);
       else { await refresh(); onCreated((result as RelationalSnapshot).id); }
     } catch (e) {
-      setProblem(classifyInvestigationError(e));
+      if (e instanceof Error && e.name === 'AbortError') { setJob(null); setUploadCancelled(true); }
+      else setProblem(classifyInvestigationError(e));
     } finally {
+      if (uploadRequest.current === request) uploadRequest.current = null;
       setBusy(false); setUploadProgress(null);
     }
   }
@@ -325,12 +335,14 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
           </details>
           <div className="guided-nav">
             <span id="two-table-blocker" className="disabled-reason">{uploadProgress != null ? `Uploading: ${uploadProgress}%` : missing}</span>
+            {uploadProgress != null && <button type="button" className="button secondary" onClick={() => uploadRequest.current?.abort()}>Cancel upload</button>}
             <button className="button primary" disabled={busy || !canUpload || Boolean(missing) || pending(job?.state)} aria-describedby={missing ? 'two-table-blocker' : undefined} onClick={() => void submit()}>
               <UploadCloud size={15} /> {busy || pending(job?.state) ? 'Validating both files…' : 'Validate and use these tables'}
             </button>
           </div>
         </>
       )}
+      {uploadCancelled && <p role="status">Upload cancelled. Nothing was added.</p>}
       {problem && (
         <div className="alert error" role="alert">
           <span><strong>{problem.title}:</strong> {problem.message}{problem.guidance && <> — {problem.guidance}</>}</span>

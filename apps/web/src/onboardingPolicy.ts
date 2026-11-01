@@ -99,7 +99,8 @@ export async function completeDatasetUpload(snapshotId:string, destination:'comp
   await (destination === 'compare' ? onCompare(snapshotId) : onDatasets(snapshotId));
 }
 
-export function duplicateUploadMessage(snapshot: {id:string;name:string}, previous: ReadonlyArray<{id:string}>): string {
-  return previous.some(item => item.id === snapshot.id)
+export function duplicateUploadMessage(snapshot: {id:string;name:string;already_added?:boolean}, previous: ReadonlyArray<{id:string}>): string {
+  // The server says so when it reused identical bytes; the list check covers older servers.
+  return snapshot.already_added || previous.some(item => item.id === snapshot.id)
     ? `This file is already the dataset '${snapshot.name}'. Nothing new was added.` : '';
 }

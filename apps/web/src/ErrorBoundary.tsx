@@ -1,6 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
-type Props = { children: ReactNode; onHome: () => void; resetKey: string };
+type Props = { children: ReactNode; onHome: () => void; resetKey: string; homeLabel?: string; onRetry?: () => void };
 type State = { error: Error | null };
 
 /** Keeps a crash in one page from blanking the whole app; resets when the route changes. */
@@ -25,10 +25,10 @@ export class ErrorBoundary extends Component<Props, State> {
       <div className="gate-screen" role="alert">
         <div className="gate-card">
           <h1>This page could not be displayed</h1>
-          <p>Something on this page failed to load. Your saved work is not affected. Go back to the investigations list or try again.</p>
+          <p>Something on this page failed to load. Your saved work is not affected. Go back or try again.</p>
           <div className="gate-actions">
-            <button className="button primary" onClick={this.props.onHome}>Go to investigations</button>
-            <button className="button secondary" onClick={() => this.setState({ error: null })}>Try again</button>
+            <button className="button primary" onClick={this.props.onHome}>{this.props.homeLabel || 'Go to investigations'}</button>
+            <button className="button secondary" onClick={() => this.props.onRetry ? this.props.onRetry() : this.setState({ error: null })}>Try again</button>
           </div>
           <details className="gate-help"><summary>Technical detail</summary><p className="mono-cell">{this.state.error.message}</p></details>
         </div>

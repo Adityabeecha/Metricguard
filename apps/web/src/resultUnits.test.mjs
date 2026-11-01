@@ -1,9 +1,29 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { resultUnit, resultDisplayValue } from './resultSummary.ts';
+import { resultUnit, resultDisplayValue, groupDigits, summarizeResult } from './resultSummary.ts';
 import { buildLibraryItems } from './investigationLibrary.ts';
 import { parseThemeChoice, resolveTheme } from './themeChoice.ts';
 import { aggregateRowLimitReason, buildFlatSql, operatorsFor } from './comparisonBuilder.ts';
+
+test('Indian grouping preserves exact signs and decimals while western remains the default', () => {
+  assert.equal(groupDigits('1240000', 'indian'), '12,40,000');
+  assert.equal(groupDigits('-1234567.89', 'indian'), '-12,34,567.89');
+  assert.equal(groupDigits('999', 'indian'), '999');
+  assert.equal(groupDigits('+12345678901234567890.00100', 'indian'), '+1,23,45,67,89,01,23,45,67,890.00100');
+  assert.equal(groupDigits('1240000'), '1,240,000');
+  assert.equal(groupDigits('-1234567.89', 'western'), '-1,234,567.89');
+  assert.equal(groupDigits('Unavailable', 'indian'), 'Unavailable');
+});
+
+test('only known INR and rupee units select Indian grouping', async () => {
+  const { digitStyleFor } = await import('./resultSummary.ts');
+  assert.equal(typeof digitStyleFor, 'function');
+  for (const unit of ['INR', '₹', ' inr ']) assert.equal(digitStyleFor(unit), 'indian');
+  for (const unit of ['USD', 'records', 'pts', 'INR per record', '', null, undefined]) assert.equal(digitStyleFor(unit), 'western');
+  const result = { baseline_value: '0.00', target_value: '1240000.00', delta_target_minus_baseline: '1240000.00', residual: '0.00' };
+  assert.match(summarizeResult(result, 'INR').headline, /12,40,000.00 INR/);
+  assert.match(summarizeResult(result, 'USD').headline, /1,240,000.00 USD/);
+});
 
 test('summary units follow the aggregate, including secondary amounts and historical currency', () => {
   assert.equal(resultUnit({ aggregate: 'count' }, 'USD'), 'records');

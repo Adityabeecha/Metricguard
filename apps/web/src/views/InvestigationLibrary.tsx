@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, FolderOpen, Plus, X } from 'lucide-react';
 import { api, versionName, type Bootstrap, type InvestigationDraft, type Run } from '../api';
 import {
-  buildLibraryItems, caseNumber, filterLibraryItems, sortLibraryItems, hasDefinedResult, KIND_LABEL, readDismissedRuns, STAMP, unexplainedRuns, writeDismissedRuns,
+  buildLibraryItems, caseNumber, filterLibraryItems, sortLibraryItems, hasDefinedResult, KIND_LABEL, readDismissedRuns, runningRuns, STAMP, unexplainedRuns, writeDismissedRuns,
   type LibraryItem, type LibraryStatus,
 } from '../investigationLibrary';
 import { groupDigits, resultDisplayValue, resultUnit, valueWithUnit } from '../resultSummary';
@@ -62,6 +62,13 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
     return next;
   });
   const datasetName = (id: string) => data.snapshots.find(s => s.id === id)?.name || 'Dataset';
+  // Running comparisons stay visible here; refresh every 10 seconds until they finish.
+  const running = useMemo(() => runningRuns(data.runs || []), [data]);
+  useEffect(() => {
+    if (!running.length || !onChanged) return;
+    const timer = window.setInterval(() => { void onChanged(); }, 10000);
+    return () => window.clearInterval(timer);
+  }, [running.length, onChanged]);
 
   return (
     <div className="view-container">
@@ -73,6 +80,19 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
       </div>
 
       {onAddData && onSampleReady && <FirstRunGuide data={data} projectId={workspaceId} onAddData={onAddData} onCompare={onStart} onSampleReady={onSampleReady} />}
+
+      {running.length > 0 && (
+        <section className="attention" aria-labelledby="running-title" aria-live="polite">
+          <div className="section-title"><h2 id="running-title">Running now</h2><span>{running.length}</span></div>
+          {running.map(run => (
+            <div key={run.id} className="attention-row">
+              <span><strong>{run.state === 'queued' ? 'Waiting to start' : 'Running'}</strong> · {datasetName(run.snapshot_id)} · started {new Date(run.created_at).toLocaleTimeString()}</span>
+              <button className="button secondary small" onClick={() => onOpenRun(run)}>Open <ArrowRight size={12} /></button>
+            </div>
+          ))}
+          <p className="example">A comparison usually takes 20–90 seconds on the free beta. It moves to "Needs a conclusion" when it finishes.</p>
+        </section>
+      )}
 
       {(listed.length > 0 || hidden.length > 0) && (
         <section className="attention" aria-labelledby="attention-title">

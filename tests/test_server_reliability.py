@@ -168,3 +168,12 @@ def test_health_counts_server_errors(setup, monkeypatch):
         assert raw.get('/api/v1/auth/providers').status_code == 500
         errors = raw.get('/api/v1/health').json()['server_errors']
     assert errors['since_start'] == before + 1 and errors['last_at']
+
+
+def test_global_import_cap(store, tmp_path, monkeypatch):
+    monkeypatch.setenv('METRICGUARD_MAX_ACTIVE_IMPORTS_GLOBAL', '1')
+    store.queue_import(tmp_path / 'a.csv', 'hash-a', 'A', {'purpose': 'preview'})
+    assert store.queue_import(tmp_path / 'a.csv', 'hash-a', 'A', {'purpose': 'preview'})['reused']  # same file still answers
+    with pytest.raises(DomainError) as busy:
+        store.queue_import(tmp_path / 'b.csv', 'hash-b', 'B', {'purpose': 'preview'}, project_id='other')
+    assert busy.value.code == 'SERVER_BUSY' and busy.value.status == 503

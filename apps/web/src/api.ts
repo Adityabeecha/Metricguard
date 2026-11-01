@@ -513,7 +513,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** Upload with the same workspace, credential and identity checks as apiFetch. */
-export function uploadWithProgress<T>(path: string, form: FormData, onProgress: (percent: number) => void, projectId?: string): Promise<T> {
+export function uploadWithProgress<T>(path: string, form: FormData, onProgress: (percent: number) => void, projectId?: string, signal?: AbortSignal): Promise<T> {
   if (!path.startsWith('/') || path.startsWith('//')) return Promise.reject(new ApiError('INVALID_PATH', 'Only same-origin API paths are allowed.'));
   const epoch = identityEpoch;
   return new Promise((resolve, reject) => {
@@ -533,6 +533,9 @@ export function uploadWithProgress<T>(path: string, form: FormData, onProgress: 
       if (xhr.status < 200 || xhr.status >= 300) reject(new ApiError(body.error?.code || `HTTP_${xhr.status}`, body.error?.message || `Request failed (${xhr.status}).`));
       else resolve(body as T);
     };
+    // Cancel: aborting the request rejects with AbortError and nothing is added on the server.
+    if (signal?.aborted) { reject(new DOMException('The operation was aborted.', 'AbortError')); return; }
+    signal?.addEventListener('abort', () => xhr.abort(), { once: true });
     xhr.send(form);
   });
 }
@@ -763,11 +766,11 @@ export const api = {
       }
     );
   },
-  uploadFlat: (form: FormData, projectId?: string, onProgress?: (percent: number) => void) => {
+  uploadFlat: (form: FormData, projectId?: string, onProgress?: (percent: number) => void, signal?: AbortSignal) => {
     const pid = projectId || activeWorkspaceId;
     if (pid && !form.has('project_id')) form.append('project_id', pid);
     const path = pid ? `/flat/snapshots?project_id=${encodeURIComponent(pid)}` : '/flat/snapshots';
-    if (onProgress) return uploadWithProgress<Snapshot | SnapshotImport>(path, form, onProgress, pid);
+    if (onProgress) return uploadWithProgress<Snapshot | SnapshotImport>(path, form, onProgress, pid, signal);
     return request<Snapshot | SnapshotImport>(
       path,
       {
@@ -777,18 +780,18 @@ export const api = {
       }
     );
   },
-  uploadRelational: (form: FormData, onProgress?: (percent: number) => void) => onProgress ? uploadWithProgress<RelationalSnapshot | SnapshotImport>('/relational/snapshots', form, onProgress) : request<RelationalSnapshot | SnapshotImport>('/relational/snapshots', {method:'POST', body:form}),
+  uploadRelational: (form: FormData, onProgress?: (percent: number) => void, signal?: AbortSignal) => onProgress ? uploadWithProgress<RelationalSnapshot | SnapshotImport>('/relational/snapshots', form, onProgress, undefined, signal) : request<RelationalSnapshot | SnapshotImport>('/relational/snapshots', {method:'POST', body:form}),
   relationalRun: (id:string) => request<RelationalRun>(`/comparisons/${encodeURIComponent(id)}`),
   relationalCase: (id:string) => request<RelationalCase>(`/investigations/${encodeURIComponent(id)}`),
   relationalEvidence: (id:string, offset:number) => request<{items:RelationalEvidence[];total:number}>(`/comparisons/${encodeURIComponent(id)}/evidence?offset=${offset}&limit=100`),
   relationalJoinEvidence: (id:string, offset:number) => request<JoinEvidencePage>(`/comparisons/${encodeURIComponent(id)}/join-evidence?offset=${offset}&limit=100`),
   snapshotImport: (id: string) => request<SnapshotImport>(`/snapshot-imports/${encodeURIComponent(id)}`),
   snapshot: (id: string) => request<Snapshot>(`/snapshots/${encodeURIComponent(id)}`),
-  previewDataset: (form: FormData, projectId?: string, onProgress?: (percent: number) => void) => {
+  previewDataset: (form: FormData, projectId?: string, onProgress?: (percent: number) => void, signal?: AbortSignal) => {
     const pid = projectId || activeWorkspaceId;
     if (pid && !form.has('project_id')) form.append('project_id', pid);
     const path = pid ? `/dataset-previews?project_id=${encodeURIComponent(pid)}` : '/dataset-previews';
-    if (onProgress) return uploadWithProgress<DatasetPreviewRecord>(path, form, onProgress, pid);
+    if (onProgress) return uploadWithProgress<DatasetPreviewRecord>(path, form, onProgress, pid, signal);
     return request<DatasetPreviewRecord>(
       path,
       {

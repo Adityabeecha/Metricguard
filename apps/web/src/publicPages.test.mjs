@@ -5,6 +5,21 @@ import { DEMO_ROWS, demoBreakdown, demoChanges, demoTotals } from './demoCase.ts
 import { scrollToHash } from './publicScroll.ts';
 import { sitePage } from './router.ts';
 
+test('sample replay facts use the sample totals and unchanged evidence identity', async () => {
+  const { demoReplayResult, DEMO_CASE } = await import('./demoCase.ts');
+  const { replayChecks } = await import('./views/evidence/replayChecks.ts');
+  const saved = demoReplayResult();
+  assert.equal(saved.baseline_value, '750.75');
+  assert.equal(saved.target_value, '410.75');
+  assert.equal(saved.delta_target_minus_baseline, '-340.00');
+  assert.ok(!/[1-9]/.test(saved.residual));
+  assert.equal(saved.evidence_artifact.row_count, 8);
+  assert.equal(saved.evidence_artifact.sha256, DEMO_CASE.hashes.evidence);
+  const checks = replayChecks(saved, demoReplayResult());
+  assert.equal(checks.length, 6);
+  assert.ok(checks.every(check => check.same && check.saved === check.replayed));
+});
+
 test('the sample case balances exactly from its own rows', () => {
   const t = demoTotals();
   assert.equal(t.current, '750.75');

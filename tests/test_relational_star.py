@@ -468,3 +468,15 @@ def test_star_text_ranges_agree_between_sql_and_evidence(tmp_path):
             validator.finish(result)
     with pytest.raises(CoreError):  # a range needs the column on the left and one text value
         parse_relational("SELECT SUM(o.amount) FROM orders o WHERE '2026' < o.status", contract)
+
+
+def test_star_reports_several_bad_fact_rows_together(tmp_path):
+    tables = deepcopy({'fact': ORDERS, 'customer': CUSTOMERS, 'product': PRODUCTS})
+    header, first = tables['fact'][0], tables['fact'][1]
+    amount = header.index('amount')
+    bad = [first[:amount] + ['1,000'] + first[amount + 1:], first]  # bad amount, then a duplicate key
+    tables['fact'] = [header, *tables['fact'][1:], *bad]
+    with pytest.raises(CoreError) as refused:
+        _snapshot(tmp_path, tables=tables)
+    message = refused.value.message
+    assert message.startswith('2 problems found in the fact file. 1) ') and 'duplicated' in message and 'line' in message
