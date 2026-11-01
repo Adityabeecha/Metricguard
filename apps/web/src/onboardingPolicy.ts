@@ -63,31 +63,43 @@ type LoadPreview = {headers:string[];observed_types:Record<string,string>;null_c
 export function loadCompatibilityProblem(preview:LoadPreview, contract:LoadContract):string {
   const amounts = contract.decimal_columns?.length ? contract.decimal_columns : [{name:contract.measure || '',scale:contract.scale,unit_label:contract.unit_label}];
   const columns = [contract.row_key,...amounts.map(d => d.name),...contract.categories];
-  const sameColumns = columns.length === preview.headers.length && new Set(columns).size === columns.length && columns.every(c => preview.headers.includes(c));
+  const present = (c:string) => preview.headers.includes(c);
+  // Every problem at once (missing, extra and changed columns), so one fix covers them all.
+  const problems:string[] = [];
+  const sameColumns = columns.length === preview.headers.length && new Set(columns).size === columns.length && columns.every(present);
   if (!sameColumns) {
-    const missing = columns.filter(c => !preview.headers.includes(c));
+    const missing = columns.filter(c => !present(c));
     const extra = preview.headers.filter(c => !columns.includes(c));
-    return `A newer load must have the same columns as this dataset. Missing: ${missing.join(', ') || 'none'}. Extra: ${extra.join(', ') || 'none'}.`;
+    problems.push(`A newer load must have the same columns as this dataset. Missing: ${missing.join(', ') || 'none'}. Extra: ${extra.join(', ') || 'none'}.`);
   }
-  if (preview.key_issues?.[contract.row_key]) return `Row ID “${contract.row_key}” ${preview.key_issues[contract.row_key]}.`;
+  if (present(contract.row_key) && preview.key_issues?.[contract.row_key]) problems.push(`Row ID “${contract.row_key}” ${preview.key_issues[contract.row_key]}.`);
   const allBlank = (column:string) => preview.totalRowsSampled > 0 && preview.null_counts?.[column] === preview.totalRowsSampled;
-  for (const amount of amounts) {
-    if (!allBlank(amount.name) && preview.observed_types[amount.name] !== 'numeric') return `Amount “${amount.name}” must contain numbers.`;
+  const seen = (column:string) => preview.observed_types[column] || 'unknown';
+  for (const amount of amounts.filter(a => present(a.name))) {
+    if (!allBlank(amount.name) && preview.observed_types[amount.name] !== 'numeric') {
+      problems.push(`Amount “${amount.name}” must contain numbers (this file has ${seen(amount.name)} values).`);
+      continue;
+    }
     const explicitUnit = suggestUploadUnit(amount.name).unit;
-    if (explicitUnit && explicitUnit !== (amount.unit_label || contract.unit_label)) return `Amount “${amount.name}” uses a different unit from this dataset.`;
+    if (explicitUnit && explicitUnit !== (amount.unit_label || contract.unit_label)) problems.push(`Amount “${amount.name}” uses a different unit from this dataset.`);
     const allowedScale = amount.scale ?? contract.scale;
-    if (preview.sample_rows.some(row => (row[amount.name]?.split('.')[1]?.length || 0) > allowedScale)) return `Amount “${amount.name}” needs more decimal places than this dataset allows.`;
+    if (preview.sample_rows.some(row => (row[amount.name]?.split('.')[1]?.length || 0) > allowedScale)) problems.push(`Amount “${amount.name}” needs more decimal places than this dataset allows.`);
   }
-  for (const column of contract.categories) {
+  for (const column of contract.categories.filter(present)) {
     const required = contract.dimension_types?.[column] || 'string';
-    if (required !== 'string' && !allBlank(column) && preview.observed_types[column] !== required) return `Filter column “${column}” must use ${required} values.`;
-    if ((preview.null_counts?.[column] || 0) > 0 && !contract.nullable_categories?.includes(column)) return `Filter column “${column}” does not allow blanks.`;
+    if (required !== 'string' && !allBlank(column) && preview.observed_types[column] !== required) problems.push(`Filter column “${column}” changed type: this dataset uses ${required} values, this file has ${seen(column)}.`);
+    if ((preview.null_counts?.[column] || 0) > 0 && !contract.nullable_categories?.includes(column)) problems.push(`Filter column “${column}” does not allow blanks.`);
   }
   const currencyColumn = preview.headers.find(c => /^(currency|currency_code)$/i.test(c));
-  if (currencyColumn && preview.sample_rows.some(row => row[currencyColumn] && row[currencyColumn] !== contract.unit_label)) return 'The file currency differs from the existing dataset unit.';
-  return '';
+  if (currencyColumn && preview.sample_rows.some(row => row[currencyColumn] && row[currencyColumn] !== contract.unit_label)) problems.push('The file currency differs from the existing dataset unit.');
+  return problems.join(' ');
 }
 
 export async function completeDatasetUpload(snapshotId:string, destination:'compare'|'datasets', onCompare:(id:string)=>void|Promise<void>, onDatasets:(id:string)=>void|Promise<void>):Promise<void> {
   await (destination === 'compare' ? onCompare(snapshotId) : onDatasets(snapshotId));
+}
+
+export function duplicateUploadMessage(snapshot: {id:string;name:string}, previous: ReadonlyArray<{id:string}>): string {
+  return previous.some(item => item.id === snapshot.id)
+    ? `This file is already the dataset '${snapshot.name}'. Nothing new was added.` : '';
 }

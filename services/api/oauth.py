@@ -86,7 +86,14 @@ def verified_profile(provider, code, payload, config):
     if provider == 'google':
         form.update(grant_type='authorization_code', code_verifier=payload['verifier'])
     with http_client() as client:
-        token = _json(client.post(PROVIDERS[provider]['token'], data=form, headers={'Accept': 'application/json'}))
+        try:
+            token = _json(client.post(PROVIDERS[provider]['token'], data=form, headers={'Accept': 'application/json'}))
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code >= 500:
+                raise ValueError('unavailable') from exc
+            raise
+        except httpx.HTTPError as exc:
+            raise ValueError('unavailable') from exc
         access = token.get('access_token')
         if not isinstance(access, str) or not access or len(access) > 8192:
             raise ValueError('provider token')
@@ -138,7 +145,8 @@ def install_oauth_routes(app, store, data_dir, secure_cookies=False):
     def start(provider: str):
         config = settings()
         if provider not in config['providers']:
-            return RedirectResponse(config['app_url'] + '/signin?error=failed', status_code=302)
+            error = 'unavailable' if provider in PROVIDERS else 'failed'
+            return RedirectResponse(config['app_url'] + '/signin?error=' + error, status_code=302)
         state = secrets.token_urlsafe(32)
         payload = {'provider': provider, 'state': state, 'expires': int(time.time()) + STATE_SECONDS,
                    'redirect_uri': config['app_url'] + f'/api/v1/auth/oauth/{provider}/callback'}
@@ -159,6 +167,7 @@ def install_oauth_routes(app, store, data_dir, secure_cookies=False):
         error = 'failed'
         try:
             if provider not in config['providers']:
+                error = 'unavailable' if provider in PROVIDERS else 'failed'
                 raise ValueError('provider')
             states, codes = request.query_params.getlist('state'), request.query_params.getlist('code')
             if len(states) != 1:
@@ -176,8 +185,8 @@ def install_oauth_routes(app, store, data_dir, secure_cookies=False):
             try:
                 subject, email, name = verified_profile(provider, codes[0], payload, config)
             except ValueError as exc:
-                if str(exc) == 'unverified':
-                    error = 'unverified'
+                if str(exc) in ('unverified', 'unavailable'):
+                    error = str(exc)
                 raise
             try:
                 # An expired guest signing in again gets a fresh account, not the one being erased.

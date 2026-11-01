@@ -7,7 +7,7 @@ import { authPageTitle, localKeyAccess, oauthErrorMessage, safeWorkspaceReturn, 
 import { useIdentityEpoch } from './identity';
 import { Logo } from './Logo';
 import { ThemeSwitch } from './ThemeSwitch';
-import { buildRouteUrl, parseRoute } from './router';
+import { buildRouteUrl, homeRedirect, parseRoute } from './router';
 import './auth.css';
 
 export function SignInScreen({ mode }: { mode: 'signin' | 'signup' }) {
@@ -43,7 +43,14 @@ export function SignInScreen({ mode }: { mode: 'signin' | 'signup' }) {
       try {
         const identity = await api.identity();
         if (!active || !identity.verified) return;
+        if (params.has('error')) return;
         if (identity.session) setSessionSignedIn(true);
+        const home = homeRedirect(identity);
+        if (home) {
+          window.history.replaceState(null, '', home);
+          window.dispatchEvent(new PopStateEvent('popstate'));
+          return;
+        }
         const workspaces = await api.listWorkspaces();
         if (!active) return;
         if (!workspaces.length) {

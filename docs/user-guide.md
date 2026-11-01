@@ -90,7 +90,7 @@ Your account menu (your initials, top right) has **Settings** and **Sign out**. 
 
 ## 5. The quickest first try: sample data
 
-On a brand-new workspace, the home page shows **Get to your first case**.
+On a brand-new workspace, **Cases** shows **Get to your first case**, above the normal empty state.
 
 1. Click **Try with sample orders**. MetricGuard adds a sample file of 5,000 orders and checks it. This takes a few seconds.
 2. Click **Compare with the sample orders**. This opens **New comparison** with the sample already chosen.
@@ -103,6 +103,8 @@ Once you're comfortable, add your own data.
 ## 6. Add your own data
 
 ### 6a. Upload a file (most common)
+
+![The Add dataset dialog with CSV, Parquet and Excel upload options](/guide/add-dataset.png)
 
 1. Go to **Datasets → Add dataset** (or **Upload a file** on the first-run page).
 2. Choose your CSV, Excel or Parquet file. MetricGuard reads it and shows **Columns found**, with a sample value for each column.
@@ -117,11 +119,17 @@ Excel uploads read only the first worksheet. Move the data to the first sheet or
 4. Tick **I confirm the whole file contains the rows to compare.**
 5. Click **Check dataset**. MetricGuard checks every row, column type and amount. When it's done you'll see **Dataset ready**.
 
+![Confirming the row ID, amount, unit and filter columns for the sample orders](/guide/column-questions.png)
+
 If something is wrong, for example a duplicate ID or text in an amount column, you'll see **Dataset checks failed** with a **Recommended fix**. Correct the file and upload it again.
 
 If an amount includes currency symbols or thousands separators, remove them before uploading (for example, `1,250.00` becomes `1250.00`).
 
 **Advanced details** (precision, how blanks are treated and so on) are optional. The defaults suit most files.
+
+The dataset details show **Amount totalled**, **Unit**, **Column**, **Dataset ID** and **Rows included**. In **Provenance**, expand **Fingerprints (for audits)** to see the **Rules fingerprint**, **Data fingerprint** and **File fingerprint (SHA-256)**.
+
+Identical uploads reuse the existing dataset. For a dataset named Orders, the message is **This file is already the dataset 'Orders'. Nothing new was added.**
 
 ### 6b. Add a newer version of the same data
 
@@ -175,6 +183,8 @@ Use this when two teams calculate "the same" number differently.
    Prefer typing SQL? Switch from **Guided form** to **SQL editor**. It understands simple totals and counts, such as `SELECT SUM(revenue) FROM orders_october WHERE status = 'paid'`. Click a column chip to insert its name. The form can also show the **SQL this form produces**.
 3. Click **Check and compare**. If a daily limit applies, the remaining comparisons appear alongside the button. Going back to the same dataset keeps your calculations.
 
+![Current and proposed SQL calculations side by side in New comparison](/guide/two-calculations.png)
+
 ### 7B. Same calculation on two data loads, or two sources
 
 Use this when the **data** changed, not the formula.
@@ -203,6 +213,8 @@ At the top you'll see the difference, e.g. *"Proposed is 15,000.00 INR lower tha
 
 The difference is split into categories, and the categories add up **exactly** to the total difference. When they do, you'll see **Balanced ✓**. Typical categories:
 
+![The sample result reconciliation with an exact zero unexplained amount and a Balanced stamp](/guide/reconciliation.png)
+
 | Category | Meaning |
 |---|---|
 | **Only in one calculation** / filtered in or out | The record counts in one calculation but not the other (e.g. refunded orders are excluded by Finance). |
@@ -220,6 +232,8 @@ The difference is split into categories, and the categories add up **exactly** t
   - If the difference is spread evenly, it says so.
 - **C · Definitions:** the exact calculations that were compared.
 - **D · Limits:** what this result does and doesn't prove.
+
+![Where it sits groups the sample difference by order status and marks concentrated changes](/guide/where-it-sits.png)
 
 > Detailed records are kept while storage allows; rerun the case if they expire. If you see **Detailed records expired — rerun to see them**, run the comparison again from the case.
 
@@ -253,6 +267,8 @@ Search cases by name, conclusion or dataset, and sort by last updated, name or t
 
 Open a case and click **Share**. **Copy summary** includes the saved case link. Use **Print / Save PDF** for the answer, reconciliation, conclusion and visible records. There are two ways:
 
+![The Share sealed case dialog with workspace and expiring public-link options](/guide/share-case.png)
+
 - **Workspace members:** anyone in your workspace can already open the case.
 - **Public read-only link:** anyone with the link can view the case without signing in. They can't change anything.
   - Choose when the link expires: **After 7 days** or **After 30 days**.
@@ -268,6 +284,7 @@ A **metric** is a business number with a name, like *Net revenue* or *Paid order
 - **Create one from a result:** click **Save as metric**, choose **New metric…** or an existing one, and pick **Which calculation?**
 - **Or go to Metrics → Create metric:** give it a name and an importance (**Critical**, **Important** or **Standard**), then link a calculation to a dataset.
 - Each metric shows its **Approved value** and the **Difference from approved** when new data arrives.
+- Metric details are grouped as **Approved calculation**, **Latest check** and **History**. Expand **All versions and links** under History to browse linked calculations and earlier versions. **Seen at** is when a version was observed; **Linked version** identifies the approved calculation version.
 - When you add a newer load of a dataset, use **Check your metrics on the new load** to see which metrics moved and why.
 
 ---

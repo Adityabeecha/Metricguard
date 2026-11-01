@@ -188,10 +188,10 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
             snapshot={detail.snapshot} versions={defs.flatMap(d => d.versions)} breakdownColumns={breakdownColumns}
             sealStatus={pending(replay?.state) || replaying ? 'verifying' : replay?.result ? (same ? 'intact' : 'broken') : null}
             onCustody={() => setCustodyOpen(true)}
-            note={<div className="case-conclusion"><h2>Conclusion</h2><p style={{ whiteSpace: 'pre-wrap' }}>{detail.decision}</p></div>} />
+            note={<ConclusionBlock detail={detail} canEdit={canShare} onSaved={() => setAttempt(a => a + 1)} />} />
         ) : (
           <>
-          <div className="case-conclusion"><h2>Conclusion</h2><p style={{ whiteSpace: 'pre-wrap' }}>{detail.decision}</p></div>
+          <ConclusionBlock detail={detail} canEdit={canShare} onSaved={() => setAttempt(a => a + 1)} />
           <p className="disabled-reason">The saved run has no result ({detail.run.state}{detail.run.error?.message ? `: ${detail.run.error.message}` : ''}).</p>
           </>
         )}
@@ -218,18 +218,27 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
         </div>
         {replayBlocker && <span id="replay-blocker" className="disabled-reason">{replayBlocker}</span>}
         {replayProblem && <div className="alert error" role="alert"><span>{replayProblem}</span><button className="button secondary small" onClick={() => void startReplay()} disabled={Boolean(replayBlocker)}>Retry</button></div>}
+        {replays.some(r => r.result) && (() => {
+          const done = replays.filter(r => r.result);
+          const last = done[done.length - 1];
+          const matched = done.filter(r => replayMatches(detail.run, r)).length;
+          return <p className="example">Replayed {done.length} time{done.length === 1 ? '' : 's'}; {matched === done.length ? 'every replay matched' : `${done.length - matched} did not match`}.
+            {' '}Last: {new Date(last.completed_at || last.created_at).toLocaleString()}.{' '}
+            <button type="button" className="link-button" onClick={() => setCustodyOpen(true)}>See every replay in the custody log</button></p>;
+        })()}
         {replay?.state === 'failed' && <p className="disabled-reason">Replay did not complete: {replay.error?.message || 'unknown error'}.</p>}
         {replay?.result && detail.run.result && (
           <>
-            <p role="status" className={same ? '' : 'disabled-reason'}>
+            <p role="status" aria-live="polite" className={same ? '' : 'disabled-reason'}>
               {same ? `Recomputed from the frozen data: every check below matches the saved case (run ${replay.id}).`
                 : 'Replay finished but differs from the saved result. The differing lines are marked below; investigate before relying on this case.'}
             </p>
             <table className="ledger-table replay-checks">
+              <caption className="sr-only">Saved case and replay checks</caption>
               <thead><tr><th>Checked</th><th>Saved case</th><th>Replay</th><th>Result</th></tr></thead>
               <tbody>{replayChecks(detail.run.result, replay.result).map(check => (
-                <tr key={check.label}><td>{check.label}</td><td className="n">{check.saved}</td><td className="n">{check.replayed}</td>
-                  <td>{check.same ? 'Same' : <strong>Differs</strong>}</td></tr>))}</tbody>
+                <tr key={check.label}><td data-label="Checked">{check.label}</td><td className="n" data-label="Saved case">{check.saved}</td><td className="n" data-label="Replay">{check.replayed}</td>
+                  <td data-label="Result">{check.same ? 'Same' : <strong>Differs</strong>}</td></tr>))}</tbody>
             </table>
           </>
         )}
@@ -245,4 +254,35 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
       )}
     </div>
   );
+}
+
+/** The case's conclusion, editable by members who can manage the case; earlier versions stay on record. */
+function ConclusionBlock({ detail, canEdit, onSaved }: { detail: InvestigationDetail; canEdit: boolean; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(detail.decision);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState('');
+  const updated = (detail as { updated_at?: string }).updated_at;
+  const save = async () => {
+    setBusy(true); setProblem('');
+    try { await api.editConclusion(detail.id, text); setEditing(false); onSaved(); }
+    catch (e) { setProblem(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+  return <div className="case-conclusion">
+    <h2>Conclusion</h2>
+    {editing ? <>
+      <textarea aria-label="Conclusion" rows={4} maxLength={4000} value={text} onChange={e => setText(e.target.value)} disabled={busy} />
+      <p className="example">The saved comparison and its evidence don't change; the previous conclusion stays on record.</p>
+      {problem && <p className="disabled-reason" role="alert">{problem}</p>}
+      <div className="report-actions">
+        <button type="button" className="button primary small" disabled={busy || !text.trim() || text.trim() === detail.decision} onClick={() => void save()}>{busy ? 'Saving…' : 'Save conclusion'}</button>
+        <button type="button" className="button secondary small" disabled={busy} onClick={() => { setEditing(false); setText(detail.decision); }}>Cancel</button>
+      </div>
+    </> : <>
+      <p style={{ whiteSpace: 'pre-wrap' }}>{detail.decision}</p>
+      {updated && <p className="example">Edited {new Date(updated).toLocaleString()}</p>}
+      {canEdit && <button type="button" className="link-button no-print" onClick={() => { setText(detail.decision); setEditing(true); }}>Edit conclusion</button>}
+    </>}
+  </div>;
 }

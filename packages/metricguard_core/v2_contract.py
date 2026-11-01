@@ -219,7 +219,7 @@ def ingest_mapped(source, destination, contract, mapping) -> dict:
     check_rows(0)
     check_upload_size(source.stat().st_size)
     if source.stat().st_size > MAX_BYTES:
-        raise CoreError('file_too_large', 'Source exceeds 25 MiB')
+        raise CoreError('file_too_large', 'Source exceeds 25 MB')
     source_hash = file_hash(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -307,7 +307,7 @@ def preview_source(source: Path) -> dict:
     check_rows(0)
     check_upload_size(source.stat().st_size)
     if source.stat().st_size > MAX_BYTES:
-        raise CoreError('file_too_large', 'Source exceeds 25 MiB')
+        raise CoreError('file_too_large', 'Source exceeds 25 MB')
     source_hash = file_hash(source)
     if source_format == '.csv':
         try:

@@ -49,7 +49,8 @@ def test_column_values_refuses_undeclared_columns(snapshot):
 
 def test_match_count_uses_the_validated_where_clause(snapshot):
     database, contract = snapshot
-    assert match_count(database, contract, "SELECT SUM(amount) FROM snapshot WHERE status = 'complete'") == {'matched': 0, 'total': 5}
+    empty = match_count(database, contract, "SELECT SUM(amount) FROM snapshot WHERE status = 'complete'")
+    assert (empty['matched'], empty['total']) == (0, 5) and empty['conditions'][0]['matched'] == 0
     assert match_count(database, contract, "SELECT SUM(amount) FROM snapshot WHERE status IN ('paid', 'pending')") == {'matched': 3, 'total': 5}
     assert match_count(database, contract, 'SELECT COUNT(*) FROM snapshot') == {'matched': 5, 'total': 5}
     with pytest.raises(CoreError):
@@ -101,6 +102,16 @@ def test_http_column_values_and_match_count(tmp_path):
         empty = client.post(f'/api/v1/snapshots/{snapshot}/match-count',
                             json={'raw_sql': "SELECT SUM(amount) FROM snapshot WHERE status = 'complete'"})
         assert empty.status_code == 200, empty.text
-        assert empty.json()['counts'] == {'matched': 0, 'total': 3}
+        assert {k: empty.json()['counts'][k] for k in ('matched', 'total')} == {'matched': 0, 'total': 3}
         refused = client.post(f'/api/v1/snapshots/{snapshot}/match-count', json={'raw_sql': 'DELETE FROM snapshot'})
         assert refused.status_code == 422
+
+
+def test_no_match_names_each_condition_and_suggests_capitals(snapshot):
+    database, contract = snapshot
+    result = match_count(database, contract, "SELECT SUM(amount) FROM snapshot WHERE status = 'Paid' AND converted = TRUE")
+    assert result['matched'] == 0
+    by_field = {c['field']: c for c in result['conditions']}
+    assert by_field['status']['matched'] == 0 and by_field['status']['suggestion'] == {'typed': 'Paid', 'existing': 'paid'}
+    assert by_field['converted']['matched'] == 2 and 'suggestion' not in by_field['converted']
+    assert "status = 'Paid'" == by_field['status']['condition']

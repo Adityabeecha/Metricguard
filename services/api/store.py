@@ -812,10 +812,13 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                 if daily_limit and conn.execute(select(func.count()).select_from(runs).where(
                         runs.c.project_id == pid, runs.c.created_at >= cutoff)).scalar_one() >= daily_limit:
                     raise DomainError('FREE_TIER_DAILY_RUNS', f'Free beta limit: {daily_limit:,} comparisons per workspace in 24 hours. Try again later.', 429)
-                # Server-wide caps bound the shared container however many accounts exist. Workspaces
-                # are not serialized against each other, so a simultaneous burst may pass by one.
+                # Server-wide caps bound the shared container however many accounts exist. SQLite
+                # already has one writer; on PostgreSQL a transaction-scoped advisory lock serializes
+                # admission across workspaces so a simultaneous burst cannot pass the cap.
                 busy = 'The beta is busy right now. Try again in a few minutes.'
                 global_active = configured_limit('METRICGUARD_MAX_ACTIVE_RUNS_GLOBAL')
+                if conn.dialect.name == 'postgresql' and (global_active or configured_limit('METRICGUARD_MAX_RUNS_PER_DAY_GLOBAL')):
+                    conn.exec_driver_sql('SELECT pg_advisory_xact_lock(74210931)')
                 if global_active and conn.execute(select(func.count()).select_from(runs).where(
                         runs.c.state.in_(['queued', 'running']))).scalar_one() >= global_active:
                     raise DomainError('SERVER_BUSY', busy, 503)
@@ -965,6 +968,15 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                 d['versions'] = by_definition.get(d['id'], [])
             snapshot_list = [_with_flat_policy({**r['data'], 'project_id': r['project_id']}) for r in conn.execute(select(snapshots).where(snapshots.c.project_id == pid).order_by(snapshots.c.id)).mappings()]
             run_list = [self._run(r) for r in conn.execute(select(runs).where(runs.c.project_id == pid).order_by(runs.c.created_at.desc()).limit(100)).mappings()]
+            # Latest comparison per dataset over all runs (the run list above is only the newest 100).
+            last_used: dict[str, str] = {}
+            for column in (runs.c.snapshot_id, runs.c.request['target_snapshot_id'].as_string()):
+                for sid, latest in conn.execute(select(column, func.max(runs.c.created_at)).where(
+                        runs.c.project_id == pid, column.is_not(None)).group_by(column)).all():
+                    last_used[sid] = max(last_used.get(sid, ''), latest or '')
+            for snapshot in snapshot_list:
+                if snapshot.get('id') in last_used:
+                    snapshot['last_compared_at'] = last_used[snapshot['id']]
             all_records = list(conn.execute(select(records).where(records.c.project_id == pid).order_by(records.c.created_at.desc())).mappings())
         expired = {r['data']['run_id']: r['data'] for r in all_records if r['kind'] == 'evidence_expired'}
         unavailable = {r['data']['run_id']: r['data'] for r in all_records
@@ -1037,6 +1049,16 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                 auth_sessions.c.token_hash == token_hash, auth_sessions.c.expires_at > _time.time(),
                 users.c.is_active == True)).mappings().first()
             return {k: v for k, v in dict(row).items() if k != 'api_key_hash'} if row else None
+
+    def renew_session(self, token: str, ttl_seconds: int, renew_below: int) -> bool:
+        """Extend an active session to ttl_seconds from now when fewer than renew_below seconds remain."""
+        import time as _time
+        moment = _time.time()
+        with self.engine.begin() as conn:
+            return bool(conn.execute(update(auth_sessions).where(
+                auth_sessions.c.token_hash == hashlib.sha256(token.encode()).hexdigest(),
+                auth_sessions.c.expires_at > moment, auth_sessions.c.expires_at < moment + renew_below)
+                .values(expires_at=moment + ttl_seconds)).rowcount)
 
     def revoke_session(self, token: str) -> None:
         with self.engine.begin() as conn:
@@ -1236,6 +1258,16 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
             return bool(conn.execute(delete(guest_erasures).where(
                 guest_erasures.c.identity_hash == self.identity_hash(provider, subject))).rowcount)
 
+    def promote_guest(self, user_id: str) -> None:
+        """Full access for a guest whose email was added to the list: no expiry, no guest quota."""
+        pid = 'personal-' + user_id
+        with self.engine.begin() as conn:
+            conn.execute(delete(guest_accounts).where(guest_accounts.c.user_id == user_id))
+            for row in conn.execute(select(records.c.id, records.c.data).where(
+                    records.c.project_id == pid, records.c.kind == 'quota')).mappings().all():
+                if (row['data'] or {}).get('guest'):
+                    conn.execute(delete(records).where(records.c.id == row['id']))
+
     def expired_guests(self) -> list[str]:
         with self.engine.connect() as conn:
             return list(conn.execute(select(guest_accounts.c.user_id).where(guest_accounts.c.expires_at <= time.time())
@@ -1330,9 +1362,12 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
 
     def list_project_members(self, project_id: str) -> list[dict]:
         with self.engine.connect() as conn:
-            rows = conn.execute(select(project_members, users.c.name, users.c.email).join(
+            # Guests carry their erase time so owners can see who will disappear and when.
+            rows = conn.execute(select(project_members, users.c.name, users.c.email,
+                                       guest_accounts.c.expires_at.label('guest_expires_at')).join(
                 users, users.c.id == project_members.c.user_id
-            ).where(project_members.c.project_id == project_id)).mappings().all()
+            ).outerjoin(guest_accounts, guest_accounts.c.user_id == users.c.id)
+                .where(project_members.c.project_id == project_id)).mappings().all()
             return [dict(r) for r in rows]
 
     # -----------------------------------------------------------------------

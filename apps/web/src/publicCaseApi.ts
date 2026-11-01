@@ -38,7 +38,7 @@ export function publicEvidenceClient(token: string): EvidenceDataClient {
       return read(token, `/evidence-breakdown?${params}`);
     },
     evidenceGroup: (_id, view) => read(token, `/evidence-group?${evidenceGroupParams(view)}`),
-    evidenceConcentration: () => read(token, '/evidence-concentration'),
+    evidenceConcentration: (_id, grouping) => read(token, `/evidence-concentration${grouping ? `?grouping=${encodeURIComponent(grouping)}` : ''}`),
     entityRecords: (_id, entity, offset = 0, limit = 100) => read(token, `/entity-records?${new URLSearchParams({ entity, offset: String(offset), limit: String(limit) })}`),
   };
 }

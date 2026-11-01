@@ -13,6 +13,7 @@
 .sql-editor .sql-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; color: var(--ink); background: var(--panel); border-color: transparent; }
 .sql-editor .sql-input textarea { position: relative; min-height: 0; box-shadow: none; resize: vertical; background: transparent; color: transparent; caret-color: var(--ink); }
 .sql-input textarea::placeholder { color: var(--muted); }
+.sql-editor .sql-input textarea:focus-visible, .sql-chip:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 .tok-keyword { color: var(--link); font-weight: 600; }
 .tok-function { color: var(--link); }
 .tok-string { color: var(--ok, #2f7d4f); }

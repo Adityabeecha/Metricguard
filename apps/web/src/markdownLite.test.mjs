@@ -3,6 +3,20 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { guideHref, inline, renderMarkdown, slug } from './markdownLite.ts';
 
+test('guide images render escaped alt text and load lazily', () => {
+  assert.equal(inline('![Columns "amount" & "status"](/guide/columns.png)'), '<img src="/guide/columns.png" alt="Columns &quot;amount&quot; &amp; &quot;status&quot;" loading="lazy">');
+  assert.equal(renderMarkdown('![Dataset](/guide/dataset.png)'), '<p><img src="/guide/dataset.png" alt="Dataset" loading="lazy"></p>');
+  assert.equal(inline('`![Example](/guide/example.png)`'), '<code>![Example](/guide/example.png)</code>');
+});
+
+test('images cannot load external paths or escape the guide asset directory', () => {
+  for (const path of ['https://example.com/x.png', '//example.com/x.png', '/images/x.png', '/guide/../x.png', '/guide/%2e%2e/x.png', '/guide/a\\x.png', 'data:image/png;base64,abc']) {
+    const html = inline(`![Picture](${path})`);
+    assert.equal(html, 'Picture', path);
+    assert.ok(!html.includes('<img') && !html.includes('<a'));
+  }
+});
+
 test('inline formatting is escaped first and only safe links survive', () => {
   assert.equal(inline('**Save case** and `snapshot` <b>'), '<strong>Save case</strong> and <code>snapshot</code> &lt;b&gt;');
   assert.equal(inline('*Example:* text'), '<em>Example:</em> text');
@@ -30,4 +44,11 @@ test('the real user guide renders without leftover Markdown or raw tags', () => 
   assert.match(html, /<h1 id="metricguard-user-guide">/);
   assert.ok(!/<script|onerror=/i.test(html));
   assert.ok(!/\*\*|^#{1,4} /m.test(html.replace(/<pre>[\s\S]*?<\/pre>/g, '')), 'unrendered bold or heading markers');
+});
+
+test('in-product help links match the anchors rendered from the real guide', () => {
+  const html = renderMarkdown(readFileSync(new URL('../../../docs/user-guide.md', import.meta.url), 'utf8'));
+  for (const heading of ['16. Troubleshooting', '7. Run a comparison', 'Guest accounts (free beta)', '7B. Same calculation on two data loads, or two sources']) {
+    assert.ok(html.includes(`id="${slug(heading)}"`), heading);
+  }
 });

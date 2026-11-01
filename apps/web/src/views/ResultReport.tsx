@@ -180,21 +180,24 @@ function EntityRecordsButton({ runId, entity,client }: { runId: string; entity: 
 /** Exact split of the change by one filter column, largest first. */
 function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, sources, onPickGroup, client = workspaceEvidenceClient }: { runId: string; unit: string; percent?: boolean; onColumns: (c: string[]) => void; preferred?: string[] ; loads?: boolean; sources?: boolean; onPickGroup?: (group: LedgerGroup) => void; client?: EvidenceDataClient }) {
   const [column, setColumn] = useState('');
+  // Day/Week/Month per date column, remembered while switching columns; Concentration uses the latest choice.
+  const [groupings, setGroupings] = useState<Record<string, '' | 'week' | 'month'>>({});
+  const [dateGrouping, setDateGrouping] = useState<'' | 'week' | 'month'>('');
+  const grouping = groupings[column] || '';
+  const setGrouping = (value: '' | 'week' | 'month') => { setGroupings(g => ({ ...g, [column]: value })); setDateGrouping(value); };
   // Across-column concentration; also picks the opening column when the filter column would only restate the filter.
   const [concentration, setConcentration] = useState<EvidenceConcentration | null | undefined>(undefined);
   useEffect(() => {
     let active = true;
-    setConcentration(undefined);
     if (!client.evidenceConcentration) { setConcentration(null); return; }
-    client.evidenceConcentration(runId).then(c => { if (active) setConcentration(c); }).catch(() => { if (active) setConcentration(null); });
+    client.evidenceConcentration(runId, dateGrouping || undefined).then(c => { if (active) setConcentration(c); }).catch(() => { if (active) setConcentration(null); });
     return () => { active = false; };
-  }, [runId, client]);
+  }, [runId, client, dateGrouping]);
   const opening = openingColumn(concentration, preferred);
   const [data, setData] = useState<EvidenceBreakdown | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
   const [all, setAll] = useState(false);
-  const [grouping, setGrouping] = useState<'' | 'week' | 'month'>('');
   useEffect(() => {
     if (concentration === undefined && !column) return;  // wait to know which column to open on
     let active = true;
@@ -245,12 +248,12 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, so
       <div className="where-head">
         <h3><span className="exhibit">B</span> Where the difference sits</h3>
         <label>by
-          <select value={data.column || ''} onChange={e => { setColumn(e.target.value); setAll(false); setGrouping(''); }}>
+          <select value={data.column || ''} onChange={e => { setColumn(e.target.value); setAll(false); }}>
             {data.columns.map(c => <option key={c} value={c}>{columnLabel(c)}</option>)}
           </select>
         </label>
         {data.groupable && <label>grouped by
-          <select value={grouping} onChange={e => { setGrouping(e.target.value as '' | 'week' | 'month'); setAll(false); }}>
+          <select aria-label="Date grouping" value={grouping} onChange={e => { setGrouping(e.target.value as '' | 'week' | 'month'); setAll(false); }}>
             <option value="">Day</option><option value="week">Week (from Monday)</option><option value="month">Month</option>
           </select>
         </label>}
@@ -488,9 +491,26 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
     const contribution = side === 'baseline' ? r.baseline_contribution : r.target_contribution;
     return <>{inclusion(r, side)}{contribution != null && <> · <span className="n">{minus(num(contribution))}</span></>}</>;
   };
+  // The CSV follows what the Records view shows: search, changed-only, a category or one Where it sits group.
+  const csvFilters = () => {
+    const params = new URLSearchParams();
+    if (q.trim()) params.set('q', q.trim());
+    if (changedOnly) params.set('changed_only', 'true');
+    if (ledgerCategory) params.set('category', ledgerCategory);
+    if (ledgerGroup && !ledgerGroup.column2) {
+      params.set('column', ledgerGroup.column);
+      params.set('value', JSON.stringify(ledgerGroup.value ?? null));
+      if (ledgerGroup.noMatch) params.set('no_match', 'true');
+      if (ledgerGroup.grouping) params.set('grouping', ledgerGroup.grouping);
+    }
+    return params;
+  };
+  const csvFiltered = csvFilters().toString() !== '';
   const downloadCsv = () => {
     setCsvProblem('');
-    api.download(`/comparisons/${encodeURIComponent(run.id)}/evidence.csv`, `metricguard-${run.id}-records.csv`)
+    const params = csvFilters().toString();
+    api.download(`/comparisons/${encodeURIComponent(run.id)}/evidence.csv${params ? `?${params}` : ''}`,
+      `metricguard-${run.id}-records${params ? '-filtered' : ''}.csv`)
       .catch(e => setCsvProblem(e instanceof Error ? e.message : String(e)));
   };
 
@@ -610,7 +630,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
               <tbody>
                 {top.slice(0, 10).map(r => (
                   <tr key={recordKey(r)}>
-                    <td className="mono-cell">{recordKey(r)}</td>
+                    <td className="mono-cell" data-label={keyHeader}>{recordKey(r)}</td>
                     <td className="side-cell" data-label={cur}>{sideCell(r, 'baseline')}</td>
                     <td className="side-cell" data-label={pro}>{sideCell(r, 'target')}</td>
                     <td className={signedClass(changeOf(r))} data-label={ratio ? 'Effect' : 'Change'} title={r.effect_exact ? `Exact: ${r.effect_exact}${percent ? ' (×100 for points)' : ''}` : undefined}>{changeText(r)}</td>
@@ -676,9 +696,10 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
                   ))}
                 </fieldset>
               )}
-              {!readOnly && <button type="button" className="button secondary small" onClick={downloadCsv}>Download {kind === 'count_distinct' ? 'distinct values' : result.evidence_coverage ? 'listed records' : 'all records'}{listedTotal != null ? `: ${groupDigits(String(listedTotal))}` : ''} (CSV)</button>}
+              {!readOnly && <button type="button" className="button secondary small" onClick={downloadCsv}>Download {csvFiltered ? 'these records' : kind === 'count_distinct' ? 'distinct values' : result.evidence_coverage ? 'listed records' : 'all records'}{!csvFiltered && listedTotal != null ? `: ${groupDigits(String(listedTotal))}` : ''} (CSV)</button>}
             </div>
-            {!readOnly && (q || changedOnly || ledgerCategory || ledgerGroup) && <p className="example">The CSV always holds every record, not only the ones your search or filter shows.</p>}
+            {!readOnly && csvFiltered && <p className="example">The CSV holds only the records your search or filter shows. Clear them to download every record.</p>}
+            {!readOnly && ledgerGroup?.column2 && <p className="example">The CSV holds every record; a two-column combination can't be exported on its own yet.</p>}
             {csvProblem && <p className="disabled-reason">The download failed: {csvProblem}</p>}
             {records.problem && <p className="disabled-reason">Records could not be loaded: {records.problem}</p>}
             <div className="table-scroll" aria-busy={records.busy}>
@@ -687,7 +708,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
                 <tbody>
                   {records.rows.map(r => (
                     <tr key={recordKey(r)}>
-                      <td className="mono-cell">{recordKey(r)}
+                      <td className="mono-cell" data-label={keyHeader}>{recordKey(r)}
                         <RecordContext row={r} loads={loads} />
                         {kind === 'count_distinct' && <EntityRecordsButton client={evidenceClient} runId={run.id} entity={recordKey(r)} />}
                       </td>

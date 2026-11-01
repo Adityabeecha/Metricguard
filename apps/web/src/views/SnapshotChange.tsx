@@ -262,7 +262,7 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
                   </select>
                 </label>
               )}
-              <p className="hint">Not available when comparing two loads yet; use Two calculations on the same data for distinct counts, ratios, averages, subtraction, CASE or connected tables.</p>
+              <p className="hint">Two-load comparisons support only totals and counts. Use Two calculations on the same data for distinct counts, ratios, averages, subtraction, CASE or connected tables. <a href="/guide#7b-same-calculation-on-two-data-loads-or-two-sources" target="metricguard-guide">Why?</a></p>
               {!versionId && (
                 <div className="calc-card">
                   <div className="mode-switch" role="group" aria-label="Calculation editor">
@@ -341,6 +341,7 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
                   {busy || (run && pending(run.state)) ? 'Comparing…' : sources ? 'Compare the two sources' : 'Compare the two loads'} <ArrowRight size={15} />
                 </button>
               </div>
+              {run && pending(run.state) && <p className="hint" role="status">On the free beta a comparison takes about 20–90 seconds.</p>}
             </div>
           )}
       {problem && (

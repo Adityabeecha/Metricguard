@@ -460,8 +460,9 @@ class PostgresCollector:
                     # refused before any rows are read.
                     # If the count itself fails, the streaming check below still enforces the limit.
                     from services.supervisor.warehouse_rest import refuse_over_limit
+                    # A savepoint keeps a failed count from aborting the read-only transaction.
                     try:
-                        with conn.cursor() as counter:
+                        with conn.transaction(), conn.cursor() as counter:
                             counter.execute(sql.SQL("SELECT COUNT(*) FROM {schema}.{table} WHERE {cutoff} <= %s").format(
                                 schema=sql.Identifier(selection.schema_name), table=sql.Identifier(selection.table_name),
                                 cutoff=sql.Identifier(selection.cutoff_column)), [cutoff_val])

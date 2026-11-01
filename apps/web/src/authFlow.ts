@@ -54,6 +54,7 @@ export function connectionControls(identity: { session?: boolean } | null, conne
 
 export function oauthErrorMessage(code: string | null): string {
   if (!code) return '';
+  if (code === 'unavailable') return "Google or GitHub sign-in isn't available right now. Try the other provider, or try again in a few minutes.";
   if (code === 'unverified') return "Your Google or GitHub email isn't verified. Verify it in that account, or try the other provider.";
   if (code === 'cancelled') return 'Sign-in was cancelled. Choose a provider to try again.';
   if (code === 'guest-expired') return 'Your guest account reached its time limit and is being erased. Sign in again to start a fresh one.';

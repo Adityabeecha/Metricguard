@@ -101,3 +101,9 @@ def test_evidence_summary_filters_and_full_csv(demo):
     assert csv.status_code == 200 and csv.headers['content-type'].startswith('text/csv')
     lines = csv.text.strip().splitlines()
     assert lines[0].startswith('record,current_included') and len(lines) == 1 + summary['total']
+    only_changed = client.get(f"/api/v1/comparisons/{run['id']}/evidence.csv", params={'changed_only': 'true'})
+    assert len(only_changed.text.strip().splitlines()) == 1 + summary['changed']
+    assert 'records-filtered.csv' in only_changed.headers['content-disposition']
+    searched = client.get(f"/api/v1/comparisons/{run['id']}/evidence.csv", params={'q': first_key}).text.strip().splitlines()
+    assert len(searched) - 1 == found['total'] and all(first_key.lower() in line.split(',')[0].lower() for line in searched[1:])
+    assert client.get(f"/api/v1/comparisons/{run['id']}/evidence.csv", params={'column': 'nope'}).status_code in (400, 422)

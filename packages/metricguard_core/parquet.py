@@ -27,7 +27,7 @@ def ingest_parquet(source, destination, metadata=None):
     check_rows(0)
     check_upload_size(source.stat().st_size)
     if source.stat().st_size > MAX_BYTES:
-        raise CoreError('file_too_large', 'Parquet exceeds 25 MiB')
+        raise CoreError('file_too_large', 'Parquet exceeds 25 MB')
     source_hash = file_hash(source)
     row_count, ids = 0, set()
     source_name = str(source.resolve())

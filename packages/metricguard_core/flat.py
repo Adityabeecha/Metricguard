@@ -311,6 +311,10 @@ def validate_contract(payload):
     return result
 
 
+# A file with many bad rows reports this many at once.
+MAX_REPORTED_PROBLEMS = 5
+
+
 def _shown(value) -> str:
     """An offending cell for an error message: quoted and cut to 40 characters."""
     text = str(value)
@@ -456,7 +460,7 @@ def _ingest_flat(source, destination, contract, preparation, folder, sinks):
     check_rows(0)
     check_upload_size(source.stat().st_size)
     if source.stat().st_size > MAX_FLAT_BYTES:
-        _error('file_too_large', f'Extract exceeds {MAX_FLAT_BYTES // (1024 * 1024)} MiB')
+        _error('file_too_large', f'Extract exceeds {MAX_FLAT_BYTES // (1024 * 1024)} MB')
     uploaded, source_hash = source, file_hash(source)  # the uploaded file itself, also for Excel
     if source.suffix.lower() == '.xlsx':
         if contract['null_policy'] != 'blank_nullable':
@@ -465,7 +469,7 @@ def _ingest_flat(source, destination, contract, preparation, folder, sinks):
         converted = folder / 'from_xlsx.csv'
         xlsx_to_csv(source, converted)
         if converted.stat().st_size > MAX_FLAT_BYTES:
-            _error('file_too_large', f'Extract exceeds {MAX_FLAT_BYTES // (1024 * 1024)} MiB')
+            _error('file_too_large', f'Extract exceeds {MAX_FLAT_BYTES // (1024 * 1024)} MB')
         source = converted
     if ver in (6, 8):
         amount_specs = contract['decimal_columns']
@@ -484,37 +488,50 @@ def _ingest_flat(source, destination, contract, preparation, folder, sinks):
                 if reader.fieldnames is None or len(set(reader.fieldnames)) != len(reader.fieldnames) or not set(columns).issubset(reader.fieldnames):
                     _error('invalid_schema', 'Source is missing a registered column or has duplicate headings')
                 token = '' if contract['null_policy'] == 'blank_nullable' else 'NULL'
+                problems: list[str] = []
                 for index, raw in enumerate(reader, 2):
                     if len(rows) >= MAX_FLAT_ROWS: _error('too_many_rows', f'Flat snapshot exceeds {MAX_FLAT_ROWS} rows')
-                    if None in raw or any(v is None for v in raw.values()): _error('invalid_row', f'Wrong field count at line {index}')
-                    key = _text_value(raw[contract['row_key']], contract['row_key'], index)
-                    if not key or key == token: _error('invalid_row', f'Missing row key ({contract["row_key"]} is blank) at line {index}')
-                    if rows.seen(key): _error('invalid_row', f'Duplicate row key {_shown(key)} in {contract["row_key"]} at line {index}: each row needs its own ID')
-                    if ver in (6, 8):
-                        amounts = [_amount(None if raw[c['name']] == token else raw[c['name']],
-                                           {**contract, 'precision': c['precision'], 'scale': c['scale'], 'measure': c['name']}, index)
-                                   for c in amount_specs]
-                        cat_vals = [
-                            _validate_flat_cell(None if raw[name] == token else raw[name], name, dim_types[name], index)
-                            for name in contract['categories']
-                        ]
-                        row = (key, *amounts, *cat_vals)
-                    else:
-                        amount = raw[contract['measure']]
-                        amount = _amount(None if amount == token else amount, contract, index)
-                        if ver >= 4:
+                    try:
+                        if None in raw or any(v is None for v in raw.values()): _error('invalid_row', f'Wrong field count at line {index}')
+                        key = _text_value(raw[contract['row_key']], contract['row_key'], index)
+                        if not key or key == token: _error('invalid_row', f'Missing row key ({contract["row_key"]} is blank) at line {index}')
+                        if rows.seen(key): _error('invalid_row', f'Duplicate row key {_shown(key)} in {contract["row_key"]} at line {index}: each row needs its own ID')
+                        if ver in (6, 8):
+                            amounts = [_amount(None if raw[c['name']] == token else raw[c['name']],
+                                               {**contract, 'precision': c['precision'], 'scale': c['scale'], 'measure': c['name']}, index)
+                                       for c in amount_specs]
                             cat_vals = [
                                 _validate_flat_cell(None if raw[name] == token else raw[name], name, dim_types[name], index)
                                 for name in contract['categories']
                             ]
+                            row = (key, *amounts, *cat_vals)
                         else:
-                            cat_vals = [
-                                _text_value(None if raw[name] == token else raw[name], name, index)
-                                for name in contract['categories']
-                            ]
-                        row = (key, amount, *cat_vals)
-                    if NULL_MARKER in row: _error('invalid_row', 'Source contains reserved NULL marker')
-                    rows.append(row)
+                            amount = raw[contract['measure']]
+                            amount = _amount(None if amount == token else amount, contract, index)
+                            if ver >= 4:
+                                cat_vals = [
+                                    _validate_flat_cell(None if raw[name] == token else raw[name], name, dim_types[name], index)
+                                    for name in contract['categories']
+                                ]
+                            else:
+                                cat_vals = [
+                                    _text_value(None if raw[name] == token else raw[name], name, index)
+                                    for name in contract['categories']
+                                ]
+                            row = (key, amount, *cat_vals)
+                        if NULL_MARKER in row: _error('invalid_row', 'Source contains reserved NULL marker')
+                        rows.append(row)
+                    except CoreError as exc:
+                        if exc.code != 'invalid_row':
+                            raise
+                        # Keep reading so one upload reports several problems, not one per attempt.
+                        problems.append(exc.message)
+                        if len(problems) >= MAX_REPORTED_PROBLEMS:
+                            break
+                if problems:
+                    raise CoreError('invalid_row', problems[0] if len(problems) == 1 else
+                                    f'{len(problems)}{"+" if len(problems) >= MAX_REPORTED_PROBLEMS else ""} problems found in the file. '
+                                    + ' '.join(f'{n}) {m}' for n, m in enumerate(problems, 1)))
         except (UnicodeError, csv.Error) as exc:
             raise CoreError('invalid_csv', 'Source CSV could not be parsed') from exc
     elif source.suffix.lower() == '.parquet':
@@ -793,7 +810,51 @@ def _typed_predicates(root, contract):
     return result
 
 
+# Functions the flat grammar can use; any other function name is what a refusal points at.
+_KNOWN_FUNCTIONS = {'SUM', 'COUNT', 'AVG', 'CAST', 'DATE', 'TIMESTAMP', 'COALESCE', 'NULLIF', 'CASE', 'IN', 'NOT', 'AND', 'OR'}
+
+
+def _locate_refusal(sql, message):
+    """1-based character position of what a refusal is about, or None (message text only)."""
+    try:
+        tokens = list(sqlglot.tokenize(sql, read='duckdb'))
+    except Exception:
+        return None
+    named = re.search(r'(?:field|column)s? ([A-Za-z_][A-Za-z0-9_.]*)', message)
+    if named:
+        wanted = named.group(1).split('.')[-1].lower()
+        for token in tokens:
+            if token.text.lower() == wanted:
+                return token.start + 1
+    if re.search(r'SUM, COUNT|aggregate|SUM must|Only SUM', message):
+        for token, following in zip(tokens, tokens[1:]):
+            if following.text == '(' and token.text.upper() not in _KNOWN_FUNCTIONS and token.text.replace('_', '').isalnum():
+                return token.start + 1
+    if re.search(r'registered measure|amount column|decimal column', message):
+        for token, paren, argument in zip(tokens, tokens[1:], tokens[2:]):
+            if token.text.upper() == 'SUM' and paren.text == '(':
+                return argument.start + 1
+    if re.search(r'literal|string-to-', message, re.I):
+        for token in tokens:
+            if token.token_type.name == 'STRING':
+                return token.start + 1
+    return None
+
+
 def parse_flat(sql, contract):
+    try:
+        return _parse_flat(sql, contract)
+    except CoreError as exc:
+        # Point at the refused part when the message names it; accepted SQL never reaches here.
+        if exc.code != 'unsupported_sql' or 'at character' in exc.message or not isinstance(sql, str):
+            raise
+        where = _locate_refusal(sql, exc.message)
+        if where is None:
+            raise
+        raise CoreError(exc.code, f"{exc.message.rstrip('.')} (at character {where}).") from exc
+
+
+def _parse_flat(sql, contract):
     contract = validate_contract(contract)
     ver = contract['version']
     dim_types = contract.get('dimension_types', {})

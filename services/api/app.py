@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import threading
+import time
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, Header, Query, Request, UploadFile
@@ -175,6 +176,26 @@ def create_app(database_url=None, data_dir=None, mode=None):
         start_sweeper(store, data_dir)  # erases expired guest accounts every few minutes
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=['localhost', '127.0.0.1', '[::1]', 'testserver', 'api', *hosting['hosts']])
 
+    from .rate_limit import Limiter
+    limiter = Limiter()
+    # Unhandled server errors since this process started, for the health check (no details exposed).
+    server_errors = {'count': 0, 'last_at': None}
+
+    @app.middleware('http')
+    async def address_limits(request: Request, call_next):
+        wait = limiter.check(request.url.path, request.client.host if request.client else 'unknown')
+        if wait is not None:
+            return JSONResponse({'error': {'code': 'TOO_MANY_REQUESTS', 'message': f'Too many requests from your network. Try again in {max(1, round(wait / 60))} minute{"s" if wait > 90 else ""}.'}},
+                                status_code=429, headers={'Retry-After': str(wait)})
+        try:
+            response = await call_next(request)
+        except Exception:
+            server_errors.update(count=server_errors['count'] + 1, last_at=time.time())
+            raise
+        if response.status_code >= 500:
+            server_errors.update(count=server_errors['count'] + 1, last_at=time.time())
+        return response
+
     @app.middleware('http')
     async def local_origin_and_limits(request: Request, call_next):
         # Hosted behind a proxy (Vercel): only requests carrying the proxy's shared secret reach the
@@ -245,23 +266,25 @@ def create_app(database_url=None, data_dir=None, mode=None):
         messages = ['.'.join(str(p) for p in e['loc']) + ': ' + e['msg'] for e in error.errors()]
         return JSONResponse({'error': {'code': 'VALIDATION_ERROR', 'message': '; '.join(messages)}}, status_code=422)
 
+    # Two reused threads for health probes: frequent uptime checks must not create threads each time.
+    from concurrent.futures import ThreadPoolExecutor
+    health_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='health')
+
     @app.get('/api/v1/health')
     def health():
         # Public and cheap for uptime monitors: never touches file storage; the database check
         # gives up after 2 seconds so a stalled database reports instead of hanging the probe.
-        from concurrent.futures import ThreadPoolExecutor, TimeoutError as Timeout
+        from concurrent.futures import TimeoutError as Timeout
         from .guests import full_access_emails, last_sweep
-        pool = ThreadPoolExecutor(max_workers=1)
         try:
             probe = lambda: store.database_ok() and (True if execution_mode == 'demo' else store.worker_available())
-            is_runner_available = pool.submit(probe).result(timeout=2)
+            is_runner_available = health_pool.submit(probe).result(timeout=2)
             database = 'ok'
         except (Timeout, Exception):
             is_runner_available, database = False, 'unavailable'
-        finally:
-            pool.shutdown(wait=False)
         body = {'status': 'ok' if database == 'ok' else 'degraded', 'mode': execution_mode,
-                'runner_available': is_runner_available, 'database': database}
+                'runner_available': is_runner_available, 'database': database,
+                'server_errors': {'since_start': server_errors['count'], 'last_at': server_errors['last_at']}}
         if full_access_emails():
             body['guest_sweep'] = last_sweep()
         return body
@@ -810,8 +833,11 @@ def create_app(database_url=None, data_dir=None, mode=None):
         auth = get_auth_context(request, store)
         verify_object_access(store, store.investigation(ident), auth, allowed_roles=('owner', 'analyst'))
         body = await request.json()
+        if not isinstance(body, dict):
+            raise DomainError('INVALID_METADATA', 'Send a new title or conclusion.')
         from .item_management import rename_investigation
-        return rename_investigation(store, ident, body.get('title') if isinstance(body, dict) else None)
+        editor = None if auth.get('is_unverified') else auth['user'].get('name') or auth['user'].get('email')
+        return rename_investigation(store, ident, body.get('title'), body.get('decision'), editor)
 
     @app.delete('/api/v1/investigations/{ident}')
     def delete_investigation_route(ident: str, request: Request):
@@ -1793,15 +1819,15 @@ def create_app(database_url=None, data_dir=None, mode=None):
         return {'items': items, 'total': total, 'offset': offset, 'limit': limit}
 
     @app.get('/api/v1/comparisons/{ident}/evidence-concentration')
-    def evidence_concentration_route(ident: str, request: Request):
+    def evidence_concentration_route(ident: str, request: Request, grouping: str = Query('', pattern='^(|day|week|month)$')):
         """Values and two-column combinations that hold far more of the difference than of the records."""
         auth = get_auth_context(request, store)
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
-        return read_concentration(run)
+        return read_concentration(run, grouping=grouping)
 
-    def read_concentration(run):
+    def read_concentration(run, grouping=''):
         if expired_details(run):
             return expired_details(run)
         result = run.get('result') or {}
@@ -1814,7 +1840,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             return {'available': False, 'reason': 'This comparison has no stored record columns.', 'items': [], 'pairs': []}
         from .evidence_concentration import concentration
         path, key, verify_all = evidence_access(run)
-        buckets = {c: ('day' if column_type(run, c) == 'timestamp' else None) for c in columns}
+        buckets = {c: date_bucket(run, c, grouping) for c in columns}
         try:
             return concentration(path, key, verify_all, columns, context, buckets, ratio=result.get('ratio'))
         except (ValueError, KeyError, TypeError, OSError) as error:
@@ -1903,8 +1929,15 @@ def create_app(database_url=None, data_dir=None, mode=None):
             raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
 
     @app.get('/api/v1/comparisons/{ident}/evidence.csv')
-    def evidence_csv(ident: str, request: Request):
-        """Every record's contribution to both totals, as CSV (verified before streaming)."""
+    def evidence_csv(ident: str, request: Request, q: str = Query('', max_length=256), changed_only: bool = Query(False),
+                     category: str = Query('', pattern='^(|excluded|added|value_changed|removed|entered_filter|left_filter)$'),
+                     column: str = Query('', max_length=200), value: str = Query('null', max_length=2000), no_match: bool = Query(False),
+                     grouping: str = Query('', pattern='^(|day|week|month)$')):
+        """Every record's contribution to both totals, as CSV (verified before streaming).
+
+        The same search and filters as the Records view narrow it to what is on screen
+        (``column``/``value`` is one Where it sits group, exactly as the breakdown returned it).
+        """
         auth = get_auth_context(request, store)
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
@@ -1921,6 +1954,27 @@ def create_app(database_url=None, data_dir=None, mode=None):
             except (ValueError, KeyError, TypeError, OSError) as error:
                 raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
             rows_iter = evidence_cache.iter_rows(path, key, verify_all)
+        keep = []
+        if changed_only:
+            keep.append(lambda row: evidence_cache._magnitude(row.get('delta')))
+        if q.strip():
+            needle = q.strip().lower()
+            keep.append(lambda row: needle in evidence_cache.record_key(row).lower())
+        if category:
+            keep.append(lambda row: evidence_cache.category_of(row) == category)
+        if column:
+            context, known = run_context(run)
+            if column not in known:
+                raise DomainError('INVALID_COLUMN', f"'{column}' is not a filter column of this dataset.")
+            try:
+                wanted = json.loads(value)
+            except ValueError as error:
+                raise DomainError('INVALID_VALUE', 'The group value is not valid.') from error
+            wanted = evidence_cache.NO_MATCH if no_match else wanted
+            bucket = date_bucket(run, column, grouping)
+            keep.append(lambda row: evidence_cache._group_value(row, context, column, bucket) == wanted)
+        if keep:
+            rows_iter = (row for row in rows_iter if all(test(row) for test in keep))
         ratio = result.get('ratio')
         if ratio:
             columns = ['record', 'current_numerator_input', 'current_denominator_input', 'current_included', 'proposed_included',
@@ -1965,7 +2019,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 yield from generate()
 
         return StreamingResponse(pinned_generate(), media_type='text/csv',
-                                 headers={'Content-Disposition': f'attachment; filename="metricguard-{ident}-records.csv"'})
+                                 headers={'Content-Disposition': f'attachment; filename="metricguard-{ident}-records{"-filtered" if keep else ""}.csv"'})
 
     def evidence_access(run):
         """Artifact path, cache key and a full-verification callback for one run attempt."""
@@ -2194,7 +2248,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         if project_id:
             member = verify_project_access(store, project_id, auth)  # non/revoked member -> 403
             role = member.get('role')
-        return {
+        body = {
             'verified': True,
             'session': bool(auth.get('via_session')),
             'home_workspace_id': home['id'] if home else None,
@@ -2206,6 +2260,15 @@ def create_app(database_url=None, data_dir=None, mode=None):
             'project_id': project_id,
             'role': role,
         }
+        # Sliding sign-in: the app asks for its identity on every page, so an active person whose
+        # session has under half its life left gets a fresh one instead of an abrupt sign-out.
+        token = request.cookies.get(SESSION_COOKIE)
+        if auth.get('via_session') and token and store.renew_session(token, SESSION_SECONDS, SESSION_SECONDS // 2):
+            response = JSONResponse(body)
+            response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_SECONDS, httponly=True, samesite='strict', path='/api',
+                                secure=hosting['secure_cookies'])
+            return response
+        return body
 
     def openable_projects(request: Request):
         auth = get_auth_context(request, store)

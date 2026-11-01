@@ -50,3 +50,6 @@ graphify-out/cache/
 
 # Marketing video sources and renders: kept locally, not published.
 /marketing/
+
+# Local screenshots and PDFs from UI reviews: kept locally, not published.
+/output/

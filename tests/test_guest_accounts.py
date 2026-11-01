@@ -130,3 +130,25 @@ def test_returning_guest_is_told_once_and_only_a_hash_is_kept(setup, guest_mode,
     client.cookies.clear()
     _, state = begin(client, 'github')
     assert '?notice' not in callback(client, 'github', state).headers['location']
+
+
+def test_sweep_promotes_a_guest_added_to_the_list_instead_of_erasing(setup, guest_mode, tmp_path, monkeypatch):
+    client, store, _, profile = setup
+    profile['email'] = 'late@example.com'
+    pid = sign_in(client, 'github')
+    user = store.get_user_by_session(client.cookies.get('mg_session'))
+    with store.engine.begin() as conn:
+        conn.execute(update(guest_accounts).values(expires_at=time.time() - 1))
+    monkeypatch.setenv('METRICGUARD_FULL_ACCESS_EMAILS', 'owner@example.com, late@example.com')
+    assert guests.sweep(store, tmp_path) == []
+    assert store.get_user(user['id']) and store.guest_expiry(user['id']) is None and store.get_project_quota(pid) is None
+
+
+def test_members_list_marks_guests_and_datasets_know_their_last_comparison(setup, guest_mode):
+    client, store, _, profile = setup
+    profile['email'] = 'stranger@example.com'
+    sign_in(client, 'github')
+    guest = store.get_user_by_session(client.cookies.get('mg_session'))
+    members = store.list_project_members('personal-' + guest['id'])
+    assert members[0]['guest_expires_at'] == pytest.approx(store.guest_expiry(guest['id']))
+    assert 'last_compared_at' not in str(store.bootstrap('personal-' + guest['id'])['snapshots'])  # no datasets yet

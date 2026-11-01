@@ -57,11 +57,11 @@ export function MetricsView({
   // Navigation / Selection
   const [selectedMetricId, setSelectedMetricId] = useState<string | null>(metricId || null);
   const [detailTab, setDetailTab] = useState<'implementations' | 'versions' | 'impact' | 'decisions' | 'contracts'>(
-    (activeTab as 'implementations' | 'versions' | 'impact' | 'decisions' | 'contracts') || 'implementations'
+    ((activeTab === 'impact' ? 'implementations' : activeTab) as 'implementations' | 'versions' | 'impact' | 'decisions' | 'contracts') || 'implementations'
   );
   useEffect(() => {
     if (['implementations', 'versions', 'impact', 'decisions', 'contracts'].includes(activeTab)) {
-      setDetailTab(activeTab as typeof detailTab);
+      setDetailTab((activeTab === 'impact' ? 'implementations' : activeTab) as typeof detailTab);
     }
   }, [activeTab]);
 
@@ -506,6 +506,62 @@ export function MetricsView({
           boundDefs.some((d) => d.versions.some((v) => v.id === r.target_version_id)))
     );
 
+    const checkCards = candidateRuns.map((r) => {
+      const res = r.result;
+      if (!res) return null;
+      const defined = isDefinedComparison(res);
+      const isZero = defined && isExactZero(res.delta_target_minus_baseline);
+
+      return (
+        <div key={r.id} className="drift-summary-card">
+          <div className="implementation-card-header">
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                <span className={`status-pill ${isZero ? 'ready' : 'neutral'}`}>
+                  {!defined ? 'Difference unavailable' : isZero ? 'Same result as approved' : 'Difference from approved'}
+                </span>
+                <span className="source-badge">Snapshot: {r.snapshot_id}</span>
+              </div>
+              <div className="muted-text font-small">Evaluated on {r.created_at ? r.created_at.slice(0, 19).replace('T', ' ') : 'Recent'}</div>
+            </div>
+
+            {onOpenRun && (
+              <button
+                type="button"
+                className="button primary"
+                onClick={() => onOpenRun(r)}
+              >
+                Open comparison
+              </button>
+            )}
+          </div>
+
+          <div className="drift-comparison-grid">
+            <div className="drift-value-box">
+              <span className="box-label">Approved value</span>
+              <span className="box-num">{valueWithUnit(resultDisplayValue(res, res.baseline_value), resultUnit(res))}</span>
+            </div>
+            <div className="drift-value-box target-box">
+              <span className="box-label">Proposed value</span>
+              <span className="box-num">{valueWithUnit(resultDisplayValue(res, res.target_value), resultUnit(res))}</span>
+            </div>
+            <div className={`drift-value-box ${isZero ? 'delta-zero' : ''}`}>
+              <span className="box-label">Difference from approved</span>
+              <span className="box-num">{metricDifference(res)}</span>
+            </div>
+            <div className="drift-value-box">
+              <span className="box-label">Percentage change</span>
+              <span className="box-num">{res.relative_change_percent_display ?? 'Unavailable'}</span>
+            </div>
+          </div>
+
+          <div style={{ fontSize: '13px', color: 'var(--text-2)' }}>
+            Open the comparison to see which records explain this difference.
+          </div>
+        </div>
+      );
+    });
+
     return (
       <div className="metric-detail-view">
         {comparisonDialog}
@@ -598,451 +654,397 @@ export function MetricsView({
           </div>
         </div>
 
-        {/* Navigation Tabs */}
-        <div className="section-nav-tabs">
-          <button
-            type="button"
-            className={`section-tab-button ${detailTab === 'implementations' ? 'active' : ''}`}
-            onClick={() => handleDetailTabClick('implementations')}
-          >
-            Calculations ({(activeBinding ? 1 : 0) + candidateBindings.length + retiredBindings.length})
-          </button>
-          <button
-            type="button"
-            className={`section-tab-button ${detailTab === 'versions' ? 'active' : ''}`}
-            onClick={() => handleDetailTabClick('versions')}
-          >
-            Version history ({versionHistoryList.length})
-          </button>
-          <button
-            type="button"
-            className={`section-tab-button ${detailTab === 'impact' ? 'active' : ''}`}
-            onClick={() => handleDetailTabClick('impact')}
-          >
-            Proposed changes and their impact ({candidateRuns.length})
-          </button>
-          <button
-            type="button"
-            className={`section-tab-button ${detailTab === 'decisions' ? 'active' : ''}`}
-            onClick={() => handleDetailTabClick('decisions')}
-          >
-            Decisions & changes ({transitions.length + baselines.length})
-          </button>
-          <button type="button" className={`section-tab-button ${detailTab === 'contracts' ? 'active' : ''}`}
-            onClick={() => handleDetailTabClick('contracts')}>Checks</button>
-        </div>
-
-        {detailTab === 'contracts' && <MetricContractsPanel key={`${projectId}:${selectedMetric.id}`}
-          projectId={projectId} metric={selectedMetric} definitions={definitions} bindings={bindings} snapshots={data.snapshots || []}
-          relationalContracts={(data as RelationalBootstrap).relational_contracts || []} />}
-
-        {/* Tab 1: Implementations */}
-        {detailTab === 'implementations' && (
-          <div className="implementations-list">
-            {/* Approved calculation */}
-            <div className="implementation-group-title">Approved calculation</div>
-            {activeDef && activeVersion ? (
-              <div className="implementation-card active">
-                <div className="implementation-card-header">
-                  <div className="implementation-card-title-line">
-                    <span className="status-pill ready">
-                      <span className="status-dot" />
-                      APPROVED
-                    </span>
-                    <span className="implementation-name">{activeDef.name}</span>
-                    <span className="source-badge">{activeDef.source_label}</span>
-                  </div>
-                  <div className="implementation-card-actions">
-                    <span className="badge font-semibold" style={{ background: 'var(--tint)', color: 'var(--link)' }}>
-                      Approved baseline v{activeVersion.version_number}
-                    </span>
-                  </div>
+        <section className="implementations-list">
+          {/* Approved calculation */}
+          <h2>Approved calculation</h2>
+          {activeDef && activeVersion ? (
+            <div className="implementation-card active">
+              <div className="implementation-card-header">
+                <div className="implementation-card-title-line">
+                  <span className="status-pill ready">
+                    <span className="status-dot" />
+                    APPROVED
+                  </span>
+                  <span className="implementation-name">{activeDef.name}</span>
+                  <span className="source-badge">{activeDef.source_label}</span>
                 </div>
-
-                <div className="implementation-card-meta-grid">
-                  <div className="implementation-meta-item">
-                    <span className="meta-label">Bound version</span>
-                    <span className="meta-value mono">v{activeVersion.version_number}</span>
-                  </div>
-                  <div className="implementation-meta-item">
-                    <span className="meta-label">Next step</span>
-                    <span className="meta-value font-semibold" style={{ color: supportInfo.isAnalyzable ? 'var(--link)' : 'var(--warn)' }}>
-                      {supportInfo.label}
-                    </span>
-                  </div>
-                  <div className="implementation-meta-item">
-                    <span className="meta-label">Observed date</span>
-                    <span className="meta-value">{activeVersion.observed_at ? activeVersion.observed_at.slice(0, 10) : 'Recent'}</span>
-                  </div>
-                  <div className="implementation-meta-item">
-                    <span className="meta-label">Change kind</span>
-                    <span className="meta-value">{activeVersion.change_kind || 'Production query'}</span>
-                  </div>
+                <div className="implementation-card-actions">
+                  <span className="badge font-semibold" style={{ background: 'var(--tint)', color: 'var(--link)' }}>
+                    Approved baseline v{activeVersion.version_number}
+                  </span>
                 </div>
-
-                {activeVersion.raw_sql && (
-                  <div className="sql-preview-box">
-                    <pre>{activeVersion.raw_sql}</pre>
-                  </div>
-                )}
               </div>
-            ) : (
-              <div className="empty-card" style={{ padding: '24px', textAlign: 'center', background: 'var(--panel)', border: '1px dashed var(--line)', borderRadius: '8px' }}>
-                <p style={{ margin: '0 0 12px', color: 'var(--muted)' }}>No approved calculation is linked to this metric.</p>
+
+              <div className="implementation-card-meta-grid">
+                <div className="implementation-meta-item">
+                  <span className="meta-label">Linked version</span>
+                  <span className="meta-value mono">v{activeVersion.version_number}</span>
+                </div>
+                <div className="implementation-meta-item">
+                  <span className="meta-label">Next step</span>
+                  <span className="meta-value font-semibold" style={{ color: supportInfo.isAnalyzable ? 'var(--link)' : 'var(--warn)' }}>
+                    {supportInfo.label}
+                  </span>
+                </div>
+                <div className="implementation-meta-item">
+                  <span className="meta-label">Observed date</span>
+                  <span className="meta-value">{activeVersion.observed_at ? activeVersion.observed_at.slice(0, 10) : 'Recent'}</span>
+                </div>
+                <div className="implementation-meta-item">
+                  <span className="meta-label">Change kind</span>
+                  <span className="meta-value">{activeVersion.change_kind || 'Production query'}</span>
+                </div>
+              </div>
+
+              {activeVersion.raw_sql && (
+                <div className="sql-preview-box">
+                  <pre>{activeVersion.raw_sql}</pre>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="empty-card" style={{ padding: '24px', textAlign: 'center', background: 'var(--panel)', border: '1px dashed var(--line)', borderRadius: '8px' }}>
+              <p style={{ margin: '0 0 12px', color: 'var(--muted)' }}>No approved calculation is linked to this metric.</p>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => setShowAddImplModal(true)}
+              >
+                <Plus size={14} /> Link a calculation
+              </button>
+            </div>
+          )}
+
+        </section>
+
+        {/* Latest check */}
+        <div className="drift-impact-container">
+          <div className="unassigned-header">
+            <h2>Latest check</h2>
+            <p>How proposed calculations compare with the approved calculation on the same data.</p>
+          </div>
+
+          {candidateRuns.length > 0 ? (
+            checkCards[0]
+          ) : (
+            <div className="empty-card" style={{ padding: '36px', textAlign: 'center', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px' }}>
+              <TrendingUp size={32} color="var(--link)" style={{ margin: '0 auto 12px' }} />
+              <h4 style={{ margin: '0 0 6px', fontSize: '16px', color: 'var(--ink)' }}>No comparisons recorded yet</h4>
+              <p style={{ margin: '0 0 16px', color: 'var(--muted)', fontSize: '13px', maxWidth: '420px', marginLeft: 'auto', marginRight: 'auto' }}>
+                Compare a proposed calculation with the approved calculation using the same data load.
+              </p>
+              {supportInfo.isAnalyzable && activeVersion && onComparePair && (
                 <button
                   type="button"
                   className="button secondary"
-                  onClick={() => setShowAddImplModal(true)}
+                  onClick={() => {
+                    const cand = versionHistoryList.find((v) => v.status === 'candidate' &&
+                      ['executable', 'supported'].includes(v.version.support_state) && matchingMetricLoads(activeVersion, data.snapshots, v.version).length > 0);
+                    if (cand) {
+                      startComparison(activeVersion, cand.version, 'candidate_impact');
+                    } else {
+                      startComparison(activeVersion, activeVersion, 'baseline_audit');
+                    }
+                  }}
                 >
-                  <Plus size={14} /> Link a calculation
+                  Compare calculations
                 </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        <h2>History</h2>
+        <details>
+          <summary>All versions and links</summary>
+          {checkCards.length > 1 && <div className="drift-impact-container"><h3>Earlier checks</h3>{checkCards.slice(1)}</div>}
+          {/* Navigation Tabs */}
+          <div className="section-nav-tabs">
+            <button
+              type="button"
+              className={`section-tab-button ${detailTab === 'implementations' ? 'active' : ''}`}
+              onClick={() => handleDetailTabClick('implementations')}
+            >
+              Links ({(activeBinding ? 1 : 0) + candidateBindings.length + retiredBindings.length})
+            </button>
+            <button
+              type="button"
+              className={`section-tab-button ${detailTab === 'versions' ? 'active' : ''}`}
+              onClick={() => handleDetailTabClick('versions')}
+            >
+              Version history ({versionHistoryList.length})
+            </button>
+            <button
+              type="button"
+              className={`section-tab-button ${detailTab === 'decisions' ? 'active' : ''}`}
+              onClick={() => handleDetailTabClick('decisions')}
+            >
+              Decisions & changes ({transitions.length + baselines.length})
+            </button>
+            <button type="button" className={`section-tab-button ${detailTab === 'contracts' ? 'active' : ''}`}
+              onClick={() => handleDetailTabClick('contracts')}>Checks</button>
+          </div>
+
+          {/* Calculation links */}
+          {detailTab === 'implementations' && (
+            <div className="implementations-list">
+              {/* Candidate Implementations */}
+              <div className="implementation-group-title">Trial calculations ({candidateBindings.length})</div>
+              {candidateBindings.length > 0 ? (
+                candidateBindings.map((c) => {
+                  const candDef = definitions.find((d) => d.id === c.definition_id);
+                  const candVer = candDef?.versions.find((v) => v.id === c.approved_version_id) || (candDef ? latest(candDef) : null);
+                  if (!candDef || !candVer) return null;
+
+                  return (
+                    <div key={c.id} className="implementation-card candidate">
+                      <div className="implementation-card-header">
+                        <div className="implementation-card-title-line">
+                          <span className="status-pill warn">
+                            <span className="status-dot" />
+                            TRIAL
+                          </span>
+                          <span className="implementation-name">{candDef.name}</span>
+                          <span className="source-badge">{candDef.source_label}</span>
+                        </div>
+                        <div className="implementation-card-actions">
+                          {supportInfo.isAnalyzable && activeVersion && onComparePair && (
+                            <button
+                              type="button"
+                              className="button secondary"
+                              disabled={!matchingMetricLoads(activeVersion, data.snapshots, candVer).length || !['executable', 'supported'].includes(candVer.support_state)}
+                              onClick={() => startComparison(activeVersion, candVer, 'candidate_review')}
+                            >
+                              Compare with approved
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="button primary"
+                            onClick={() =>
+                              setPromoteCandidateTarget({
+                                metricId: selectedMetric.id,
+                                definitionId: candDef.id,
+                                versionId: candVer.id,
+                                defName: candDef.name,
+                              })
+                            }
+                          >
+                            Approve calculation
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="implementation-card-meta-grid">
+                        <div className="implementation-meta-item">
+                          <span className="meta-label">Target version</span>
+                          <span className="meta-value mono">v{candVer.version_number}</span>
+                        </div>
+                        <div className="implementation-meta-item">
+                          <span className="meta-label">Next step</span>
+                          <span className="meta-value">
+                            {!candVer.contract_hash ? 'Not linked to a dataset — add the SQL again for a dataset' : matchingMetricLoads(candVer, data.snapshots).length > 0 && ['executable', 'supported'].includes(candVer.support_state) ? 'Ready to compare' : 'Add SQL for a dataset'}
+                          </span>
+                        </div>
+                        <div className="implementation-meta-item">
+                          <span className="meta-label">Bound at</span>
+                          <span className="meta-value">{c.created_at ? c.created_at.slice(0, 10) : 'Recent'}</span>
+                        </div>
+                        <div className="implementation-meta-item">
+                          <span className="meta-label">Rationale</span>
+                          <span className="meta-value">Trial result</span>
+                        </div>
+                      </div>
+
+                      {candVer.raw_sql && (
+                        <div className="sql-preview-box">
+                          <pre>{candVer.raw_sql}</pre>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                <div style={{ padding: '16px', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '6px', color: 'var(--muted)', fontSize: '13px' }}>
+                  No trial calculations are waiting for review.
+                </div>
+              )}
+
+              {/* Retired Implementations */}
+              {retiredBindings.length > 0 && (
+                <>
+                  <div className="implementation-group-title">Retired calculations ({retiredBindings.length})</div>
+                  {retiredBindings.map((r) => {
+                    const retDef = definitions.find((d) => d.id === r.definition_id);
+                    return (
+                      <div key={r.id} className="implementation-card" style={{ opacity: 0.7 }}>
+                        <div className="implementation-card-header">
+                          <div className="implementation-card-title-line">
+                            <span className="status-pill neutral">RETIRED</span>
+                            <span className="implementation-name">{retDef?.name || r.definition_id}</span>
+                          </div>
+                          <span className="muted-text font-small">
+                            Retired at: {r.retired_at ? r.retired_at.slice(0, 10) : 'Recorded'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Version history */}
+          {detailTab === 'versions' && (
+            <div className="implementations-list">
+              <div className="unassigned-header">
+                <h3>Version timeline</h3>
+                <p>Previous calculations and the versions approved for this metric.</p>
               </div>
-            )}
 
-            {/* Candidate Implementations */}
-            <div className="implementation-group-title">Trial calculations ({candidateBindings.length})</div>
-            {candidateBindings.length > 0 ? (
-              candidateBindings.map((c) => {
-                const candDef = definitions.find((d) => d.id === c.definition_id);
-                const candVer = candDef?.versions.find((v) => v.id === c.approved_version_id) || (candDef ? latest(candDef) : null);
-                if (!candDef || !candVer) return null;
-
-                return (
-                  <div key={c.id} className="implementation-card candidate">
+              {versionHistoryList.length > 0 ? (
+                versionHistoryList.map(({ definition: def, version: ver, isApproved, status }) => (
+                  <div key={ver.id} className={`implementation-card ${isApproved ? 'active' : ''}`}>
                     <div className="implementation-card-header">
                       <div className="implementation-card-title-line">
-                        <span className="status-pill warn">
-                          <span className="status-dot" />
-                          TRIAL
+                        <span className="mono-cell font-semibold" style={{ fontSize: '15px' }}>
+                          v{ver.version_number}
                         </span>
-                        <span className="implementation-name">{candDef.name}</span>
-                        <span className="source-badge">{candDef.source_label}</span>
+                        {isApproved ? (
+                          <span className="status-pill ready">
+                            <CheckCircle2 size={13} />
+                            Approved baseline
+                          </span>
+                        ) : status === 'candidate' ? (
+                          <span className="status-pill warn">Trial</span>
+                        ) : (
+                          <span className="status-pill neutral">Superseded</span>
+                        )}
+                        <span className="source-badge">{def.name}</span>
                       </div>
+
                       <div className="implementation-card-actions">
-                        {supportInfo.isAnalyzable && activeVersion && onComparePair && (
+                        {activeVersion && activeVersion.id !== ver.id && onComparePair && matchingMetricLoads(activeVersion, data.snapshots, ver).length > 0 && ['executable', 'supported'].includes(ver.support_state) && (
                           <button
                             type="button"
                             className="button secondary"
-                            disabled={!matchingMetricLoads(activeVersion, data.snapshots, candVer).length || !['executable', 'supported'].includes(candVer.support_state)}
-                            onClick={() => startComparison(activeVersion, candVer, 'candidate_review')}
+                            onClick={() => startComparison(activeVersion, ver, 'version_comparison')}
                           >
                             Compare with approved
                           </button>
                         )}
-                        <button
-                          type="button"
-                          className="button primary"
-                          onClick={() =>
-                            setPromoteCandidateTarget({
-                              metricId: selectedMetric.id,
-                              definitionId: candDef.id,
-                              versionId: candVer.id,
-                              defName: candDef.name,
-                            })
-                          }
-                        >
-                          Approve calculation
-                        </button>
                       </div>
                     </div>
 
                     <div className="implementation-card-meta-grid">
                       <div className="implementation-meta-item">
-                        <span className="meta-label">Target version</span>
-                        <span className="meta-value mono">v{candVer.version_number}</span>
+                        <span className="meta-label">Seen at</span>
+                        <span className="meta-value">{ver.observed_at ? ver.observed_at.slice(0, 19).replace('T', ' ') : 'Recent'}</span>
                       </div>
                       <div className="implementation-meta-item">
                         <span className="meta-label">Next step</span>
                         <span className="meta-value">
-                          {!candVer.contract_hash ? 'Not linked to a dataset — add the SQL again for a dataset' : matchingMetricLoads(candVer, data.snapshots).length > 0 && ['executable', 'supported'].includes(candVer.support_state) ? 'Ready to compare' : 'Add SQL for a dataset'}
+                          {!ver.contract_hash ? 'Not linked to a dataset — add the SQL again for a dataset' : matchingMetricLoads(ver, data.snapshots).length > 0 && ['executable', 'supported'].includes(ver.support_state) ? 'Ready to compare' : 'Add SQL for a dataset'}
                         </span>
                       </div>
                       <div className="implementation-meta-item">
-                        <span className="meta-label">Bound at</span>
-                        <span className="meta-value">{c.created_at ? c.created_at.slice(0, 10) : 'Recent'}</span>
+                        <span className="meta-label">Time column</span>
+                        <span className="meta-value mono">{ver.time_column || 'None specified'}</span>
                       </div>
                       <div className="implementation-meta-item">
-                        <span className="meta-label">Rationale</span>
-                        <span className="meta-value">Trial result</span>
+                        <span className="meta-label">Source Hash</span>
+                        <span className="meta-value mono">{ver.raw_hash.slice(0, 10)}…</span>
                       </div>
                     </div>
 
-                    {candVer.raw_sql && (
+                    {ver.raw_sql && (
                       <div className="sql-preview-box">
-                        <pre>{candVer.raw_sql}</pre>
+                        <pre>{ver.raw_sql}</pre>
                       </div>
                     )}
                   </div>
-                );
-              })
-            ) : (
-              <div style={{ padding: '16px', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '6px', color: 'var(--muted)', fontSize: '13px' }}>
-                No trial calculations are waiting for review.
-              </div>
-            )}
-
-            {/* Retired Implementations */}
-            {retiredBindings.length > 0 && (
-              <>
-                <div className="implementation-group-title">Retired calculations ({retiredBindings.length})</div>
-                {retiredBindings.map((r) => {
-                  const retDef = definitions.find((d) => d.id === r.definition_id);
-                  return (
-                    <div key={r.id} className="implementation-card" style={{ opacity: 0.7 }}>
-                      <div className="implementation-card-header">
-                        <div className="implementation-card-title-line">
-                          <span className="status-pill neutral">RETIRED</span>
-                          <span className="implementation-name">{retDef?.name || r.definition_id}</span>
-                        </div>
-                        <span className="muted-text font-small">
-                          Retired at: {r.retired_at ? r.retired_at.slice(0, 10) : 'Recorded'}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </>
-            )}
-          </div>
-        )}
-
-        {/* Tab 2: Version History */}
-        {detailTab === 'versions' && (
-          <div className="implementations-list">
-            <div className="unassigned-header">
-              <h3>Version timeline</h3>
-              <p>Previous calculations and the versions approved for this metric.</p>
-            </div>
-
-            {versionHistoryList.length > 0 ? (
-              versionHistoryList.map(({ definition: def, version: ver, isApproved, status }) => (
-                <div key={ver.id} className={`implementation-card ${isApproved ? 'active' : ''}`}>
-                  <div className="implementation-card-header">
-                    <div className="implementation-card-title-line">
-                      <span className="mono-cell font-semibold" style={{ fontSize: '15px' }}>
-                        v{ver.version_number}
-                      </span>
-                      {isApproved ? (
-                        <span className="status-pill ready">
-                          <CheckCircle2 size={13} />
-                          Approved baseline
-                        </span>
-                      ) : status === 'candidate' ? (
-                        <span className="status-pill warn">Trial</span>
-                      ) : (
-                        <span className="status-pill neutral">Superseded</span>
-                      )}
-                      <span className="source-badge">{def.name}</span>
-                    </div>
-
-                    <div className="implementation-card-actions">
-                      {activeVersion && activeVersion.id !== ver.id && onComparePair && matchingMetricLoads(activeVersion, data.snapshots, ver).length > 0 && ['executable', 'supported'].includes(ver.support_state) && (
-                        <button
-                          type="button"
-                          className="button secondary"
-                          onClick={() => startComparison(activeVersion, ver, 'version_comparison')}
-                        >
-                          Compare with approved
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="implementation-card-meta-grid">
-                    <div className="implementation-meta-item">
-                      <span className="meta-label">Observed timestamp</span>
-                      <span className="meta-value">{ver.observed_at ? ver.observed_at.slice(0, 19).replace('T', ' ') : 'Recent'}</span>
-                    </div>
-                    <div className="implementation-meta-item">
-                      <span className="meta-label">Next step</span>
-                      <span className="meta-value">
-                        {!ver.contract_hash ? 'Not linked to a dataset — add the SQL again for a dataset' : matchingMetricLoads(ver, data.snapshots).length > 0 && ['executable', 'supported'].includes(ver.support_state) ? 'Ready to compare' : 'Add SQL for a dataset'}
-                      </span>
-                    </div>
-                    <div className="implementation-meta-item">
-                      <span className="meta-label">Time column</span>
-                      <span className="meta-value mono">{ver.time_column || 'None specified'}</span>
-                    </div>
-                    <div className="implementation-meta-item">
-                      <span className="meta-label">Source Hash</span>
-                      <span className="meta-value mono">{ver.raw_hash.slice(0, 10)}…</span>
-                    </div>
-                  </div>
-
-                  {ver.raw_sql && (
-                    <div className="sql-preview-box">
-                      <pre>{ver.raw_sql}</pre>
-                    </div>
-                  )}
+                ))
+              ) : (
+                <div className="empty-card" style={{ padding: '24px', textAlign: 'center', background: 'var(--panel)' }}>
+                  <p className="muted-text">No recorded versions found for this metric.</p>
                 </div>
-              ))
-            ) : (
-              <div className="empty-card" style={{ padding: '24px', textAlign: 'center', background: 'var(--panel)' }}>
-                <p className="muted-text">No recorded versions found for this metric.</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Tab 3: Difference from approved */}
-        {detailTab === 'impact' && (
-          <div className="drift-impact-container">
-            <div className="unassigned-header">
-              <h3>Difference from approved</h3>
-              <p>How proposed calculations compare with the approved calculation on the same data.</p>
+              )}
             </div>
+          )}
 
-            {candidateRuns.length > 0 ? (
-              candidateRuns.map((r) => {
-                const res = r.result;
-                if (!res) return null;
-                const defined = isDefinedComparison(res);
-                const isZero = defined && isExactZero(res.delta_target_minus_baseline);
+          {/* Decisions & changes */}
+          {detailTab === 'decisions' && (
+            <div className="decision-timeline">
+              <div className="unassigned-header">
+                <h3>Approval history</h3>
+                <p>Historical promotions, version approvals, and change records for {selectedMetric.display_name}.</p>
+              </div>
 
-                return (
-                  <div key={r.id} className="drift-summary-card">
-                    <div className="implementation-card-header">
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                          <span className={`status-pill ${isZero ? 'ready' : 'neutral'}`}>
-                            {!defined ? 'Difference unavailable' : isZero ? 'Same result as approved' : 'Difference from approved'}
+              {loadingDetail && (
+                <div style={{ padding: '12px', color: 'var(--muted)', fontSize: '13px' }}>
+                  Loading transition history…
+                </div>
+              )}
+
+              {transitions.length > 0 ? (
+                transitions.map((t) => (
+                  <div key={t.id} className="timeline-node">
+                    <div className="timeline-node-icon">
+                      <GitCommit size={16} />
+                    </div>
+                    <div className="timeline-node-content">
+                      <div className="timeline-node-title">
+                        {t.transition_kind.replace(/_/g, ' ').toUpperCase()}
+                      </div>
+                      <div className="timeline-node-meta">
+                        <span>Actor: {memberName(t.actor_id, members)}</span>
+                        <span>·</span>
+                        <span>Recorded: {t.created_at ? t.created_at.slice(0, 19).replace('T', ' ') : 'Recent'}</span>
+                      </div>
+                      <div className="timeline-node-details">
+                        {t.previous_approved_version_id && (
+                          <span>
+                            Prior version: <span className="mono-cell">{t.previous_approved_version_id.slice(0, 8)}</span> →{' '}
                           </span>
-                          <span className="source-badge">Snapshot: {r.snapshot_id}</span>
-                        </div>
-                        <div className="muted-text font-small">Evaluated on {r.created_at ? r.created_at.slice(0, 19).replace('T', ' ') : 'Recent'}</div>
-                      </div>
-
-                      {onOpenRun && (
-                        <button
-                          type="button"
-                          className="button primary"
-                          onClick={() => onOpenRun(r)}
-                        >
-                          Open comparison
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="drift-comparison-grid">
-                      <div className="drift-value-box">
-                        <span className="box-label">Approved value</span>
-                        <span className="box-num">{valueWithUnit(resultDisplayValue(res, res.baseline_value), resultUnit(res))}</span>
-                      </div>
-                      <div className="drift-value-box target-box">
-                        <span className="box-label">Proposed value</span>
-                        <span className="box-num">{valueWithUnit(resultDisplayValue(res, res.target_value), resultUnit(res))}</span>
-                      </div>
-                      <div className={`drift-value-box ${isZero ? 'delta-zero' : ''}`}>
-                        <span className="box-label">Difference from approved</span>
-                        <span className="box-num">{metricDifference(res)}</span>
-                      </div>
-                      <div className="drift-value-box">
-                        <span className="box-label">Percentage change</span>
-                        <span className="box-num">{res.relative_change_percent_display ?? 'Unavailable'}</span>
-                      </div>
-                    </div>
-
-                    <div style={{ fontSize: '13px', color: 'var(--text-2)' }}>
-                      Open the comparison to see which records explain this difference.
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <div className="empty-card" style={{ padding: '36px', textAlign: 'center', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px' }}>
-                <TrendingUp size={32} color="var(--link)" style={{ margin: '0 auto 12px' }} />
-                <h4 style={{ margin: '0 0 6px', fontSize: '16px', color: 'var(--ink)' }}>No comparisons recorded yet</h4>
-                <p style={{ margin: '0 0 16px', color: 'var(--muted)', fontSize: '13px', maxWidth: '420px', marginLeft: 'auto', marginRight: 'auto' }}>
-                  Compare a proposed calculation with the approved calculation using the same data load.
-                </p>
-                {supportInfo.isAnalyzable && activeVersion && onComparePair && (
-                  <button
-                    type="button"
-                    className="button secondary"
-                    onClick={() => {
-                      const cand = versionHistoryList.find((v) => v.status === 'candidate' &&
-                        ['executable', 'supported'].includes(v.version.support_state) && matchingMetricLoads(activeVersion, data.snapshots, v.version).length > 0);
-                      if (cand) {
-                        startComparison(activeVersion, cand.version, 'candidate_impact');
-                      } else {
-                        startComparison(activeVersion, activeVersion, 'baseline_audit');
-                      }
-                    }}
-                  >
-                    Compare calculations
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Tab 4: Decisions & Changes */}
-        {detailTab === 'decisions' && (
-          <div className="decision-timeline">
-            <div className="unassigned-header">
-              <h3>Approval history</h3>
-              <p>Historical promotions, version approvals, and change records for {selectedMetric.display_name}.</p>
-            </div>
-
-            {loadingDetail && (
-              <div style={{ padding: '12px', color: 'var(--muted)', fontSize: '13px' }}>
-                Loading transition history…
-              </div>
-            )}
-
-            {transitions.length > 0 ? (
-              transitions.map((t) => (
-                <div key={t.id} className="timeline-node">
-                  <div className="timeline-node-icon">
-                    <GitCommit size={16} />
-                  </div>
-                  <div className="timeline-node-content">
-                    <div className="timeline-node-title">
-                      {t.transition_kind.replace(/_/g, ' ').toUpperCase()}
-                    </div>
-                    <div className="timeline-node-meta">
-                      <span>Actor: {memberName(t.actor_id, members)}</span>
-                      <span>·</span>
-                      <span>Recorded: {t.created_at ? t.created_at.slice(0, 19).replace('T', ' ') : 'Recent'}</span>
-                    </div>
-                    <div className="timeline-node-details">
-                      {t.previous_approved_version_id && (
+                        )}
                         <span>
-                          Prior version: <span className="mono-cell">{t.previous_approved_version_id.slice(0, 8)}</span> →{' '}
+                          Target approved version: <span className="mono-cell font-semibold">{t.approved_version_id?.slice(0, 8) || 'Active'}</span>
                         </span>
-                      )}
-                      <span>
-                        Target approved version: <span className="mono-cell font-semibold">{t.approved_version_id?.slice(0, 8) || 'Active'}</span>
-                      </span>
+                      </div>
                     </div>
                   </div>
+                ))
+              ) : !loadingDetail ? (
+                <div style={{ padding: '20px', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '6px', fontSize: '13px', color: 'var(--muted)' }}>
+                  No state transition events recorded for this metric yet.
                 </div>
-              ))
-            ) : !loadingDetail ? (
-              <div style={{ padding: '20px', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '6px', fontSize: '13px', color: 'var(--muted)' }}>
-                No state transition events recorded for this metric yet.
-              </div>
-            ) : null}
+              ) : null}
 
-            {metricDiffs.length > 0 && (
-              <div style={{ marginTop: '20px' }}>
-                <div className="implementation-group-title">Related CI metric diffs ({metricDiffs.length})</div>
-                {metricDiffs.map((md) => (
-                  <div key={md.id} className="implementation-card" style={{ padding: '12px 16px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span className="mono-cell font-semibold" style={{ fontSize: '13px' }}>Diff ID: {md.id.slice(0, 12)}…</span>
-                      <span className="source-badge">Snapshot: {md.snapshot_id}</span>
+              {metricDiffs.length > 0 && (
+                <div style={{ marginTop: '20px' }}>
+                  <div className="implementation-group-title">Related CI metric diffs ({metricDiffs.length})</div>
+                  {metricDiffs.map((md) => (
+                    <div key={md.id} className="implementation-card" style={{ padding: '12px 16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="mono-cell font-semibold" style={{ fontSize: '13px' }}>Diff ID: {md.id.slice(0, 12)}…</span>
+                        <span className="source-badge">Snapshot: {md.snapshot_id}</span>
+                      </div>
+                      <div className="muted-text font-small">
+                        Revision: <span className="mono-cell">{md.baseline_revision_id}</span> → <span className="mono-cell">{md.target_revision_id}</span>
+                      </div>
                     </div>
-                    <div className="muted-text font-small">
-                      Revision: <span className="mono-cell">{md.baseline_revision_id}</span> → <span className="mono-cell">{md.target_revision_id}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {detailTab === 'contracts' && <MetricContractsPanel key={`${projectId}:${selectedMetric.id}`}
+            projectId={projectId} metric={selectedMetric} definitions={definitions} bindings={bindings} snapshots={data.snapshots || []}
+            relationalContracts={(data as RelationalBootstrap).relational_contracts || []} />}
+
+        </details>
 
         {/* Add Implementation Modal */}
         {showAddImplModal && (

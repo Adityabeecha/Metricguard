@@ -203,6 +203,7 @@ export function GuestNotice({ workspaceId }: { workspaceId: string }) {
   const [, tick] = useState(0);
   useEffect(() => { const t = window.setInterval(() => tick(n => n + 1), 60000); return () => window.clearInterval(t); }, []);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const feedbackButton = useRef<HTMLButtonElement>(null);
   // Shown once after sign-in when this person's previous guest workspace was erased.
   const [reset] = useState(() => new URLSearchParams(window.location.search).get('notice') === 'guest-reset');
   useEffect(() => {
@@ -214,6 +215,6 @@ export function GuestNotice({ workspaceId }: { workspaceId: string }) {
   const expiry = identity?.guest_expires_at;
   const text = guestNotice(expiry, identity?.guest_storage_bytes);
   const urgent = expiry != null && expiry * 1000 - Date.now() < 60 * 60000;
-  const resetNote = reset ? <div className="alert notice guest-notice" role="status"><span>Your previous guest workspace was erased after its time limit. This is a fresh one.</span></div> : null;
-  return text ? <>{resetNote}<div className={`alert notice guest-notice${urgent ? ' urgent' : ''}`} role="status"><span>{text}</span><button type="button" className="button secondary small" onClick={() => setFeedbackOpen(true)}>Need a permanent account?</button></div>{feedbackOpen && <FeedbackDialog workspaceId={workspaceId} initialMessage="Please give this account full access." onClose={() => setFeedbackOpen(false)} />}</> : resetNote;
+  const resetNote = reset ? <div className="alert notice guest-notice" role="status" aria-live="polite"><span>Your previous guest workspace was erased after its time limit. This is a fresh one.</span></div> : null;
+  return text ? <>{resetNote}<div className={`alert notice guest-notice${urgent ? ' urgent' : ''}`} role="status" aria-live="polite"><span>{text} <a href="/guide#guest-accounts-free-beta" target="metricguard-guide">Help</a></span><button type="button" className="button secondary small" ref={feedbackButton} aria-haspopup="dialog" aria-expanded={feedbackOpen} onClick={() => setFeedbackOpen(true)}>Need a permanent account?</button></div>{feedbackOpen && <FeedbackDialog workspaceId={workspaceId} initialMessage="Please give this account full access." onClose={() => { setFeedbackOpen(false); requestAnimationFrame(() => feedbackButton.current?.focus()); }} />}</> : resetNote;
 }

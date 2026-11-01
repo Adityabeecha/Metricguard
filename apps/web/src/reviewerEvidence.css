@@ -53,3 +53,36 @@
 @media print { .print-footer { display: block; border-top: 1px solid var(--line); margin-top: 20px; padding-top: 8px; overflow-wrap: anywhere; } }
 
 @media print { .ledger-tabs, .ledger-toolbar, .ledger-foot { display: none !important; } .result-summary:has(.ledger) .print-records { display: none !important; } }
+
+/* Print uses paper and dark ink even when the screen theme is dark. */
+@media print {
+  :root, :root[data-theme="dark"] {
+    color-scheme: light !important;
+    --ground: var(--on-accent); --panel: var(--on-accent); --panel-2: var(--on-accent);
+    --ink: var(--rail); --text-2: var(--rail); --muted: var(--rail-2); --faint: var(--rail-2);
+    --link: var(--rail); --link-strong: var(--rail); --kraft: var(--rail);
+    --seal: var(--rail); --seal-strong: var(--rail); --ok: var(--rail); --warn: var(--rail); --danger: var(--rail);
+    --line: var(--rail-muted); --line-strong: var(--rail-muted);
+    --tint: var(--on-accent); --tint-strong: var(--on-accent); --seal-tint: var(--on-accent);
+    --ok-tint: var(--on-accent); --warn-tint: var(--on-accent); --danger-tint: var(--on-accent);
+  }
+  *, *::before, *::after { box-shadow: none !important; text-shadow: none !important; }
+  .table-scroll { overflow: visible !important; max-width: 100%; }
+  table { width: 100% !important; max-width: 100%; table-layout: fixed; }
+  thead { display: table-header-group !important; }
+  tbody { display: table-row-group !important; }
+  tfoot { display: table-footer-group !important; }
+  table tr { break-inside: avoid; page-break-inside: avoid; }
+  table th, table td, .ledger-table .num, .ledger-table .n { white-space: normal; overflow-wrap: anywhere; }
+  .ledger .ledger-table thead th:first-child { width: 20%; }
+  .ledger .ledger-table thead th:nth-child(2) { width: 40%; }
+  .record-context:not([open]) { display: none; }
+  .stack-table { display: table !important; }
+  .stack-table tr { display: table-row !important; }
+  .stack-table th, .stack-table td { display: table-cell !important; width: auto !important; font-size: 10px; padding: 6px; }
+  table th::before, table td::before { display: none !important; }
+  .case-header, .case-print-custody { break-inside: auto; }
+  .case-header > *, .case-print-custody dl > div { break-inside: avoid; }
+  .print-footer { font-size: 10px; margin-top: 8px; padding-top: 6px; break-before: avoid; }
+  :root[data-theme="dark"] img, :root[data-theme="dark"] svg image { opacity: 1; }
+}

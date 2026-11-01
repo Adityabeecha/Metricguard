@@ -550,6 +550,9 @@ export type ConnectedIdentity = {
   role: 'owner' | 'analyst' | 'reader' | null;
 };
 
+/** Records a calculation's conditions include; when none match, each condition counted on its own. */
+export type MatchCounts = { matched: number; total: number;
+  conditions?: Array<{ condition: string; field: string; matched: number; suggestion?: { typed: string; existing: string } }> };
 export type ColumnValues = {
   column: string; distinct_count: number; blank_count: number;
   /** True when every distinct value is listed, so an unlisted value does not occur. */
@@ -808,7 +811,7 @@ export const api = {
     request<ColumnValues>(`/snapshots/${encodeURIComponent(snapshotId)}/column-values?column=${encodeURIComponent(column)}`),
   /** How many records a calculation's conditions include (null for CASE datasets). */
   matchCount: (snapshotId: string, rawSql: string) =>
-    request<{ snapshot_id: string; counts: { matched: number; total: number } | null }>(`/snapshots/${encodeURIComponent(snapshotId)}/match-count`, {
+    request<{ snapshot_id: string; counts: MatchCounts | null }>(`/snapshots/${encodeURIComponent(snapshotId)}/match-count`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ raw_sql: rawSql }) }),
   evidence: (id: string, offset: number, limit: number) =>
     request<{ items: Evidence[]; total: number }>(
@@ -837,7 +840,7 @@ export const api = {
   /** Changed records of one 'Where it sits' group; `value` is the group's value exactly as the breakdown returned it. */
   evidenceGroup: (id: string, view: EvidenceGroupView) =>
     request<{ items: FlatEvidence[]; total: number }>(`/comparisons/${encodeURIComponent(id)}/evidence-group?${evidenceGroupParams(view)}`),
-  evidenceConcentration: (id: string) => request<EvidenceConcentration>(`/comparisons/${encodeURIComponent(id)}/evidence-concentration`),
+  evidenceConcentration: (id: string, grouping?: string) => request<EvidenceConcentration>(`/comparisons/${encodeURIComponent(id)}/evidence-concentration${grouping ? `?grouping=${encodeURIComponent(grouping)}` : ''}`),
   flatEvidence: (id: string, offset: number, limit: number) =>
     request<{ items: FlatEvidence[]; total: number }>(
       `/comparisons/${encodeURIComponent(id)}/evidence?offset=${offset}&limit=${limit}`
@@ -962,6 +965,8 @@ export const api = {
     request<Snapshot>(`/snapshots/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }),
   deleteSnapshot: (id: string) =>
     request<{ deleted: boolean; id: string; comparisons_removed: number }>(`/snapshots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  editConclusion: (id: string, decision: string) =>
+    request<Investigation>(`/investigations/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }) }),
   renameInvestigation: (id: string, title: string) =>
     request<Investigation>(`/investigations/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) }),
   deleteInvestigation: (id: string) =>

@@ -24,7 +24,7 @@ def ingest_csv(source, destination, metadata=None):
     except (ValueError,TypeError): raise CoreError('invalid_metadata','Valid extraction cutoff required')
     check_rows(0)
     check_upload_size(source.stat().st_size)
-    if source.stat().st_size>MAX_BYTES: raise CoreError('file_too_large','CSV exceeds 25 MiB')
+    if source.stat().st_size>MAX_BYTES: raise CoreError('file_too_large','CSV exceeds 25 MB')
     source_hash=file_hash(source)
     row_count=0; ids=set()
     try:

@@ -118,6 +118,15 @@ export function ChangesView({
   // Run Metric Diff modal state
   const [showRunModal, setShowRunModal] = useState(false);
   const [revisions, setRevisions] = useState<DbtRevisionItem[]>([]);
+  const [hasImportedRevisions, setHasImportedRevisions] = useState<boolean | null>(null);
+  useEffect(() => {
+    let active = true;
+    setHasImportedRevisions(null);
+    api.listDbtRevisions(workspaceId).then(result => {
+      if (active) setHasImportedRevisions(result.items.length > 0);
+    }).catch(() => { /* Keep the existing view when revision availability is unknown. */ });
+    return () => { active = false; };
+  }, [workspaceId, data]);
   const [loadingRevisions, setLoadingRevisions] = useState(false);
   const [runBaselineId, setRunBaselineId] = useState('');
   const [runTargetId, setRunTargetId] = useState('');
@@ -790,7 +799,8 @@ export function ChangesView({
         </section>
 
         {/* Coverage Section (04.9) */}
-        {activeDiff.coverage && (
+        {hasImportedRevisions === false && <p>Import a dbt or Power BI project in Settings → Integrations to check definition changes here.</p>}
+        {hasImportedRevisions !== false && activeDiff.coverage && (
           <section className="coverage-section">
             <div>
               <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: 'var(--ink)' }}>
@@ -916,7 +926,7 @@ export function ChangesView({
         )}
 
         {/* Changed Resources Section (04.10) */}
-        <section className="changed-resources-panel">
+        {hasImportedRevisions !== false && <section className="changed-resources-panel">
           <div
             className="changed-resources-header"
             onClick={() => setShowResourcesPanel((p) => !p)}
@@ -988,7 +998,7 @@ export function ChangesView({
               )}
             </div>
           )}
-        </section>
+        </section>}
 
         {/* Markdown PR Summary Modal */}
         {showMarkdownModal && (
@@ -1070,9 +1080,9 @@ export function ChangesView({
           <p>See how new data loads and definition changes move your metrics.</p>
         </div>
         <div className="heading-actions">
-          <button className="button primary" onClick={handleOpenRunModal}>
+          {hasImportedRevisions !== false && <button className="button primary" onClick={handleOpenRunModal}>
             <Play size={15} /> Run metric diff
-          </button>
+          </button>}
           <button className="button secondary" onClick={() => void refresh()}>
             <RefreshCw size={15} /> Refresh
           </button>
@@ -1080,6 +1090,7 @@ export function ChangesView({
       </div>
 
       <NewLoadChecksPanel data={data} refresh={refresh} onOpenRun={onOpenRun} baselineLoadId={baselineLoadId} targetLoadId={targetLoadId} />
+      {hasImportedRevisions === false && <p>Import a dbt or Power BI project in Settings → Integrations to check definition changes here.</p>}
 
       {/* Search and Filters Toolbar */}
       {rawDiffs.length > 0 && (
@@ -1136,7 +1147,7 @@ export function ChangesView({
       )}
 
       {/* Main Content */}
-      {rawDiffs.length === 0 ? (
+      {rawDiffs.length === 0 ? hasImportedRevisions === false ? null : (
         <section className="dashboard-empty-card" style={{ maxWidth: '620px', margin: '32px auto' }}>
           <div className="empty-badge-icon">
             <GitCompareArrows size={26} />

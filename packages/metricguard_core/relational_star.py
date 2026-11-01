@@ -416,7 +416,7 @@ def ingest(source, destination, payload):
     check_rows(0)
     check_upload_size(source.stat().st_size)
     if source.stat().st_size > byte_limit(c) + 4096 * (1 + len(c['dimensions'])):
-        fail('file_too_large', f'Relational upload exceeds {byte_limit(c) // (1024 * 1024)} MiB plus bundle metadata.')
+        fail('file_too_large', f'Relational upload exceeds {byte_limit(c) // (1024 * 1024)} MB plus bundle metadata.')
     source_hash = file_hash(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     roles = ['fact', *[d['role'] for d in c['dimensions']]]

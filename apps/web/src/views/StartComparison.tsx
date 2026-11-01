@@ -2,7 +2,7 @@ import { runsLeft, useUsage } from '../useUsage';
 import { engineDownMessage } from '../hostedCopy';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Database, Plus, Save, Trash2, UploadCloud } from 'lucide-react';
-import { api, ApiError, type Bootstrap, type ColumnValues, type FlatContract, type InvestigationDraft, type RelationalContract, type Run, type Snapshot } from '../api';
+import { api, ApiError, type Bootstrap, type ColumnValues, type FlatContract, type MatchCounts, type InvestigationDraft, type RelationalContract, type Run, type Snapshot } from '../api';
 import {
   aggregateRowLimitReason, buildFlatSql, buildRelationalSql, describeCalculation, flatFilterColumns, formProblems, guidedFormSupported,
   OP_LABEL, operatorsFor, relationalFilterColumns, supportsAnyMatch, supportsCount, supportsDistinct, supportsRatios, ratioUnavailableReason,
@@ -41,7 +41,7 @@ const pending = (state?: string) => state === 'queued' || state === 'running' ||
 /** A new condition starts on the first column with a short list of values (e.g. status), else the first column. */
 const emptyFilter = (columns: FilterColumn[], known: Record<string, ColumnValues | null> = {}): Filter =>
   ({ column: defaultConditionColumn(columns, known) || columns[0]?.id || '', op: 'eq', value: '' });
-type MatchCount = { matched: number; total: number } | null;
+type MatchCount = MatchCounts | null;
 
 type Props = {
   data: Bootstrap;
@@ -814,6 +814,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                   ) : (
                     <label>SQL
                       <SqlEditor value={s.sql} onChange={sql => update(side, { sql })} refusal={s.refusal?.message}
+                        label={side === 'baseline' ? 'Current calculation SQL' : 'Proposed calculation SQL'}
                         columns={choice?.flat ? flatSqlColumns(choice.flat) : []}
                         tables={choice?.flat ? ['snapshot', ...(datasetTableName(choice.flat) ? [datasetTableName(choice.flat)] : [])] : []}
                         placeholder={relational ? 'SELECT SUM(f.amount) FROM fact f LEFT JOIN dim d ON f.key = d.key WHERE …' : `SELECT SUM(amount) FROM ${(choice?.flat && datasetTableName(choice.flat)) || 'snapshot'} WHERE status = 'completed'`} />
@@ -832,13 +833,13 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
                     if (!c || c === 'error') return null;
                     return c.matched === 0
                       ? <span className="form-hint warn" role="status">These conditions include none of the {groupDigits(String(c.total))} records. Check the values before running.
-                          {s.mode === 'form' && emptyDiagnosis(side).map(note => <span key={note}><br />{note}</span>)}</span>
+                          {(s.mode === 'form' ? emptyDiagnosis(side) : sqlConditionNotes(c)).map(note => <span key={note}><br />{note}</span>)}</span>
                       : <span className="example" role="status">Includes {groupDigits(String(c.matched))} of {groupDigits(String(c.total))} records.</span>;
                   })()}
                   {sideProblems(side).map(p => <span key={p} className="form-hint">To finish — {p}</span>)}
                   {s.refusal && (
                     <div className="alert error" role="alert">
-                      <span><strong>{s.refusal.title}:</strong> {s.refusal.message}{s.refusal.guidance && <><br />{s.refusal.guidance}</>}<br />Your calculation is kept so you can edit it.</span>
+                      <span><strong>{s.refusal.title}:</strong> {s.refusal.message}{s.refusal.guidance && <><br />{s.refusal.guidance}</>}<br />Your calculation is kept so you can edit it. <a href="/guide#7-run-a-comparison" target="metricguard-guide">Help</a></span>
                     </div>
                   )}
                 </div>
@@ -873,8 +874,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
             <div className="guided-explain run-progress" role="status">
               <span className="run-spinner" aria-hidden="true" />
               <span><b>{run.state === 'queued' || run.state === 'pending' ? 'Waiting for the comparison engine…' : 'Comparing both calculations record by record…'}</b>{' '}
-                {elapsed > 0 && <>{elapsed} s. </>}
-                {(choice?.snapshot.row_count || 0) > 100_000 ? 'Large datasets can take a minute or more; you can leave this page and pick it up later under Needs a conclusion on the Cases page.' : 'This usually takes a few seconds.'}</span>
+                {elapsed > 0 && <>{elapsed} s.</>}</span>
             </div>
           )}
           {run.state === 'failed' && <p className="disabled-reason">The comparison did not complete. Go back to adjust the calculations, or try again.</p>}
@@ -893,6 +893,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
               Next: write the conclusion <ArrowRight size={15} />
             </button>
           </div>
+          {pending(run.state) && <p className="hint" role="status">On the free beta a comparison takes about 20–90 seconds.</p>}
         </section>
       )}
 
@@ -921,3 +922,13 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   );
 }
 
+
+/** Typed SQL that matches nothing: the server counted each condition alone (see flat_profile.match_count). */
+export function sqlConditionNotes(counts: MatchCounts | null | undefined): string[] {
+  const conditions = counts?.conditions || [];
+  const notes = conditions.filter(c => c.matched === 0).map(c => c.suggestion
+    ? `No '${c.suggestion.typed}' in ${c.field}. Did you mean '${c.suggestion.existing}'?`
+    : `On its own, ${c.condition} matches no records.`);
+  if (!notes.length && conditions.length > 1) notes.push('Each condition matches some records, but no record meets all of them together.');
+  return notes;
+}

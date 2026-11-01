@@ -33,20 +33,35 @@ def rename_snapshot(store, snapshot_id: str, name) -> dict:
     return store.snapshot(snapshot_id)
 
 
-def rename_investigation(store, investigation_id: str, title) -> dict:
-    """A case's title is a label, not part of its seal; earlier titles stay on record."""
+def rename_investigation(store, investigation_id: str, title=None, decision=None, editor: str | None = None) -> dict:
+    """A case's title and conclusion are labels, not part of its seal; earlier versions stay on record."""
     from .store import records
-    title = _clean_name(title, 'case')
+    if title is None and decision is None:
+        raise DomainError('INVALID_METADATA', 'Send a new title or conclusion.')
+    title = _clean_name(title, 'case') if title is not None else None
+    if decision is not None:
+        decision = decision.strip() if isinstance(decision, str) else ''
+        if not 1 <= len(decision) <= 4000:
+            raise DomainError('INVALID_METADATA', 'A conclusion of 1–4000 characters is required.')
     with store.engine.begin() as conn:
         row = conn.execute(select(records).where(records.c.id == investigation_id, records.c.kind == 'investigation')
                            .with_for_update()).mappings().first()
         if not row:
             raise DomainError('NOT_FOUND', 'Case not found.', 404)
         data = dict(row['data'])
-        if data.get('title') != title:
+        changed = False
+        if title is not None and data.get('title') != title:
             history = list(data.get('title_history') or [])
             history.append({'title': data.get('title'), 'renamed_at': now()})
             data.update(title=title, title_history=history[-20:])
+            changed = True
+        if decision is not None and data.get('decision') != decision:
+            history = list(data.get('decision_history') or [])
+            history.append({'decision': data.get('decision'), 'replaced_at': now(), 'replaced_by': editor})
+            data.update(decision=decision, decision_history=history[-20:])
+            changed = True
+        if changed:
+            data['updated_at'] = now()
             conn.execute(update(records).where(records.c.id == investigation_id).values(data=data))
     return store.investigation(investigation_id)
 

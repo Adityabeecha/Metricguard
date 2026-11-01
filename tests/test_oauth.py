@@ -127,6 +127,56 @@ def test_providers_hide_incomplete_configuration(setup, monkeypatch):
     assert client.get('/api/v1/auth/providers').json()['providers'] == []
 
 
+@pytest.mark.parametrize('provider', ['google', 'github'])
+def test_unconfigured_provider_reports_unavailable(setup, monkeypatch, provider):
+    client, _, requests, _ = setup
+    _, state = begin(client, provider)
+    monkeypatch.delenv(provider.upper() + '_CLIENT_SECRET')
+    for path in ('start', 'callback'):
+        response = client.get(f'/api/v1/auth/oauth/{provider}/{path}', params={'state': state, 'code': 'private-code'})
+        assert response.headers['location'] == 'https://metricguard.example/signin?error=unavailable'
+    assert not requests
+
+
+@pytest.mark.parametrize('provider', ['google', 'github'])
+@pytest.mark.parametrize('failure,expected', [('network', 'unavailable'), (500, 'unavailable'), (503, 'unavailable'), (400, 'failed'), ('invalid', 'failed')])
+def test_provider_exchange_failures_use_safe_fixed_codes(setup, monkeypatch, provider, failure, expected):
+    client, store, _, _ = setup
+
+    def handle(request):
+        if failure == 'network':
+            raise httpx.ConnectError('private token for person@example.com', request=request)
+        if failure == 'invalid':
+            return httpx.Response(200, json={'error': 'private token for person@example.com'})
+        return httpx.Response(failure, text='private token for person@example.com')
+
+    monkeypatch.setattr(oauth, 'http_client', lambda: httpx.Client(transport=httpx.MockTransport(handle)))
+    _, state = begin(client, provider)
+    response = callback(client, provider, state)
+    assert response.headers['location'] == f'https://metricguard.example/signin?error={expected}'
+    assert 'mg_oauth_state_' in response.headers['set-cookie'] and 'Max-Age=0' in response.headers['set-cookie']
+    assert not client.cookies.get('mg_session')
+    with store.engine.connect() as db:
+        assert db.execute(select(users).where(users.c.id != 'local-analyst')).first() is None
+
+
+@pytest.mark.parametrize('provider', ['google', 'github'])
+@pytest.mark.parametrize('failure', ['network', 503])
+def test_profile_failures_keep_the_generic_failure_code(setup, monkeypatch, provider, failure):
+    client, _, _, _ = setup
+
+    def handle(request):
+        if request.method == 'POST':
+            return httpx.Response(200, json={'access_token': 'private-access-token'})
+        if failure == 'network':
+            raise httpx.ConnectError('private person@example.com', request=request)
+        return httpx.Response(failure, text='private person@example.com')
+
+    monkeypatch.setattr(oauth, 'http_client', lambda: httpx.Client(transport=httpx.MockTransport(handle)))
+    _, state = begin(client, provider)
+    assert callback(client, provider, state).headers['location'] == 'https://metricguard.example/signin?error=failed'
+
+
 def test_state_single_use_provider_binding_tamper_and_cancel(setup):
     client, _, requests, _ = setup
     _, state = begin(client, 'google')
@@ -343,3 +393,17 @@ def test_provider_guest_terms(setup, monkeypatch):
     monkeypatch.setenv('METRICGUARD_GUEST_HOURS', '6')
     monkeypatch.setenv('METRICGUARD_GUEST_STORAGE_MB', '40')
     assert client.get('/api/v1/auth/providers').json()['guest'] == {'hours': 6, 'storage_mb': 40}
+
+
+def test_identity_renews_a_session_that_is_running_out(setup):
+    import time
+    from services.api.store import auth_sessions
+    client, store, _, _ = setup
+    user, _ = store.create_user('Busy analyst', 'busy@example.com')
+    client.cookies.set('mg_session', store.create_session(user['id'], 600), path='/api')  # 10 minutes left
+    renewed = client.get('/api/v1/auth/identity')
+    assert renewed.status_code == 200 and 'mg_session=' in renewed.headers.get('set-cookie', '')
+    with store.engine.connect() as conn:
+        assert conn.execute(select(auth_sessions.c.expires_at)).scalar_one() > time.time() + 7 * 3600
+    again = client.get('/api/v1/auth/identity')  # plenty left now: no new cookie
+    assert again.status_code == 200 and 'set-cookie' not in again.headers

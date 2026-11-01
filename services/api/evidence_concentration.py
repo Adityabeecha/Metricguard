@@ -20,6 +20,8 @@ MAX_VALUES = 50
 MIN_SHARE = Fraction(1, 10)
 MIN_LIFT = Fraction(5, 4)  # at least 1.25x its share of the records, so random spread is not reported
 TOP = 8
+TOP_PAIRS = 5
+PAIR_GAIN = Fraction(11, 10)  # a pair must be at least 1.1x as concentrated as its stronger single value
 
 
 def _key(value) -> str:
@@ -75,9 +77,25 @@ def concentration(path, key: tuple, verify_all: Callable[[], Any], columns: list
                     item['change'] += delta
                     item['abs'] += magnitude
 
-    def finish(items):
+    def redundant(pair_key, item):
+        # A pair that is the same records as one of its values, or barely sharper than it, repeats
+        # what the single-value list already says (e.g. two columns that always move together).
+        i, vi, j, vj = pair_key
+        best = Fraction(0)
+        for column, value in ((considered[i], vi), (considered[j], vj)):
+            single = singles[(column, value)]
+            if single['records'] == item['records'] and single['abs'] == item['abs']:
+                return True
+            if single['records'] and abs_total:
+                best = max(best, (Fraction(single['abs']) / Fraction(abs_total)) / Fraction(single['records'], totals_records))
+        lift = (Fraction(item['abs']) / Fraction(abs_total)) / Fraction(item['records'], totals_records)
+        return lift < best * PAIR_GAIN
+
+    def finish(items, top=TOP, is_pairs=False):
         out = []
-        for item in items.values():
+        for item_key, item in items.items():
+            if is_pairs and redundant(item_key, item):
+                continue
             share = Fraction(item['abs']) / Fraction(abs_total)
             record_share = Fraction(item['records'], totals_records)
             if share < MIN_SHARE or share < record_share * MIN_LIFT:
@@ -93,10 +111,10 @@ def concentration(path, key: tuple, verify_all: Callable[[], Any], columns: list
                 entry.update(change=rounded, change_exact=exact_effect)
             out.append((share / record_share if record_share else share, share, entry))
         out.sort(key=lambda t: (-t[0], -t[1], [str(v) for v in t[2]['values']]))
-        return [entry for _, _, entry in out[:TOP]]
+        return [entry for _, _, entry in out[:top]]
 
     return {'available': True, 'columns': considered, 'total_records': totals_records, 'abs_change_total': str(abs_total),
-            'ratio': bool(ratio), 'items': finish(singles), 'pairs': finish(pairs), 'capped': capped}
+            'ratio': bool(ratio), 'items': finish(singles), 'pairs': finish(pairs, TOP_PAIRS, True), 'capped': capped}
 
 
 def public_concentration(value: dict) -> dict:

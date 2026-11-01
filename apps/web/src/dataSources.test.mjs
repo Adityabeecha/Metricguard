@@ -3,6 +3,14 @@ import assert from 'node:assert/strict';
 import { parseCsvText, inferMeaning } from './csvInference.ts';
 import { humanizeError } from './errorUtils.ts';
 
+test('duplicate uploads use the returned dataset ID and name, not the file name', async () => {
+  const { duplicateUploadMessage } = await import('./onboardingPolicy.ts');
+  const before = [{ id: 'existing', name: 'September' }];
+  assert.equal(duplicateUploadMessage({ id: 'existing', name: 'September' }, before), "This file is already the dataset 'September'. Nothing new was added.");
+  assert.equal(duplicateUploadMessage({ id: 'new', name: 'September' }, before), '');
+  assert.equal(duplicateUploadMessage({ id: 'new', name: 'New load' }, []), '');
+});
+
 test('parseCsvText parses CSV content, handles quotes and types', () => {
   const csvData = `order_id,order_ts,region,status,amount
 ORD-101,2026-03-01T10:00:00Z,North,COMPLETED,150.50
@@ -283,4 +291,16 @@ test('success action compares using the newly created dataset and back action st
   await onboarding.completeDatasetUpload('new-dataset','compare',id => destinations.push(`compare:${id}`),id => destinations.push(`back:${id}`));
   await onboarding.completeDatasetUpload('new-dataset','datasets',id => destinations.push(`compare:${id}`),id => destinations.push(`back:${id}`));
   assert.deepEqual(destinations,['compare:new-dataset','back:new-dataset']);
+});
+
+test('a newer load lists every column problem, including type changes', async () => {
+  const { loadCompatibilityProblem } = await import('./onboardingPolicy.ts');
+  const contract = { row_key: 'id', measure: 'amount', categories: ['day', 'status'], dimension_types: { day: 'date', status: 'string' },
+    scale: 2, unit_label: 'INR' };
+  const preview = { headers: ['id', 'amount', 'day', 'region'], observed_types: { id: 'string', amount: 'string', day: 'string', region: 'string' },
+    totalRowsSampled: 2, null_counts: {}, sample_rows: [{ id: 'a', amount: 'x', day: 'soon', region: 'n' }] };
+  const text = loadCompatibilityProblem(preview, contract);
+  assert.match(text, /Missing: status\. Extra: region\./);
+  assert.match(text, /Amount “amount” must contain numbers \(this file has string values\)/);
+  assert.match(text, /Filter column “day” changed type: this dataset uses date values, this file has string/);
 });

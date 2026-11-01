@@ -54,7 +54,7 @@ const NAV_ITEMS: Array<{ id: Page; label: string; icon: React.ReactNode }> = [
 function WakingNotice() {
   const [visible, setVisible] = useState(false);
   useEffect(() => onWakingChange(setVisible), []);
-  return visible ? <div className="waking-notice" role="status">Waking up the server{'\u2026'}</div> : null;
+  return visible ? <div className="waking-notice" role="status" aria-live="polite" aria-atomic="true">Waking up the server{'\u2026'}</div> : null;
 }
 
 export function App() {
@@ -386,7 +386,7 @@ function WorkspaceApp() {
             <MessageSquare size={17} />
             <span>Feedback</span>
           </button>}
-          <a className="nav-item" href="/guide" target="_blank" rel="noreferrer">
+          <a className="nav-item" href="/guide" target="metricguard-guide">
             <BookOpen size={17} />
             <span>Guide</span>
           </a>

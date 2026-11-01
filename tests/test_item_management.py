@@ -57,6 +57,13 @@ def test_rename_and_delete_datasets_and_cases(tmp_path):
         assert retitled.status_code == 200
         assert retitled.json()['title'] == 'Paid orders only'
         assert retitled.json()['title_history'][0]['title'] == 'Paid only'
+        sealed = client.get(f"/api/v1/investigations/{case['id']}").json()
+        concluded = client.patch(f"/api/v1/investigations/{case['id']}", json={'decision': ' Void order B was test data. '})
+        assert concluded.status_code == 200 and concluded.json()['decision'] == 'Void order B was test data.'
+        assert concluded.json()['decision_history'][0]['decision'] == 'Void order B removed.' and concluded.json()['updated_at']
+        assert concluded.json()['run_id'] == sealed['run_id']  # the sealed comparison is untouched
+        assert client.patch(f"/api/v1/investigations/{case['id']}", json={'decision': '   '}).status_code == 422
+        assert client.patch(f"/api/v1/investigations/{case['id']}", json={}).status_code == 422
 
         assert client.delete(f"/api/v1/investigations/{case['id']}").status_code == 200
         assert client.get(f"/api/v1/investigations/{case['id']}").status_code == 404

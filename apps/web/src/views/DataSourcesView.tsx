@@ -30,7 +30,7 @@ import { useDialog } from '../useDialog';
 import { SampleDatasetButton } from './FirstRun';
 import { ItemActions } from './ItemActions';
 import { isSampleDataset } from '../sampleDataset';
-import { DEFAULT_COMPOUND_FILTERS, defaultFlatImport, uploadLimitText, previewRowLimitMessage, canConfirmUpload, loadLabelAfterFilePick, inheritedUnit, datasetUsageLabel, type UploadLimits, createUploadPreviewQueue, suggestUploadUnit, loadCompatibilityProblem, completeDatasetUpload } from '../onboardingPolicy';
+import { DEFAULT_COMPOUND_FILTERS, defaultFlatImport, uploadLimitText, previewRowLimitMessage, canConfirmUpload, loadLabelAfterFilePick, inheritedUnit, datasetUsageLabel, type UploadLimits, createUploadPreviewQueue, suggestUploadUnit, loadCompatibilityProblem, completeDatasetUpload, duplicateUploadMessage } from '../onboardingPolicy';
 
 interface DataSourcesViewProps {
   data: Bootstrap;
@@ -60,6 +60,8 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
   // Add dataset Flow State
   const [sourceType, setSourceType] = useState<SourceType>('file');
   const [step, setStep] = useState<OnboardingStep>('upload');
+  const [duplicateMessage, setDuplicateMessage] = useState('');
+  const snapshotsBeforeUpload = useRef<Snapshot[]>([]);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [filePreview, setFilePreview] = useState<ParsedCsvPreview | null>(null);
 
@@ -444,6 +446,8 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
 
   /** Upload the file under a dataset definition and wait for the import, however long it takes. */
   async function uploadAndWait(contractId: string, name: string): Promise<Snapshot> {
+    snapshotsBeforeUpload.current = [...snapshots];
+    setDuplicateMessage('');
     const form = new FormData();
     form.append('file', selectedFile!);
     form.append('name', name);
@@ -479,11 +483,13 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
 
   function finishImport(snapshot: Snapshot) {
     if (currentProject.current !== projectId) return;
+    const duplicate = duplicateUploadMessage(snapshot, snapshotsBeforeUpload.current);
+    setDuplicateMessage(duplicate);
     lastUnit.current = inheritedUnit(snapshot, loadContract, confirmedUnit);
     setCreatedSnapshot(snapshot);
     setSelectedSnapshotId(snapshot.id);
     setStep('success');
-    if (!modalOpen.current) setPageNotice(`Dataset “${snapshot.name}” is ready: ${snapshot.row_count.toLocaleString('en-US')} rows validated.`);
+    if (!modalOpen.current) setPageNotice(duplicate || `Dataset “${snapshot.name}” is ready: ${snapshot.row_count.toLocaleString('en-US')} rows validated.`);
   }
 
   function failImport(err: unknown) {
@@ -790,7 +796,8 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                 const datasetLoads = snapshots.filter(item => snap.contract_hash ? item.contract_hash === snap.contract_hash : item.id === snap.id);
                 const datasetIds = new Set(datasetLoads.map(item => item.id));
                 const datasetRuns = runs.filter(r => datasetIds.has(r.snapshot_id) || (r.target_snapshot_id && datasetIds.has(r.target_snapshot_id)));
-                const latestComparison = datasetRuns.map(r => r.created_at).filter(Boolean).sort().at(-1);
+                // The server dates every comparison of this dataset; the loaded run list holds only the newest 100.
+                const latestComparison = (snap as { last_compared_at?: string }).last_compared_at || datasetRuns.map(r => r.created_at).filter(Boolean).sort().at(-1);
                 const runCount = datasetRuns.length;
 
                 return (
@@ -893,11 +900,11 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                   <strong className="stat-num mono">{activeSummary?.keyLabel}</strong>
                 </div>
                 <div className="stat-box">
-                  <span className="stat-label">AMOUNT TOTALLED</span>
+                  <span className="stat-label">Amount totalled</span>
                   <strong className="stat-num mono">{activeSummary?.measureLabel}</strong>
                 </div>
                 <div className="stat-box">
-                  <span className="stat-label">DECLARED UNIT</span>
+                  <span className="stat-label">Unit</span>
                   <strong className="stat-num">{activeSummary?.unitLabel}</strong>
                 </div>
               </div>
@@ -956,7 +963,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                     <table className="schema-table">
                       <thead>
                         <tr>
-                          <th>COLUMN NAME</th>
+                          <th>Column</th>
                           <th>TYPE</th>
                           <th>USED AS</th>
                         </tr>
@@ -1035,28 +1042,33 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                 <div className="detail-tab-body">
                   <div className="provenance-grid">
                     <div className="prov-item">
-                      <span className="prov-label">DATASET ID</span>
+                      <span className="prov-label">Dataset ID</span>
                       <code className="prov-val">{activeSnapshot.id}</code>
                     </div>
                     <div className="prov-item">
-                      <span className="prov-label">SOURCE SHA-256 HASH</span>
-                      <code className="prov-val">{activeSnapshot.source_hash}</code>
-                    </div>
-                    <div className="prov-item">
-                      <span className="prov-label">MANIFEST HASH</span>
-                      <code className="prov-val">{activeSnapshot.manifest_hash}</code>
-                    </div>
-                    {activeSnapshot.contract_hash && (
-                      <div className="prov-item">
-                        <span className="prov-label">CONTRACT HASH</span>
-                        <code className="prov-val">{activeSnapshot.contract_hash}</code>
-                      </div>
-                    )}
-                    <div className="prov-item">
-                      <span className="prov-label">ROWS INCLUDED</span>
+                      <span className="prov-label">Rows included</span>
                       <span className="prov-text">{(activeSnapshot.scope || 'All supplied rows').replace(/_/g, ' ').replace(/snapshot/gi, 'dataset')}</span>
                     </div>
                   </div>
+                  <details className="prov-details">
+                    <summary>Fingerprints (for audits)</summary>
+                    <div className="provenance-grid">
+                      <div className="prov-item">
+                        <span className="prov-label">File fingerprint (SHA-256)</span>
+                        <code className="prov-val">{activeSnapshot.source_hash}</code>
+                      </div>
+                      <div className="prov-item">
+                        <span className="prov-label">Data fingerprint</span>
+                        <code className="prov-val">{activeSnapshot.manifest_hash}</code>
+                      </div>
+                      {activeSnapshot.contract_hash && (
+                        <div className="prov-item">
+                          <span className="prov-label">Rules fingerprint</span>
+                          <code className="prov-val">{activeSnapshot.contract_hash}</code>
+                        </div>
+                      )}
+                    </div>
+                  </details>
 
                   {activeSnapshot.execution_policy === 'relational_snapshot_v1' && (() => {
                     const relationalContract = (data.relational_contracts || []).find((c) => c.contract_hash === activeSnapshot.contract_hash);
@@ -1874,10 +1886,10 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                   <div className="success-icon-badge">
                     <CheckCircle2 size={32} />
                   </div>
-                  <h3>Dataset ready</h3>
-                  <p>
+                  <h3>{duplicateMessage ? 'Dataset already exists' : 'Dataset ready'}</h3>
+                  {duplicateMessage ? <p>{duplicateMessage}</p> : <p>
                     Checked <strong>{(createdSnapshot?.row_count ?? filePreview?.totalRowsSampled ?? 0).toLocaleString('en-US')} rows</strong> and froze a copy for comparisons.
-                  </p>
+                  </p>}
                   <div className="snapshot-summary-pill-row">
                     <span><strong>Dataset:</strong> {createdSnapshot?.name || snapshotName || selectedFile?.name}</span>
                     <span><strong>Rows:</strong> {(createdSnapshot?.row_count ?? filePreview?.totalRowsSampled ?? 0).toLocaleString('en-US')}</span>
@@ -1896,6 +1908,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                   </div>
                   <h3>Couldn’t add dataset</h3>
                   <p className="error-lead">{validationError?.message || 'Some rows did not pass the ID or column type checks.'}</p>
+                  <p><a href="/guide#16-troubleshooting" target="metricguard-guide">Help</a></p>
                   {validationError?.suggestion && (
                     <div className="error-suggestion-box">
                       <strong>Recommended fix:</strong> {validationError.suggestion}

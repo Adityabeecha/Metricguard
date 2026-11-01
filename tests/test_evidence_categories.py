@@ -193,3 +193,16 @@ def test_week_and_month_groups_still_add_up_exactly(tmp_path):
         assert sum(Decimal(g['change']) for g in split['groups']) == total == Decimal(split['total_change'])
     rows, count = evidence_cache.group_page(path, key, lambda: None, 'ordered_on', context, '2026-09-28', 0, 10, bucket='week')
     assert sorted(r['order_id'] for r in rows) == ['A', 'C', 'D'] and count == 3  # B has no change
+
+
+def test_pairs_that_repeat_a_single_value_are_left_out(tmp_path):
+    from services.api.evidence_concentration import concentration
+    evidence_cache.clear()
+    rows = [{'order_id': f'K{i}', 'baseline_included': True, 'target_included': i >= 4, 'delta': '-10.00' if i < 4 else '0.00'}
+            for i in range(20)]
+    path, key = artifact(tmp_path, rows)
+    # city always determines country, so "country × city" says nothing beyond "city".
+    context = {f'K{i}': {'city': 'pune' if i < 4 else f'c{i % 3}', 'country': 'in' if i < 4 else f'x{i % 3}'} for i in range(20)}
+    result = concentration(path, key, lambda: None, ['city', 'country'], context, {})
+    assert [i['values'] for i in result['items']][:2] == [['pune'], ['in']] or [i['values'] for i in result['items']][:2] == [['in'], ['pune']]
+    assert result['pairs'] == []

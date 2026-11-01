@@ -90,3 +90,11 @@ The 2026-09-25 full Python suite passed **159 tests**, the web production build 
 ### Later typed flat-contract compatibility note - 2026-09-28
 
 The separate flat-snapshot mode now accepts FlatContract v4 logical dimensions and retains v3 hash/replay behavior. This extends the later flat policy, not the original nine-role v2 retail contract. See [V6 inequality acceptance](v5-release-evidence.md#flatcontract-v4--v6-inequality-gate-2026-09-28). V2-06 analyst validation remains open; `v6_orders` is synthetic.
+
+### Existing UI clarity, I1 - 2026-11-01
+
+Existing screens now provide signed-in home redirects, fixed OAuth outage wording, duplicate-upload notices, audit fingerprint disclosures, beta comparison timing, grouped metric details, revision-aware Changes content, metric movement summaries and guide help links. Cases already included the first-run guide. These are presentation and error-reporting changes; I1 changes no calculation, byte limit, contract or hash behavior. Automated verification is recorded in [HANDOFF.md](HANDOFF.md); browser acceptance and the V2-06 external analyst gate remain open.
+
+### Existing UI presentation, I2 - 2026-11-01
+
+[I2 browser evidence](evidence/i2-ui-review.md) records verified phone result layouts at 375px and 420px, keyboard accessibility checks, passing dark-mode contrast ratios, workspace/public print PDFs and six actual guide screenshots. Web tests and the production build passed. This is synthetic local UI verification; it does not close the V2-06 external analyst gate or claim an NVDA/JAWS auditory test.

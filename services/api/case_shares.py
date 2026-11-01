@@ -248,8 +248,8 @@ def install_case_share_routes(app, store, read_handlers):
 
     if 'evidence-concentration' in read_handlers:
         @app.get('/api/v1/shared-cases/{token}/evidence-concentration')
-        def concentration(token: str):
-            return read(token, 'evidence-concentration')
+        def concentration(token: str, grouping: str = Query('', pattern='^(|day|week|month)$')):
+            return read(token, 'evidence-concentration', grouping=grouping)
 
     if 'entity-records' in read_handlers:
         @app.get('/api/v1/shared-cases/{token}/entity-records')

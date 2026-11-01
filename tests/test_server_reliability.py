@@ -156,3 +156,15 @@ def test_backup_round_trip_and_retention(store, tmp_path):
 def test_backup_needs_durable_storage(store, tmp_path):
     with pytest.raises(SystemExit, match='Durable storage is not configured'):
         backup_db.backup(str(store.engine.url), durable.Durable(tmp_path))
+
+
+def test_health_counts_server_errors(setup, monkeypatch):
+    from fastapi.testclient import TestClient
+    from services.api import oauth
+    client, _, _, _ = setup
+    before = client.get('/api/v1/health').json()['server_errors']['since_start']
+    monkeypatch.setattr(oauth, 'settings', lambda: (_ for _ in ()).throw(RuntimeError('boom')))
+    with TestClient(client.app, raise_server_exceptions=False, base_url='https://testserver') as raw:
+        assert raw.get('/api/v1/auth/providers').status_code == 500
+        errors = raw.get('/api/v1/health').json()['server_errors']
+    assert errors['since_start'] == before + 1 and errors['last_at']

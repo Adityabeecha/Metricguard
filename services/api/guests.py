@@ -50,8 +50,13 @@ def sweep(store, data_dir) -> list[str]:
     """Erase expired guest accounts; a busy one (job still running) is retried next sweep."""
     from .account_deletion import delete_account
     erased, waiting = [], 0
+    allowed = full_access_emails()
     for user_id in store.expired_guests():
         try:
+            # Added to the full-access list after sign-up: promote instead of erasing.
+            if allowed and store.get_user(user_id)['email'].strip().casefold() in allowed:
+                store.promote_guest(user_id)
+                continue
             hashes = store.guest_identity_hashes(user_id)  # read before the identities are deleted
             delete_account(store, user_id, data_dir)
             erased.append(user_id)

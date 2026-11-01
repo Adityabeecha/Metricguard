@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api';
 
-type Member = { user_id: string; name?: string | null; email?: string | null; role: string; revoked_at?: string | null };
+type Member = { user_id: string; name?: string | null; email?: string | null; role: string; revoked_at?: string | null; guest_expires_at?: number | null };
 type Invite = { id: string; email: string; role: string; created_at: string };
 
 /** The text an owner sends a teammate: no secret, just where and how to sign in. */
@@ -71,7 +71,8 @@ export function MembersPanel({ workspaceId, workspaceName }: { workspaceId: stri
           {members.map(m => <tr key={m.user_id}>
             <td data-label="Name">{m.name || '—'}{m.user_id === selfId && <small> (you)</small>}</td>
             <td data-label="Email">{m.email || '—'}</td>
-            <td data-label="Role">{m.role}</td>
+            <td data-label="Role">{m.role}{m.guest_expires_at != null && <span className="example" title="Guest accounts are erased with their own data at this time; they leave this workspace then.">
+              {' '}· guest, leaves {new Date(m.guest_expires_at * 1000).toLocaleString()}</span>}</td>
             {owner && <td>{m.user_id !== selfId && <button type="button" className="link-button" onClick={() => void removeMember(m)}>Remove</button>}</td>}
           </tr>)}
         </tbody>

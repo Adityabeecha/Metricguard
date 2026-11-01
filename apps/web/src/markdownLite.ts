@@ -1,5 +1,5 @@
 // A small Markdown renderer for MetricGuard's own guide (headings, paragraphs, lists, tables,
-// quotes, rules, code, bold, italics and links). All text is escaped first, so the output only
+// quotes, rules, code, bold, italics, links and guide images). All text is escaped first, so the output only
 // contains the tags written here. Pure, so node tests can import it.
 
 const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -18,13 +18,20 @@ export function slug(text: string): string {
 
 export function inline(text: string): string {
   const codes: string[] = [];
+  const images: string[] = [];
   let out = escape(text).replace(/`([^`]+)`/g, (_, code) => { codes.push(code); return `\u0000${codes.length - 1}\u0000`; });
+  out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_whole, alt, src) => {
+    if (!/^\/guide\/[A-Za-z0-9_./-]+$/.test(src) || src.split('/').some((part: string) => part === '.' || part === '..')) return alt;
+    images.push(`<img src="${src}" alt="${alt}" loading="lazy">`);
+    return `\u0001${images.length - 1}\u0001`;
+  });
   out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_whole, label, href) => {
     const safe = guideHref(href.replace(/&amp;/g, '&'));
     return safe ? `<a href="${escape(safe)}"${safe.startsWith('https://') ? ' rel="noreferrer"' : ''}>${label}</a>` : label;
   });
   out = out.replace(/\*\*((?:[^*]|\*(?!\*))+)\*\*/g, '<strong>$1</strong>').replace(/(^|[^*\w])\*([^*\s][^*]*)\*(?!\w)/g, '$1<em>$2</em>');
-  return out.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[Number(i)]}</code>`);
+  return out.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[Number(i)]}</code>`)
+    .replace(/\u0001(\d+)\u0001/g, (_, i) => images[Number(i)]);
 }
 
 const cells = (row: string) => row.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());

@@ -83,7 +83,7 @@ def ingest_relational(source, destination, payload):
     check_rows(0)
     check_upload_size(source.stat().st_size)
     if source.stat().st_size > MAX_BYTES + 4096:
-        fail('file_too_large', 'Relational upload exceeds 25 MiB plus bundle metadata.')
+        fail('file_too_large', 'Relational upload exceeds 25 MB plus bundle metadata.')
     source_hash = file_hash(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     source_hashes, row_counts = {}, {}

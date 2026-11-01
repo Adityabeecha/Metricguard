@@ -85,6 +85,7 @@ test('OAuth errors use friendly fixed copy and never echo untrusted callback tex
   assert.match(oauthErrorMessage('unverified'), /email isn't verified/);
   assert.match(oauthErrorMessage('cancelled'), /cancelled/i);
   assert.match(oauthErrorMessage('failed'), /try again/i);
+  assert.equal(oauthErrorMessage('unavailable'), "Google or GitHub sign-in isn't available right now. Try the other provider, or try again in a few minutes.");
   assert.equal(oauthErrorMessage('raw provider secret'), oauthErrorMessage('failed'));
   assert.equal(oauthErrorMessage(null), '');
 });

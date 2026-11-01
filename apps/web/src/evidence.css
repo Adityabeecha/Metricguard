@@ -162,3 +162,25 @@
 .ledger-search input { width: min(260px, 100%); font: 500 13px var(--font-mono); }
 .ledger-group { margin: 0; font-size: 13px; color: var(--text-2); }
 .where-table .group-pick { font: inherit; font-weight: 600; text-align: left; }
+
+@media screen and (max-width: 640px) {
+  .bridge-list li { margin-bottom: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  .bridge-list li:not(:has(button)), .bridge-list button { flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px 12px; }
+  .bridge-list li:has(button) { padding: 0; }
+  .bridge-list li > span, .bridge-list button > span { min-width: 0; width: auto; padding: 0; }
+  .bridge-list b { white-space: normal; overflow-wrap: anywhere; }
+  .bridge-list button:disabled { opacity: 1; }
+  .ledger-table, .ledger-table tbody, .ledger-table tfoot, .ledger-table tr { min-width: 0; max-width: 100%; }
+  .ledger-table tbody tr { display: block; padding: 10px 12px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  .ledger-table tbody td, .ledger-table tbody th { display: block; min-width: 0; padding: 4px 0; text-align: left !important; white-space: normal; overflow-wrap: anywhere; }
+  .ledger-table tbody [data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; font: 600 11px var(--font-label); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .ledger-table .num, .ledger-table .n { white-space: normal; overflow-wrap: anywhere; }
+  .ledger-table .move .arrow { margin: 0 4px; }
+  .ledger-table tfoot tr { flex-wrap: wrap; gap: 8px; }
+  .ledger-table tfoot td:empty { display: none; }
+  .where-head label, .where-head select, .ledger-search, .ledger-search input { min-width: 0; max-width: 100%; }
+  .where-table .share-text, .where-table .concentrated { white-space: normal; }
+  .stack-table td { min-width: 0; overflow-wrap: anywhere; }
+  .stack-table td[data-label]::before { display: block; margin-bottom: 2px; }
+  .table-scroll:has(> .stack-table) { min-width: 0; max-width: 100%; }
+}

@@ -149,3 +149,26 @@ def test_row_errors_show_the_value_and_the_fix(tmp_path):
             ingest_flat(source, tmp_path / f'{len(rows)}-{rows[0][0] or "blank"}.duckdb', c)
         for text in expected:
             assert text in refused.value.message, refused.value.message
+
+
+def test_several_bad_rows_are_reported_together(tmp_path):
+    c = contract()
+    source = tmp_path / 'many.csv'
+    with source.open('w', newline='', encoding='utf-8') as stream:
+        csv.writer(stream).writerows([['item_code', 'net_value', 'segment'], ['i1', 'x', 'n'], ['i2', '1.00', 'n'],
+                                      ['i2', '2.00', 'n'], ['i3', '$5', 'n'], *[[f'j{k}', 'bad', 'n'] for k in range(5)]])
+    with pytest.raises(CoreError) as refused:
+        ingest_flat(source, tmp_path / 'many.duckdb', c)
+    message = refused.value.message
+    assert message.startswith('5+ problems found in the file. 1) ')
+    assert "found 'x'" in message and "Duplicate row key 'i2'" in message and "found '$5'" in message and '5) ' in message and '6) ' not in message
+
+
+def test_other_refusals_point_at_the_refused_part():
+    c = contract()
+    for sql, word in [("SELECT SUM(net_value) FROM snapshot WHERE region = 'n'", 'region'),
+                      ('SELECT MAX(net_value) FROM snapshot', 'MAX'), ('SELECT SUM(other) FROM snapshot', 'other')]:
+        with pytest.raises(CoreError) as refused:
+            parse_flat(sql, c)
+        where = int(refused.value.message.rsplit('(at character ', 1)[1].rstrip(').'))
+        assert sql[where - 1:].startswith(word), (sql, refused.value.message)

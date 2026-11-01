@@ -1,17 +1,18 @@
-import { useRef } from 'react';
+import { useId, useRef } from 'react';
 import { insertAt, refusalPosition, sqlTokens, tokenAt } from './evidence/sqlHighlight';
 import './sqlEditor.css';
 
 export type SqlColumn = { name: string; type: string; role?: string };
 
 /** SQL box with light highlighting and the dataset's columns beside it (click one to insert it). */
-export function SqlEditor({ id, value, onChange, columns, tables, placeholder, rows = 6, refusal }: {
-  id?: string; value: string; onChange: (sql: string) => void; columns: SqlColumn[]; tables: string[]; placeholder?: string; rows?: number;
+export function SqlEditor({ id, value, onChange, columns, tables, placeholder, rows = 6, refusal, label = 'SQL calculation' }: {
+  id?: string; value: string; onChange: (sql: string) => void; columns: SqlColumn[]; tables: string[]; placeholder?: string; rows?: number; label?: string;
   /** A refusal message; "(at character N)" in it underlines that part of the SQL. */
   refusal?: string | null;
 }) {
   const area = useRef<HTMLTextAreaElement>(null);
   const layer = useRef<HTMLPreElement>(null);
+  const refusalId = useId();
   const insert = (text: string) => {
     const el = area.current;
     const start = el?.selectionStart ?? value.length, end = el?.selectionEnd ?? value.length;
@@ -30,8 +31,10 @@ export function SqlEditor({ id, value, onChange, columns, tables, placeholder, r
     <div className="sql-input">
       <pre ref={layer} className="sql-layer" aria-hidden="true">{tokens.map((t, i) => <span key={i} className={`tok-${t.kind}${i === refused ? ' tok-refused' : ''}`}>{t.text}</span>)}{'\n'}</pre>
       <textarea id={id} ref={area} rows={rows} spellCheck={false} value={value} placeholder={placeholder}
+        aria-label={label} aria-invalid={Boolean(refusal)} aria-describedby={refusal ? refusalId : undefined}
         onChange={e => onChange(e.target.value)}
         onScroll={e => { if (layer.current) { layer.current.scrollTop = e.currentTarget.scrollTop; layer.current.scrollLeft = e.currentTarget.scrollLeft; } }} />
+      {refusal && <span id={refusalId} className="sr-only">{refusal}</span>}
     </div>
   </div>;
 }

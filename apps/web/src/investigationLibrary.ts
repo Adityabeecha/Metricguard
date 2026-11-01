@@ -83,7 +83,7 @@ export function buildLibraryItems(data: Pick<Bootstrap, 'investigations' | 'runs
       hasConclusion: Boolean(inv.decision),
       conclusion: inv.decision || '',
       twoLoads: Boolean(run?.target_snapshot_id),
-      updatedAt: inv.created_at,
+      updatedAt: (inv as { updated_at?: string }).updated_at || inv.created_at,
     });
   }
   const savedRuns = new Set((data.investigations || []).map(i => i.run_id));

@@ -3,6 +3,7 @@ import { ArrowRight, Play, RefreshCw } from 'lucide-react';
 import { api, apiFetch, ApiError, type Bootstrap, type Run } from '../api';
 import { executeLoadChecks, loadCheckPairOptions } from '../loadChecks';
 import { resultDisplayValue, resultUnit, valueWithUnit } from '../resultSummary';
+import { isDefinedComparison, isExactZero } from '../investigationUtils';
 
 type Eligible = { metric_id: string; metric_name: string; version_id: string; raw_sql: string };
 type Preview = {
@@ -168,6 +169,8 @@ export function NewLoadChecksPanel({ data, refresh, onOpenRun, baselineLoadId, t
         const display = (value: string | null | undefined) => result && value != null ? valueWithUnit(resultDisplayValue(result, value), unit) : 'Unavailable';
         return <div className="queue-row" key={run.id}>
           <div className="queue-row-main"><div className="queue-row-top"><strong>{run.load_check?.metric_name || 'Saved metric'}</strong><span className={`badge ${run.state === 'failed' ? 'warn' : 'ready'}`}>{run.state}</span></div>
+            {result && isDefinedComparison(result) && <p>{run.load_check?.metric_name || 'Saved metric'}: {isExactZero(result.delta_target_minus_baseline)
+              ? 'no change' : <>moved by <span className="mono">{display(result.delta_target_minus_baseline)}</span> ({result.relative_change_percent_display ?? 'percentage unavailable'})</>}</p>}
             <p className="queue-row-sub">{earlierLoad?.name || 'Earlier load'} → {laterLoad?.name || 'Later load'} · {new Date(run.created_at).toLocaleString()}</p>
             {result && <p className="queue-row-sub mono">{display(result.baseline_value)} → {display(result.target_value)} · Difference {display(result.delta_target_minus_baseline)}</p>}
             {run.error?.message && <p className="disabled-reason">{run.error.message}</p>}
