@@ -175,7 +175,7 @@ def install_case_share_routes(app, store, read_handlers):
             case = store.investigation(row['case_id'])
             if case['project_id'] != row['project_id'] or case['run_id'] != row['run_id']:
                 raise _not_found()
-            return case, checked_run(case)
+            return case, checked_run(case), row
         except DomainError:
             raise _not_found() from None
 
@@ -215,11 +215,12 @@ def install_case_share_routes(app, store, read_handlers):
 
     @app.get('/api/v1/shared-cases/{token}')
     def opened(token: str):
-        case, run = resolve(token)
-        return case_dto(store, case, run)
+        case, run, share = resolve(token)
+        # Only the link's own expiry is added; it is public to whoever holds the link anyway.
+        return {**case_dto(store, case, run), 'expires_at': share.get('expires_at')}
 
     def read(token, kind, **params):
-        _, run = resolve(token)
+        _, run, _ = resolve(token)
         return read_dto(kind, read_handlers[kind](run, **params))
 
     @app.get('/api/v1/shared-cases/{token}/evidence')
@@ -233,15 +234,17 @@ def install_case_share_routes(app, store, read_handlers):
         return read(token, 'evidence-summary')
 
     @app.get('/api/v1/shared-cases/{token}/evidence-breakdown')
-    def breakdown(token: str, column: str = Query('', max_length=200), top: int = Query(50, ge=1, le=200)):
-        return read(token, 'evidence-breakdown', column=column, top=top)
+    def breakdown(token: str, column: str = Query('', max_length=200), top: int = Query(50, ge=1, le=200),
+                  grouping: str = Query('', pattern='^(|day|week|month)$')):
+        return read(token, 'evidence-breakdown', column=column, top=top, grouping=grouping)
 
     @app.get('/api/v1/shared-cases/{token}/evidence-group')
     def group(token: str, column: str = Query(..., min_length=1, max_length=200), value: str = Query('null', max_length=2000),
               no_match: bool = False, q: str = Query('', max_length=256), offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100),
-              column2: str = Query('', max_length=200), value2: str = Query('null', max_length=2000), no_match2: bool = False, with_context: bool = False):
+              column2: str = Query('', max_length=200), value2: str = Query('null', max_length=2000), no_match2: bool = False, with_context: bool = False,
+              grouping: str = Query('', pattern='^(|day|week|month)$')):
         return read(token, 'evidence-group', column=column, value=value, no_match=no_match, q=q, offset=offset, limit=limit,
-                    column2=column2, value2=value2, no_match2=no_match2, with_context=with_context)
+                    column2=column2, value2=value2, no_match2=no_match2, with_context=with_context, grouping=grouping)
 
     if 'evidence-concentration' in read_handlers:
         @app.get('/api/v1/shared-cases/{token}/evidence-concentration')

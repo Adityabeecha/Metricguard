@@ -125,6 +125,27 @@ def _shared_files(conn, erase, paths: set[Path], root: Path) -> set[Path]:
     return shared
 
 
+def deletion_summary(store, user_id: str) -> dict:
+    """What delete_account would erase and leave, using its own ownership rule; read only."""
+    from .store import project_members, projects, records, runs, snapshots
+    with store.engine.connect() as conn:
+        memberships = conn.execute(select(project_members.c.project_id, project_members.c.role).where(
+            project_members.c.user_id == user_id, project_members.c.revoked_at.is_(None))).all()
+        owned = {pid for pid, role in memberships if role == 'owner'}
+        shared_owned = set(conn.execute(select(project_members.c.project_id).where(
+            project_members.c.project_id.in_(owned), project_members.c.user_id != user_id,
+            project_members.c.revoked_at.is_(None))).scalars()) if owned else set()
+        erase = owned - shared_owned
+        names = dict(conn.execute(select(projects.c.id, projects.c.name).where(
+            projects.c.id.in_({pid for pid, _ in memberships}))).all()) if memberships else {}
+        count = lambda table, *where: conn.execute(select(func.count()).select_from(table).where(
+            table.c.project_id.in_(erase), *where)).scalar_one() if erase else 0
+        return {'erased_workspaces': sorted(names.get(pid, pid) for pid in erase),
+                'datasets': count(snapshots), 'comparisons': count(runs),
+                'cases': count(records, records.c.kind == 'investigation'),
+                'left_workspaces': sorted(names.get(pid, pid) for pid, _ in memberships if pid not in erase)}
+
+
 def delete_account(store, user_id: str, data_dir: Path) -> dict:
     """Erase sole-owned workspaces; leave shared workspaces without a role transfer.
 

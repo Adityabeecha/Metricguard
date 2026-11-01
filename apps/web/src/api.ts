@@ -38,7 +38,7 @@ export type FlatContract={id:string;version:3|4|5|6|7|8;predicate_policy?:'flat-
 export type ChangeCategory={key:'excluded'|'added'|'value_changed'|'removed'|'entered_filter'|'left_filter';records:number;change:string;effect?:string|null;effect_exact?:string|null};
 export type EvidenceSummary={total:number;changed:number;blank_amount_rows:number;top_changes:Array<Evidence&{row_key?:string;fact_key?:string}>;categories?:ChangeCategory[]};
 export type BreakdownGroup={value:string|boolean|null;no_match?:boolean;records:number;changed_records:number;current:string|null;proposed:string|null;change:string|null;change_exact?:string|null;current_numerator?:string;proposed_numerator?:string;current_denominator?:string;proposed_denominator?:string};
-export type EvidenceBreakdown={available:boolean;columns:string[];reason?:string;column?:string;total_change?:string|null;total_change_exact?:string|null;ratio?:boolean;groups?:BreakdownGroup[];other_groups?:number;other_change?:string|null;total_records?:number;other_records?:number;other_changed_records?:number;abs_change_total?:string|null;unavailable_columns?:Record<string,string>;coverage_note?:string;grouping?:'day'};
+export type EvidenceBreakdown={available:boolean;columns:string[];reason?:string;column?:string;total_change?:string|null;total_change_exact?:string|null;ratio?:boolean;groups?:BreakdownGroup[];other_groups?:number;other_change?:string|null;total_records?:number;other_records?:number;other_changed_records?:number;abs_change_total?:string|null;unavailable_columns?:Record<string,string>;coverage_note?:string;grouping?:'day'|'week'|'month';groupable?:boolean};
 export type FlatEvidence=Evidence&{row_key?:string;measure?:string|null;categories?:Record<string,string|null>;source_payment_ids?:string[]};
 /** One lookup table of a relational dataset (contract v2 lists 1–4; v1 has exactly one, as `dimension`). */
 export type RelationalLookup={role:string; table:string; key:string; grain:string; categories:string[]; fact_foreign_key:string};
@@ -559,7 +559,7 @@ export type ColumnValues = {
 
 /** One 'Where it sits' group, or a two-column combination from the concentration list. */
 export type EvidenceGroupView = { column: string; value: unknown; noMatch?: boolean; column2?: string; value2?: unknown; noMatch2?: boolean;
-  withContext?: boolean; q?: string; offset: number; limit: number };
+  withContext?: boolean; q?: string; offset: number; limit: number; grouping?: string };
 export function evidenceGroupParams(view: EvidenceGroupView): URLSearchParams {
   const params = new URLSearchParams({ column: view.column, value: JSON.stringify(view.value ?? null), offset: String(view.offset), limit: String(view.limit) });
   if (view.noMatch) params.set('no_match', 'true');
@@ -570,6 +570,7 @@ export function evidenceGroupParams(view: EvidenceGroupView): URLSearchParams {
   }
   if (view.withContext) params.set('with_context', 'true');
   if (view.q?.trim()) params.set('q', view.q.trim());
+  if (view.grouping) params.set('grouping', view.grouping);
   return params;
 }
 export type ConcentrationItem = { columns: string[]; values: Array<string | boolean | null>; no_match?: boolean[]; records: number; changed_records: number;
@@ -580,6 +581,8 @@ export type EvidenceConcentration = { available: boolean; reason?: string; colum
 export const api = {
   get: <T>(path: string) => request<T>(path),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  patch: <T>(path: string, body: unknown) =>
+    request<T>(path, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   download: async (path:string, filename:string) => {
     const response = await apiFetch(path);
     if (!response.ok) {
@@ -812,10 +815,11 @@ export const api = {
       `/comparisons/${encodeURIComponent(id)}/evidence?offset=${offset}&limit=${limit}`
     ),
   evidenceSummary: (id: string) => request<EvidenceSummary>(`/comparisons/${encodeURIComponent(id)}/evidence-summary`),
-  evidenceBreakdown: (id: string, column?: string, top?: number) => {
+  evidenceBreakdown: (id: string, column?: string, top?: number, grouping?: string) => {
     const params = new URLSearchParams();
     if (column) params.set('column', column);
     if (top) params.set('top', String(top));
+    if (grouping) params.set('grouping', grouping);
     const query = params.toString();
     return request<EvidenceBreakdown>(`/comparisons/${encodeURIComponent(id)}/evidence-breakdown${query ? `?${query}` : ''}`);
   },

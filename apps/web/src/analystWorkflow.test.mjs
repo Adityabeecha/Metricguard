@@ -51,3 +51,13 @@ test('every category has a description for each comparison mode', () => {
     for (const key of ['excluded', 'added', 'value_changed', 'removed', 'entered_filter', 'left_filter'])
       assert.ok(categoryDescription(key, mode));
 });
+
+test('a refusal position underlines the refused keyword', async () => {
+  const { refusalPosition, tokenAt } = await import('./views/evidence/sqlHighlight.ts');
+  const sql = 'SELECT SUM(amount) FROM orders GROUP BY status';
+  const tokens = sqlTokens(sql, ['amount', 'status'], ['orders']);
+  const at = refusalPosition("GROUP BY isn't supported (at character 32). Use the Where it sits tab.");
+  assert.equal(at, 31);
+  assert.equal(tokens[tokenAt(tokens, at)].text.toUpperCase(), 'GROUP');
+  assert.equal(tokenAt(tokens, refusalPosition('No position here.')), -1);
+});

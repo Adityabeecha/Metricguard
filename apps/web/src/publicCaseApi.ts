@@ -30,10 +30,11 @@ export function publicEvidenceClient(token: string): EvidenceDataClient {
       if (view.order) params.set('order', view.order);
       return read(token, `/evidence?${params}`);
     },
-    evidenceBreakdown: (_id, column, top) => {
+    evidenceBreakdown: (_id, column, top, grouping) => {
       const params = new URLSearchParams();
       if (column) params.set('column', column);
       if (top) params.set('top', String(top));
+      if (grouping) params.set('grouping', grouping);
       return read(token, `/evidence-breakdown?${params}`);
     },
     evidenceGroup: (_id, view) => read(token, `/evidence-group?${evidenceGroupParams(view)}`),

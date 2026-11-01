@@ -67,3 +67,12 @@ test('returning to the same dataset preserves calculations', () => {
   assert.equal(shouldResetCalculations('same-contract', 'same-contract'), false);
   assert.equal(shouldResetCalculations('first-contract', 'second-contract'), true);
 });
+
+test('value suggestions catch capitals and spaces only', async () => {
+  const { valueSuggestion, conditionValues } = await import('./comparisonSelection.ts');
+  assert.equal(valueSuggestion('Paid', ['paid', 'refunded']), 'paid');
+  assert.equal(valueSuggestion('paid', ['paid']), null);
+  assert.equal(valueSuggestion('pending', ['paid']), null);
+  assert.deepEqual(conditionValues('in', 'Paid, refunded'), ['Paid', 'refunded']);
+  assert.deepEqual(conditionValues('gt', '5'), []);
+});

@@ -103,6 +103,11 @@ ABANDONED_ERROR = {'code': 'WORKER_LOST', 'message': 'The server restarted sever
 # Guest accounts (open sign-up, email not on the full-access list): erased once expires_at passes.
 guest_accounts = Table('guest_accounts', metadata,
     Column('user_id', ForeignKey('users.id'), primary_key=True), Column('expires_at', Float, nullable=False))
+# Sign-ins whose guest account was erased, so the next sign-in can say so once. Only a SHA-256 of
+# provider + subject is kept (no email, name or user id), and the table is capped.
+guest_erasures = Table('guest_erasures', metadata,
+    Column('identity_hash', String, primary_key=True), Column('erased_at', Float, nullable=False))
+GUEST_ERASURES_KEPT = 10_000
 # Workspace invitations by email: the invited address joins the workspace when it signs in.
 workspace_invites = Table('workspace_invites', metadata,
     Column('id', String, primary_key=True), Column('project_id', ForeignKey('projects.id'), nullable=False),
@@ -1203,6 +1208,33 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
     def guest_expiry(self, user_id: str) -> float | None:
         with self.engine.connect() as conn:
             return conn.execute(select(guest_accounts.c.expires_at).where(guest_accounts.c.user_id == user_id)).scalar_one_or_none()
+
+    @staticmethod
+    def identity_hash(provider: str, subject: str) -> str:
+        return hashlib.sha256(f'{provider}:{subject}'.encode()).hexdigest()
+
+    def guest_identity_hashes(self, user_id: str) -> list[str]:
+        with self.engine.connect() as conn:
+            return [self.identity_hash(p, s) for p, s in conn.execute(select(oauth_identities.c.provider, oauth_identities.c.subject)
+                                                                       .where(oauth_identities.c.user_id == user_id)).all()]
+
+    def remember_guest_erasure(self, hashes: list[str]) -> None:
+        if not hashes:
+            return
+        with self.engine.begin() as conn:
+            for digest in hashes:
+                conn.execute(delete(guest_erasures).where(guest_erasures.c.identity_hash == digest))
+                conn.execute(insert(guest_erasures).values(identity_hash=digest, erased_at=time.time()))
+            excess = conn.execute(select(func.count()).select_from(guest_erasures)).scalar_one() - GUEST_ERASURES_KEPT
+            if excess > 0:
+                oldest = select(guest_erasures.c.identity_hash).order_by(guest_erasures.c.erased_at).limit(excess)
+                conn.execute(delete(guest_erasures).where(guest_erasures.c.identity_hash.in_(oldest.scalar_subquery())))
+
+    def take_guest_erasure(self, provider: str, subject: str) -> bool:
+        """True once if this sign-in's previous guest account was erased; the mark is then removed."""
+        with self.engine.begin() as conn:
+            return bool(conn.execute(delete(guest_erasures).where(
+                guest_erasures.c.identity_hash == self.identity_hash(provider, subject))).rowcount)
 
     def expired_guests(self) -> list[str]:
         with self.engine.connect() as conn:

@@ -129,3 +129,24 @@ def test_missing_column_is_not_reported_as_missing_table():
     from services.supervisor.warehouse_errors import warehouse_error
     assert warehouse_error(Exception('column "amt" does not exist'))[0] == 'COLUMN_NOT_FOUND'
     assert warehouse_error(Exception('relation "orders" does not exist'))[0] == 'TABLE_NOT_FOUND'
+
+
+def test_owner_replaces_saved_credentials_without_echoing_them(setup, monkeypatch):
+    from services.api.warehouse_connections import resolve
+    client, store, pid, owner, analyst = setup
+    monkeypatch.setenv('METRICGUARD_SECRET_KEY', 'k' * 40)
+    with client:
+        made = client.post(f'/api/v1/projects/{pid}/warehouse-connections', headers=owner,
+                           json={'kind': 'snowflake', 'label': 'SF', 'account': 'org-acct', 'database': 'DB', 'token': 'old-token-123'}).json()
+        path = f"/api/v1/projects/{pid}/warehouse-connections/{made['id']}"
+        assert client.patch(path, headers=analyst, json={'token': 'new-token-456'}).status_code == 403
+        assert client.patch(path, headers=owner, json={'token': 'x'}).json()['error']['code'] == 'INVALID_CONNECTION'
+        replaced = client.patch(path, headers=owner, json={'token': 'new-token-456'})
+        assert replaced.status_code == 200 and 'new-token' not in replaced.text and replaced.json()['public']['account'] == 'org-acct'
+        assert resolve(store, pid, made['id'])[2] == {'token': 'new-token-456'}
+        pg = client.post(f'/api/v1/projects/{pid}/warehouse-connections', headers=owner,
+                         json={'kind': 'postgres', 'label': 'PG', 'source_uri': SECRET_URI}).json()
+        moved = client.patch(f"/api/v1/projects/{pid}/warehouse-connections/{pg['id']}", headers=owner,
+                             json={'source_uri': 'postgresql://reader:N3wPass@db2.example.com:5432/analytics'})
+        assert moved.json()['public']['host'] == 'db2.example.com' and 'N3wPass' not in moved.text
+        assert client.patch(f'/api/v1/projects/{pid}/warehouse-connections/nope', headers=owner, json={'token': 'abcdefghij'}).status_code == 404

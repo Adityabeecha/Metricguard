@@ -235,6 +235,12 @@ def test_delete_account_route_removes_private_rows_and_uses_durable_remove(setup
         original(path, **kwargs)
     monkeypatch.setattr(durable, 'remove', tracked)
     client.cookies.set('mg_session', store.create_session(user['id'], 3600), path='/api')
+    other, _ = store.create_user('Teammate', 'mate@example.com')
+    team = store.create_project('Team space', owner_id=other['id'])
+    store.add_project_member(team['id'], user['id'], 'analyst')
+    summary = client.get('/api/v1/auth/account/summary').json()
+    assert summary == {'erased_workspaces': ['Personal data'], 'datasets': 1, 'comparisons': 0, 'cases': 1,
+                       'left_workspaces': ['Team space']}
     response = client.delete('/api/v1/auth/account', headers={'x-metricguard-client': 'web'})
     assert response.status_code == 200
     assert artifact in calls and not artifact.exists()

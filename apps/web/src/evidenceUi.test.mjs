@@ -191,3 +191,16 @@ test('case summary appends an optional saved case link', () => {
   const withLink = caseSummaryMarkdown({ detail, unit: '', summary: null, breakdown: null, link: 'https://example.test/case' });
   assert.equal(withLink, `${without}\nhttps://example.test/case`);
 });
+
+test('replay checks list each exact fact and mark differences', async () => {
+  const { replayChecks } = await import('./views/evidence/replayChecks.ts');
+  const saved = { baseline_value: '100.00', target_value: '90.00', delta_target_minus_baseline: '-10.00', residual: '0',
+    evidence_artifact: { sha256: 'abcdef0123456789', row_count: 3 } };
+  const same = replayChecks(saved, { ...saved, evidence_artifact: { ...saved.evidence_artifact } });
+  assert.ok(same.every(c => c.same));
+  assert.deepEqual(same.map(c => c.label), ['Current value', 'Proposed value', 'Total difference', 'Unexplained remainder',
+    'Records in the evidence', 'Evidence fingerprint (SHA-256)']);
+  assert.equal(same.at(-1).saved, 'abcdef012345');
+  const changed = replayChecks(saved, { ...saved, target_value: '91.00' });
+  assert.deepEqual(changed.filter(c => !c.same).map(c => c.label), ['Proposed value']);
+});

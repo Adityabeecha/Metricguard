@@ -20,6 +20,7 @@
 .tok-column { color: var(--ink); text-decoration: underline dotted var(--line-strong); text-underline-offset: 3px; }
 .tok-table { color: var(--ink); font-weight: 600; }
 .tok-operator { color: var(--text-2); }
+.tok-refused { text-decoration: underline wavy var(--danger); text-underline-offset: 3px; }
 
 /* Warehouse form: test connection row. */
 .warehouse-test { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; margin: 4px 0 8px; }

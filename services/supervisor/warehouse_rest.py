@@ -261,6 +261,53 @@ def bigquery_rows(selection, client):
                          params={**params, 'pageToken': token}).json()
 
 
+def _count_query(sql: str, quote: str) -> str:
+    """The extract's own FROM/WHERE, counted instead of read (ORDER BY and LIMIT dropped)."""
+    body = sql[sql.index(' FROM '):]
+    body = body[:body.rindex(' ORDER BY ')]
+    return f'SELECT COUNT(*) AS {quote}n{quote}{body}'
+
+
+def count_rows(selection, client) -> int:
+    """Rows the extract would read (-1 if unknown), so a row limit refuses before any download."""
+    if selection.kind == 'snowflake':
+        sql, bindings = snowflake_query(selection)
+        base = f'https://{selection.account}.snowflakecomputing.com/api/v2/statements'
+        headers = {'Authorization': f'Bearer {selection.token}', 'Accept': 'application/json',
+                   'X-Snowflake-Authorization-Token-Type': selection.token_type}
+        body = {'statement': _count_query(sql, '"'), 'timeout': WAIT_SECONDS, 'database': selection.database.upper(),
+                'schema': selection.schema.upper(), **({'warehouse': selection.warehouse.upper()} if selection.warehouse else {}),
+                **({'role': selection.role.upper()} if selection.role else {}), **({'bindings': bindings} if bindings else {}),
+                'parameters': {'MULTI_STATEMENT_COUNT': '1', 'QUERY_TAG': 'metricguard-read-only-count'}}
+        response = _response(client, 'POST', base, selection.token, headers=headers, json=body)
+        if response.status_code == 202:
+            return -1  # still running: the streaming check enforces the limit instead
+        data = response.json().get('data') or [[None]]
+        value = data[0][0] if data and data[0] else None
+    else:
+        sql, parameters = bigquery_query(selection)
+        base = f'https://bigquery.googleapis.com/bigquery/v2/projects/{selection.project}'
+        headers = {'Authorization': f'Bearer {selection.token}', 'Accept': 'application/json'}
+        body = {'query': _count_query(sql, '`'), 'useLegacySql': False, 'timeoutMs': 60_000,
+                'labels': {'source': 'metricguard'}, **({'location': selection.location} if selection.location else {}),
+                **({'parameterMode': 'NAMED', 'queryParameters': parameters} if parameters else {})}
+        page = _response(client, 'POST', f'{base}/queries', selection.token, headers=headers, json=body).json()
+        if not page.get('jobComplete'):
+            return -1
+        value = (((page.get('rows') or [{}])[0].get('f') or [{}])[0]).get('v')
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
+
+def refuse_over_limit(count: int) -> None:
+    limit = configured_limit('METRICGUARD_MAX_ROWS')
+    if limit is not None and count > limit:
+        raise FreeTierLimit('FREE_TIER_ROWS', f'This table has {count:,} rows up to the cutoff; the beta limit is {limit:,} rows '
+                            'per dataset. Set an earlier cutoff or take a sample.')
+
+
 def extract_to_csv(selection, destination, client=None):
     """Write the selection's rows to `destination` (CSV with contract column names); returns the row count."""
     _check(selection)
@@ -270,6 +317,12 @@ def extract_to_csv(selection, destination, client=None):
     rows = 0
     bounded_upload = configured_limit('METRICGUARD_MAX_UPLOAD_MB') is not None
     try:
+        if configured_limit('METRICGUARD_MAX_ROWS') is not None and not selection.sample_rows:
+            try:
+                counted = count_rows(selection, client)
+            except Exception:  # unknown: the streaming check below still enforces the limit
+                counted = -1
+            refuse_over_limit(counted)
         fetch = snowflake_rows if selection.kind == 'snowflake' else bigquery_rows
         with Path(destination).open('w', encoding='utf-8', newline='') as output:
             writer = csv.writer(output, lineterminator='\n')

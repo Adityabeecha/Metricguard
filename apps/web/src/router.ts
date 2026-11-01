@@ -157,7 +157,7 @@ export function parseRoute(pathname: string, search: string = '', defaultWorkspa
   return { workspaceId: defaultWorkspaceId, page, tab, query, rawPath: clean };
 }
 
-export type SitePage = 'home' | 'signin' | 'signup' | 'privacy' | 'terms' | 'demo' | 'shared-case' | 'workspace' | 'not-found';
+export type SitePage = 'home' | 'signin' | 'signup' | 'privacy' | 'terms' | 'guide' | 'demo' | 'shared-case' | 'workspace' | 'not-found';
 
 export function sharedCaseToken(pathname: string): string | null {
   return pathname.replace(/\/+$/, '').match(/^\/shared-cases\/([A-Za-z0-9_-]{43,128})$/)?.[1] || null;
@@ -169,7 +169,7 @@ export function sitePage(pathname: string): SitePage {
   if (clean === '/') return 'home';
   if (sharedCaseToken(clean)) return 'shared-case';
   if (/^\/demo(\/mg-f3a3)?$/i.test(clean)) return 'demo';
-  if (clean === '/signin' || clean === '/signup' || clean === '/privacy' || clean === '/terms') {
+  if (clean === '/signin' || clean === '/signup' || clean === '/privacy' || clean === '/terms' || clean === '/guide') {
     return clean.slice(1) as SitePage;
   }
   return parseRoute(pathname).notFound ? 'not-found' : 'workspace';

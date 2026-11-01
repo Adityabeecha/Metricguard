@@ -64,6 +64,18 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
   const [inspected, setInspected] = useState<Inspected | null>(null);
   const [testing, setTesting] = useState(false);
   const [saveAs, setSaveAs] = useState('');
+  const [newSecret, setNewSecret] = useState('');
+  const [replaced, setReplaced] = useState('');
+  async function replaceSecret() {
+    setProblem(null); setReplaced('');
+    try {
+      await api.patch(`/projects/${encodeURIComponent(workspaceId)}/warehouse-connections/${encodeURIComponent(connectionId)}`,
+        source === 'postgres' ? { source_uri: newSecret.trim() } : { token: newSecret.trim() });
+      setNewSecret(''); setReplaced('Saved. The new credentials are used from now on.'); await loadSaved();
+    } catch (e) {
+      setProblem(classifyInvestigationError(e));
+    }
+  }
   const loadSaved = () => api.get<{ items: Saved[]; saving_available: boolean }>(`/projects/${encodeURIComponent(workspaceId)}/warehouse-connections`)
     .then(r => { setSaved(r.items); setSavingAvailable(r.saving_available); }).catch(() => { setSaved([]); setSavingAvailable(false); });
   useEffect(() => { void loadSaved(); }, [workspaceId]);
@@ -220,6 +232,17 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
             {savedHere.map(c => <option key={c.id} value={c.id}>{c.label} · {Object.values(c.public).filter(Boolean).join(' · ')}</option>)}
           </select>
         </label>
+      )}
+      {connectionId && (
+        <details className="warehouse-replace">
+          <summary>{source === 'postgres' ? 'Replace the connection string' : 'Replace the access token'} (owners)</summary>
+          <div className="warehouse-test">
+            <input type="password" autoComplete="off" spellCheck={false} aria-label="New credentials" value={newSecret}
+              onChange={e => setNewSecret(e.target.value)} placeholder={source === 'postgres' ? 'postgresql://user:password@host:5432/database' : 'New token'} />
+            <button type="button" className="button secondary small" disabled={newSecret.trim().length < 8} onClick={() => void replaceSecret()}>Save new credentials</button>
+            {replaced && <span className="example" role="status">{replaced}</span>}
+          </div>
+        </details>
       )}
       {!connectionId && source === 'postgres' && (
         <label>Connection string

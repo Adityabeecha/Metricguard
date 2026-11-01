@@ -31,3 +31,20 @@ export function insertAt(value: string, start: number, end: number, text: string
   const inserted = `${lead}${text}${trail}`;
   return { value: before + inserted + after, cursor: before.length + lead.length + text.length };
 }
+
+/** The 0-based index a refusal points at ("… (at character 41) …"), or null. */
+export function refusalPosition(message: string | null | undefined): number | null {
+  const match = /\(at character (\d+)\)/.exec(message || '');
+  return match ? Number(match[1]) - 1 : null;
+}
+
+/** Index of the token that contains `position`, for underlining the refused part. */
+export function tokenAt(tokens: SqlToken[], position: number | null): number {
+  if (position == null || position < 0) return -1;
+  let offset = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    offset += tokens[i].text.length;
+    if (position < offset) return tokens[i].text.trim() ? i : -1;
+  }
+  return -1;
+}

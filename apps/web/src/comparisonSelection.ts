@@ -52,3 +52,17 @@ export function recordedByDefault(current: string, identity: { user: { name: str
 export function shouldResetCalculations(previous: string | null, current: string): boolean {
   return previous !== current;
 }
+
+/** A dataset value equal to `typed` except for capitals or surrounding spaces ("Paid" -> "paid"), or null. */
+export function valueSuggestion(typed: string, values: string[]): string | null {
+  const wanted = typed.trim().toLowerCase();
+  if (!wanted || values.includes(typed)) return null;
+  return values.find(v => v.trim().toLowerCase() === wanted) ?? null;
+}
+
+/** Values a condition compares against (one for =/!=, several for IN), for value suggestions. */
+export function conditionValues(op: string, value: string): string[] {
+  if (op === 'eq' || op === 'neq') return [value];
+  if (op === 'in' || op === 'not_in') return value.split(',').map(v => v.trim()).filter(Boolean);
+  return [];
+}

@@ -1677,17 +1677,24 @@ def create_app(database_url=None, data_dir=None, mode=None):
             return 'string'
         return (contract.get('dimension_types') or {}).get(column, 'string')
 
+    def date_bucket(run, column, grouping=''):
+        """Timestamps group by day unless week or month is asked for; dates group only by week or month."""
+        kind = column_type(run, column)
+        if kind in ('date', 'timestamp') and grouping in ('week', 'month'):
+            return grouping
+        return 'day' if kind == 'timestamp' else None
+
     @app.get('/api/v1/comparisons/{ident}/evidence-breakdown')
     def evidence_breakdown(ident: str, request: Request, column: str = Query('', max_length=200),
-                           top: int = Query(50, ge=1, le=200)):
+                           top: int = Query(50, ge=1, le=200), grouping: str = Query('', pattern='^(|day|week|month)$')):
         """Exact split of the change by one filter column (largest first), or the columns available."""
         auth = get_auth_context(request, store)
         run = store.get_run(ident)
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
-        return read_breakdown(run, column=column, top=top)
+        return read_breakdown(run, column=column, top=top, grouping=grouping)
 
-    def read_breakdown(run, column='', top=50):
+    def read_breakdown(run, column='', top=50, grouping=''):
         if expired_details(run):
             return expired_details(run)
         result = run.get('result') or {}
@@ -1717,9 +1724,10 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 raise DomainError('INVALID_COLUMN', excluded[chosen])
             raise DomainError('INVALID_COLUMN', f"'{chosen}' is not a filter column of this dataset.")
         path, key, verify_all = evidence_access(run)
-        bucket = 'day' if column_type(run, chosen) == 'timestamp' else None
+        bucket = date_bucket(run, chosen, grouping)
         try:
             split = evidence_cache.breakdown(path, key, verify_all, chosen, context, limit=top, ratio=result.get('ratio'), bucket=bucket)
+            split = {**split, 'groupable': column_type(run, chosen) in ('date', 'timestamp')}
             if bucket:
                 split = {**split, 'grouping': bucket}
             if result.get('evidence_coverage'):
@@ -1736,7 +1744,8 @@ def create_app(database_url=None, data_dir=None, mode=None):
                        value: str = Query('null', max_length=2000), no_match: bool = Query(False),
                        q: str = Query('', max_length=256), offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=100),
                        column2: str = Query('', max_length=200), value2: str = Query('null', max_length=2000),
-                       no_match2: bool = Query(False), with_context: bool = Query(False)):
+                       no_match2: bool = Query(False), with_context: bool = Query(False),
+                       grouping: str = Query('', pattern='^(|day|week|month)$')):
         """The changed records of one breakdown group (click-through from 'Where it sits'), largest first.
 
         ``value`` is the group's value as JSON, exactly as the breakdown returned it (null for blank).
@@ -1747,10 +1756,10 @@ def create_app(database_url=None, data_dir=None, mode=None):
         verify_shared_access(request, store, auth, run)
         verify_object_access(store, run, auth, allowed_roles=('owner', 'analyst', 'reader'))
         return read_group(run, column=column, value=value, no_match=no_match, q=q, offset=offset, limit=limit,
-                          column2=column2, value2=value2, no_match2=no_match2, with_context=with_context)
+                          column2=column2, value2=value2, no_match2=no_match2, with_context=with_context, grouping=grouping)
 
     def read_group(run, column, value='null', no_match=False, q='', offset=0, limit=100,
-                   column2='', value2='null', no_match2=False, with_context=False):
+                   column2='', value2='null', no_match2=False, with_context=False, grouping=''):
         if expired_details(run):
             return expired_details(run)
         result = run.get('result') or {}
@@ -1770,12 +1779,12 @@ def create_app(database_url=None, data_dir=None, mode=None):
             return wanted
 
         wanted = parsed(column, value)
-        bucket = lambda name: 'day' if column_type(run, name) == 'timestamp' else None
+        bucket = lambda name: date_bucket(run, name)
         also = ((column2, parsed(column2, value2), no_match2, bucket(column2)),) if column2 else ()
         path, key, verify_all = evidence_access(run)
         try:
             items, total = evidence_cache.group_page(path, key, verify_all, column, context, wanted, offset, limit,
-                                                     no_match=no_match, bucket=bucket(column), query=q, also=also)
+                                                     no_match=no_match, bucket=date_bucket(run, column, grouping), query=q, also=also)
         except (ValueError, KeyError, TypeError, OSError) as error:
             raise DomainError('EVIDENCE_INTEGRITY', 'Saved evidence failed its integrity check.') from error
         items = evidence_cache.annotate_ratio(items, result.get('ratio'))

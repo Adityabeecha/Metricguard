@@ -115,3 +115,37 @@ def test_dataset_name_works_as_the_table_name_with_identical_ir():
     with pytest.raises(CoreError):
         parse_flat('SELECT SUM(amount) FROM other_table', contract)
     assert dataset_table_name({'name': '2026 loads!'}) == ''
+
+
+def test_refusals_name_the_clause_and_where_it_starts():
+    c = contract()
+    cases = {"SELECT SUM(net_value) FROM snapshot GROUP BY segment": ("GROUP BY isn't supported (at character 37)", 'Where it sits'),
+             "SELECT SUM(net_value) FROM snapshot ORDER BY item_code": ("ORDER BY isn't supported (at character 37)", None),
+             "SELECT SUM(net_value) FROM snapshot LIMIT 5": ("LIMIT isn't supported (at character 37)", None),
+             "SELECT SUM(net_value) FROM snapshot s JOIN other o ON s.item_code = o.item_code": ("JOIN isn't supported", 'connected tables')}
+    for sql, (start, hint) in cases.items():
+        with pytest.raises(CoreError) as refused:
+            parse_flat(sql, c)
+        assert refused.value.message.startswith(start), refused.value.message
+        assert sql[int(start.split('character ')[1].rstrip(')')) - 1:].upper().startswith(start.split(' isn')[0].split()[0]) if 'character' in start else True
+        if hint:
+            assert hint in refused.value.message
+    with pytest.raises(CoreError, match=r'SQL could not be parsed \(at character \d+\)'):
+        parse_flat('SELECT SUM(net_value FROM snapshot', c)
+    # Accepted SQL compiles exactly as before.
+    assert parse_flat("SELECT SUM(net_value) FROM snapshot WHERE segment = 'north'", c) == \
+        parse_flat("SELECT SUM(net_value) FROM snapshot WHERE segment = 'north'", c)
+
+
+def test_row_errors_show_the_value_and_the_fix(tmp_path):
+    c = contract()
+    for rows, expected in [([['i1', '₹1,250.00', 'north']], ["found '₹1,250.00'", 'Remove currency symbols']),
+                           ([['i1', '2.10', 'north'], ['i1', '3.00', 'south']], ["Duplicate row key 'i1' in item_code at line 3"]),
+                           ([['', '2.10', 'north']], ['Missing row key (item_code is blank) at line 2'])]:
+        source = tmp_path / 'bad.csv'
+        with source.open('w', newline='', encoding='utf-8') as stream:
+            csv.writer(stream).writerows([['item_code', 'net_value', 'segment'], *rows])
+        with pytest.raises(CoreError) as refused:
+            ingest_flat(source, tmp_path / f'{len(rows)}-{rows[0][0] or "blank"}.duckdb', c)
+        for text in expected:
+            assert text in refused.value.message, refused.value.message

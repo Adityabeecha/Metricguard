@@ -355,11 +355,24 @@ def row_values(row: dict, context: dict[str, dict] | None) -> dict:
     return out
 
 
-def _group_value(row: dict, context: dict[str, dict] | None, column: str, bucket: str | None):
-    value = row_values(row, context).get(column)
-    if bucket == 'day' and isinstance(value, str) and len(value) >= 10:
+def date_group(value, bucket: str | None):
+    """A date/timestamp value's group: its day, the Monday of its ISO week, or its month (YYYY-MM)."""
+    if bucket not in ('day', 'week', 'month') or not isinstance(value, str) or len(value) < 10:
+        return value
+    if bucket == 'day':
         return value[:10]
-    return value
+    if bucket == 'month':
+        return value[:7]
+    from datetime import date, timedelta
+    try:
+        day = date.fromisoformat(value[:10])
+    except ValueError:
+        return value
+    return (day - timedelta(days=day.weekday())).isoformat()
+
+
+def _group_value(row: dict, context: dict[str, dict] | None, column: str, bucket: str | None):
+    return date_group(row_values(row, context).get(column), bucket)
 
 
 def group_page(path: Path, key: tuple, verify_all: Callable[[], Any], column: str, context: dict[str, dict] | None,

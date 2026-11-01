@@ -177,3 +177,19 @@ def test_change_context_rejects_earlier_values_for_other_columns(tmp_path):
     assert validate_context(good, evidence, ['s'])['row_count'] == 1
     with pytest.raises(ValueError):
         validate_context(bad, evidence, ['s'])
+
+
+def test_week_and_month_groups_still_add_up_exactly(tmp_path):
+    evidence_cache.clear()
+    path, key = artifact(tmp_path, ROWS)
+    dates = {'A': '2026-09-28', 'B': '2026-09-30 10:00:00', 'C': '2026-10-01', 'D': '2026-10-04', 'E': '2026-10-05', 'F': None}
+    context = {k: {'ordered_on': v} for k, v in dates.items()}
+    assert evidence_cache.date_group('2026-10-04', 'week') == '2026-09-28'  # Sunday belongs to the week from Monday
+    assert evidence_cache.date_group('2026-10-04 23:59:00', 'month') == '2026-10'
+    total = sum(Decimal(r['delta']) for r in ROWS)
+    for bucket, expected in (('week', {'2026-09-28', '2026-10-05', None}), ('month', {'2026-09', '2026-10', None})):
+        split = evidence_cache.breakdown(path, key, lambda: None, 'ordered_on', context, bucket=bucket)
+        assert {g['value'] for g in split['groups']} == expected
+        assert sum(Decimal(g['change']) for g in split['groups']) == total == Decimal(split['total_change'])
+    rows, count = evidence_cache.group_page(path, key, lambda: None, 'ordered_on', context, '2026-09-28', 0, 10, bucket='week')
+    assert sorted(r['order_id'] for r in rows) == ['A', 'C', 'D'] and count == 3  # B has no change

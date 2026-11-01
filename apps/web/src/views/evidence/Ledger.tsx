@@ -11,7 +11,7 @@ const keyOf = (row: Row) => row.fact_key ?? row.row_key ?? row.order_id ?? '—'
 const minus = (text: string) => text.replace(/^-/, '−');
 
 /** A 'Where it sits' group the ledger is narrowed to. */
-export type LedgerGroup = { column: string; columnLabel: string; value: unknown; noMatch?: boolean; label: string; totalText: string; column2?:string;value2?:unknown;noMatch2?:boolean };
+export type LedgerGroup = { column: string; columnLabel: string; value: unknown; noMatch?: boolean; label: string; totalText: string; column2?:string;value2?:unknown;noMatch2?:boolean; grouping?: string };
 
 export type LedgerProps = {
   runId: string;
@@ -54,7 +54,7 @@ export function Ledger(props: LedgerProps) {
     let active = true;
     setBusy(true); setProblem('');
     const load = group
-      ? client.evidenceGroup(runId, { column: group.column, value: group.value, noMatch: group.noMatch, column2:group.column2,value2:group.value2,noMatch2:group.noMatch2, withContext:true, q: query, offset: 0, limit })
+      ? client.evidenceGroup(runId, { column: group.column, value: group.value, noMatch: group.noMatch, column2:group.column2,value2:group.value2,noMatch2:group.noMatch2, withContext:true, q: query, offset: 0, limit, grouping: group.grouping })
       : client.evidenceView(runId, { offset: 0, limit, changedOnly: true, order: 'impact', category: category || undefined, q: query,withContext:true });
     load
       .then(res => { if (active) { setRows(res.items as Row[]); setTotal(res.total); } })

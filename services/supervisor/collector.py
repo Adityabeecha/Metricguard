@@ -23,7 +23,7 @@ import duckdb
 import psycopg
 from psycopg import sql
 
-from packages.metricguard_core.free_tier import FreeTierLimit, check_rows, check_upload_size
+from packages.metricguard_core.free_tier import FreeTierLimit, check_rows, check_upload_size, configured_limit
 from packages.metricguard_core.common import (
     CoreError, DATES, NUMERIC, SCHEMA, digest, file_hash
 )
@@ -455,6 +455,20 @@ class PostgresCollector:
                 ddb.execute(f'CREATE TABLE orders ({col_defs})')
 
             try:
+                if not sample and configured_limit('METRICGUARD_MAX_ROWS') is not None:
+                    # Count first, in the same read-only transaction, so an over-limit table is
+                    # refused before any rows are read.
+                    # If the count itself fails, the streaming check below still enforces the limit.
+                    from services.supervisor.warehouse_rest import refuse_over_limit
+                    try:
+                        with conn.cursor() as counter:
+                            counter.execute(sql.SQL("SELECT COUNT(*) FROM {schema}.{table} WHERE {cutoff} <= %s").format(
+                                schema=sql.Identifier(selection.schema_name), table=sql.Identifier(selection.table_name),
+                                cutoff=sql.Identifier(selection.cutoff_column)), [cutoff_val])
+                            counted = int(counter.fetchone()[0])
+                    except Exception:
+                        counted = -1
+                    refuse_over_limit(counted)
                 with conn.cursor(name=cursor_name) as cursor:
                     cursor.itersize = selection.chunk_size
                     cursor.execute(query, [cutoff_val, sample] if sample else [cutoff_val])

@@ -184,12 +184,14 @@ def install_oauth_routes(app, store, data_dir, secure_cookies=False):
                 sweep_guests(store, data_dir)
             except Exception:
                 pass
-            user, pid = store.oauth_sign_in(provider, subject, email, name, guest_terms(email))
+            terms = guest_terms(email)
+            user, pid = store.oauth_sign_in(provider, subject, email, name, terms)
+            reset = store.take_guest_erasure(provider, subject) if terms else False
             session = store.create_session(user['id'], SESSION_SECONDS)
             old = request.cookies.get(SESSION_COOKIE)
             if old:
                 store.revoke_session(old)
-            response = RedirectResponse(config['app_url'] + f'/w/{pid}/investigations', status_code=302)
+            response = RedirectResponse(config['app_url'] + f'/w/{pid}/investigations' + ('?notice=guest-reset' if reset else ''), status_code=302)
             response.set_cookie(SESSION_COOKIE, session, max_age=SESSION_SECONDS, path='/api',
                                 httponly=True, secure=secure_cookies, samesite='strict')
             return finish(response, provider)
@@ -198,6 +200,16 @@ def install_oauth_routes(app, store, data_dir, secure_cookies=False):
             # public code; no tokens, emails or provider exception text reach URLs.
             pass
         return finish(RedirectResponse(config['app_url'] + '/signin?' + urlencode({'error': error}), status_code=302), provider)
+
+    @app.get('/api/v1/auth/account/summary')
+    def account_summary(request: Request):
+        """Counts shown before the typed DELETE confirmation; nothing is changed."""
+        from .account_deletion import deletion_summary
+        token = request.cookies.get(SESSION_COOKIE)
+        user = store.get_user_by_session(token) if token else None
+        if not user:
+            raise DomainError('UNAUTHORIZED', 'Sign in with a browser session to see what deletion would remove.', 401)
+        return deletion_summary(store, user['id'])
 
     @app.delete('/api/v1/auth/account')
     def delete_own_account(request: Request):

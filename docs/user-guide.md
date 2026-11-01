@@ -145,7 +145,7 @@ Use **New comparison → Warehouse table**:
    - **Snowflake:** account identifier, database and access token.
    - **BigQuery:** project ID, dataset and access token.
 2. Click **Test connection & load columns**. MetricGuard lists your tables. When you pick a table, it suggests the ID, amount and date columns. You can change any of them.
-3. Optional: fill in **Save as** to keep the connection for next time, if saving connections is enabled. Only workspace owners can save connections, and saved credentials are stored encrypted.
+3. Optional: fill in **Save as** to keep the connection for next time, if saving connections is enabled. Only workspace owners can save connections, and saved credentials are stored encrypted. When a token or password changes, choose the saved connection and use **Replace the access token** (or **Replace the connection string**).
 4. Optional: set a **Cutoff column** and use the date or date-and-time picker for the **Cutoff value** to take a fixed point in time (e.g. all orders up to 31 October).
 5. Import. The table becomes a dataset just like an uploaded file.
 
@@ -215,7 +215,7 @@ The difference is split into categories, and the categories add up **exactly** t
 - **A · Records:** every record behind the difference. The **largest change comes first** by default.
   - **Search** for an ID or value, or **filter** by category or group.
   - **Show columns** adds more fields to the table.
-- **B · Where it sits:** splits the difference by a column (region, status, date…). It opens on the column where the difference is most concentrated.
+- **B · Where it sits:** splits the difference by a column (region, status, date…). It opens on the column where the difference is most concentrated. For date columns, **grouped by** switches between Day, Week (from Monday) and Month; the groups still add up exactly.
   - The **Concentration** section compares each value or pair of values with its share of records, e.g. "62% of the difference is in `region = South` with `status = refunded`".
   - If the difference is spread evenly, it says so.
 - **C · Definitions:** the exact calculations that were compared.
@@ -234,7 +234,7 @@ Under the result, in **Save as a case**:
 3. **Recorded by:** your name.
 4. Click **Save case**.
 
-The case is now in **Cases**. Each case keeps the exact data fingerprint and calculations, so anyone can open it and use **Replay & verify** to recompute it and confirm the answer is still exact.
+The case is now in **Cases**. Each case keeps the exact data fingerprint and calculations, so anyone can open it and use **Replay & verify** to recompute it and confirm the answer is still exact. A table then shows each value it compared (both totals, the difference, the remainder, the record count and the evidence fingerprint) and marks any that differ.
 
 Search cases by name, conclusion or dataset, and sort by last updated, name or the size of the difference.
 

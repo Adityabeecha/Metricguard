@@ -9,6 +9,7 @@ import { api, ApiError, versionName, type Bootstrap, type InvestigationDetail, t
 import { caseNumber, KIND_LABEL } from '../investigationLibrary';
 import { ResultReport } from './ResultReport';
 import { CustodyLog, replayMatches } from './evidence/CustodyLog';
+import { replayChecks } from './evidence/replayChecks';
 import { caseSummaryMarkdown } from './evidence/copySummary';
 import { loadSummaryBreakdown, savedFilterColumns } from './evidence/breakdownSelection';
 
@@ -218,11 +219,19 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
         {replayBlocker && <span id="replay-blocker" className="disabled-reason">{replayBlocker}</span>}
         {replayProblem && <div className="alert error" role="alert"><span>{replayProblem}</span><button className="button secondary small" onClick={() => void startReplay()} disabled={Boolean(replayBlocker)}>Retry</button></div>}
         {replay?.state === 'failed' && <p className="disabled-reason">Replay did not complete: {replay.error?.message || 'unknown error'}.</p>}
-        {replay?.result && (
-          <p role="status" className={same ? '' : 'disabled-reason'}>
-            {same ? `Replay reproduced the saved result exactly: same totals, same change and identical record evidence (run ${replay.id}).`
-              : `Replay finished but differs from the saved result (current ${replay.result.baseline_value}, proposed ${replay.result.target_value}, change ${replay.result.delta_target_minus_baseline}). Investigate before relying on this case.`}
-          </p>
+        {replay?.result && detail.run.result && (
+          <>
+            <p role="status" className={same ? '' : 'disabled-reason'}>
+              {same ? `Recomputed from the frozen data: every check below matches the saved case (run ${replay.id}).`
+                : 'Replay finished but differs from the saved result. The differing lines are marked below; investigate before relying on this case.'}
+            </p>
+            <table className="ledger-table replay-checks">
+              <thead><tr><th>Checked</th><th>Saved case</th><th>Replay</th><th>Result</th></tr></thead>
+              <tbody>{replayChecks(detail.run.result, replay.result).map(check => (
+                <tr key={check.label}><td>{check.label}</td><td className="n">{check.saved}</td><td className="n">{check.replayed}</td>
+                  <td>{check.same ? 'Same' : <strong>Differs</strong>}</td></tr>))}</tbody>
+            </table>
+          </>
         )}
       </section>
       {savingMetric && <SaveAsMetric data={data} detail={detail} onClose={() => setSavingMetric(false)}

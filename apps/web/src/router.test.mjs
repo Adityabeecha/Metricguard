@@ -87,7 +87,7 @@ test('unknown pages are flagged instead of silently showing Cases', () => {
 test('public routes stay outside workspace bootstrapping', () => {
   assert.equal(typeof routing.sitePage, 'function');
   for (const [path, page] of [['/', 'home'], ['/privacy', 'privacy'], ['/terms/', 'terms'],
-    ['/signin', 'signin'], ['/signup', 'signup'], ['/w/acme/investigations', 'workspace']]) {
+    ['/signin', 'signin'], ['/signup', 'signup'], ['/guide', 'guide'], ['/w/acme/investigations', 'workspace']]) {
     assert.equal(routing.sitePage(path), page);
   }
 });

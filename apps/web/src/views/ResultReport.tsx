@@ -194,11 +194,12 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, so
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
   const [all, setAll] = useState(false);
+  const [grouping, setGrouping] = useState<'' | 'week' | 'month'>('');
   useEffect(() => {
     if (concentration === undefined && !column) return;  // wait to know which column to open on
     let active = true;
     setBusy(true); setProblem('');
-    client.evidenceBreakdown(runId, column || undefined, all ? 200 : 10)
+    client.evidenceBreakdown(runId, column || undefined, all ? 200 : 10, grouping || undefined)
       .then(d => {
         if (!active) return;
         onColumns(d.columns || []);
@@ -211,7 +212,7 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, so
       .catch(e => { if (active) setProblem(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
-  }, [runId, column, all, concentration === undefined]);
+  }, [runId, column, all, grouping, concentration === undefined]);
   if (problem) return <p className="disabled-reason">The breakdown could not be loaded: {problem}</p>;
   if (!data) return busy ? <p role="status">Working out where the difference comes from…</p> : null;
   const unavailable = Object.entries(data.unavailable_columns || {});
@@ -244,10 +245,15 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, so
       <div className="where-head">
         <h3><span className="exhibit">B</span> Where the difference sits</h3>
         <label>by
-          <select value={data.column || ''} onChange={e => { setColumn(e.target.value); setAll(false); }}>
+          <select value={data.column || ''} onChange={e => { setColumn(e.target.value); setAll(false); setGrouping(''); }}>
             {data.columns.map(c => <option key={c} value={c}>{columnLabel(c)}</option>)}
           </select>
         </label>
+        {data.groupable && <label>grouped by
+          <select value={grouping} onChange={e => { setGrouping(e.target.value as '' | 'week' | 'month'); setAll(false); }}>
+            <option value="">Day</option><option value="week">Week (from Monday)</option><option value="month">Month</option>
+          </select>
+        </label>}
       </div>
       <p className="where-legend">
         <span className="legend-bar" aria-hidden="true" /> Share of the difference
@@ -256,7 +262,7 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, so
       </p>
       <table className="ledger-table where-table" aria-busy={busy}>
         <thead><tr>
-          <th scope="col">{columnLabel(data.column || '')}{data.grouping === 'day' ? ' (by day)' : ''}</th>
+          <th scope="col">{columnLabel(data.column || '')}{data.grouping === 'day' ? ' (by day)' : data.grouping === 'week' ? ' (week starting)' : data.grouping === 'month' ? ' (by month)' : ''}</th>
           <th scope="col" className="num">{data.ratio ? 'Effect on the ratio' : 'Change'}</th>
           <th scope="col">Share of the difference</th>
           <th scope="col" className="num">Changed records</th>
@@ -273,7 +279,7 @@ function Breakdown({ runId, unit, percent, onColumns, preferred = [] , loads, so
                 <th scope="row" data-label={columnLabel(data.column || '')}>
                   {onPickGroup && !line.other && line.changed > 0
                     ? <button type="button" className="link-button group-pick" title="Show these records" onClick={() => onPickGroup({ column: data.column || '', columnLabel: columnLabel(data.column || ''),
-                        value: line.value ?? null, noMatch: line.noMatch, label: line.label, totalText: changeShown(line.change) })}>{line.label}</button>
+                        value: line.value ?? null, noMatch: line.noMatch, label: line.label, totalText: changeShown(line.change), grouping: data.grouping })}>{line.label}</button>
                     : line.label}
                   {concentrated && <span className="concentrated">Concentrated</span>}</th>
                 <td className="num change" data-label="Change" title={line.exact ? `Exact: ${line.exact}` : undefined}>{changeShown(line.change)}</td>
@@ -670,8 +676,9 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
                   ))}
                 </fieldset>
               )}
-              {!readOnly && <button type="button" className="button secondary small" onClick={downloadCsv}>Download {kind === 'count_distinct' ? 'distinct values' : result.evidence_coverage ? 'listed records' : 'all records'} (CSV)</button>}
+              {!readOnly && <button type="button" className="button secondary small" onClick={downloadCsv}>Download {kind === 'count_distinct' ? 'distinct values' : result.evidence_coverage ? 'listed records' : 'all records'}{listedTotal != null ? `: ${groupDigits(String(listedTotal))}` : ''} (CSV)</button>}
             </div>
+            {!readOnly && (q || changedOnly || ledgerCategory || ledgerGroup) && <p className="example">The CSV always holds every record, not only the ones your search or filter shows.</p>}
             {csvProblem && <p className="disabled-reason">The download failed: {csvProblem}</p>}
             {records.problem && <p className="disabled-reason">Records could not be loaded: {records.problem}</p>}
             <div className="table-scroll" aria-busy={records.busy}>

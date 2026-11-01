@@ -35,6 +35,7 @@ def test_public_case_share_is_allowlisted_and_revocable(tmp_path, monkeypatch):
         assert opened.status_code == 200, opened.text
         dto = opened.json()
         assert dto['title'] == 'Paid only' and dto['run']['id'] == run['id']
+        assert dto['expires_at'] == share['expires_at']  # the page can say when the link stops working
         for private in ('actor_label', 'project_id', 'artifact_path', 'source_path', 'private@example.com'):
             assert private not in opened.text
         for suffix in ('evidence-summary', 'evidence?limit=1', 'evidence-breakdown?column=status',

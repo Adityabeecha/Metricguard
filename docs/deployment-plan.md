@@ -227,7 +227,7 @@ Each step ends in something you can check. Steps 1–4 are backend, 5–6 fronte
 ## 7. Open questions to confirm in step 0
 1. The largest compute plan the Northflank free project allows (not published).
 2. Whether free Northflank projects can attach volumes (not published). If yes, step 2 could start on a volume and move to R2 later.
-3. Whether large request bodies pass through Vercel's external rewrite (not documented; Vercel Functions cap bodies at 4.5 MB). Test a 20 MB upload in step 7. If it fails, upload straight to R2 with a pre-signed URL.
+3. Whether large request bodies pass through Vercel's external rewrite. Checked 2026-11-01: Vercel's rewrites and limits pages list no request-body cap for rewrites to external origins (the 4.5 MB cap is for Vercel Functions, which MetricGuard does not use); the documented limit is a 120-second proxy timeout (`ROUTER_EXTERNAL_TARGET_ERROR`). Upload endpoints answer 202 as soon as the file is received, so the timeout only matters for very slow connections. Still confirm with a real 20 MB upload in step 7; if it fails, upload straight to R2 with a pre-signed URL.
 
 ## Sources
 - [Northflank pricing](https://northflank.com/pricing) and [project types / sandbox limits](https://northflank.com/docs/v1/application/billing/pricing-on-northflank)

@@ -110,3 +110,23 @@ def test_guest_terms_settings(monkeypatch):
     assert guests.guest_terms('b@example.com') == {'seconds': 36000, 'storage_bytes': 25 * 1024 * 1024}
     monkeypatch.setenv('METRICGUARD_INVITE_EMAILS', '')
     assert guests.guest_terms('b@example.com') is None
+
+
+def test_returning_guest_is_told_once_and_only_a_hash_is_kept(setup, guest_mode, tmp_path):
+    from services.api.store import guest_erasures
+    client, store, _, profile = setup
+    profile['email'] = 'stranger@example.com'
+    sign_in(client, 'github')
+    with store.engine.begin() as conn:
+        conn.execute(update(guest_accounts).values(expires_at=time.time() - 1))
+    guests.sweep(store, tmp_path)
+    with store.engine.connect() as conn:
+        kept = conn.execute(guest_erasures.select()).mappings().all()
+    assert len(kept) == 1 and 'stranger' not in str(kept) and len(kept[0]['identity_hash']) == 64
+    client.cookies.clear()
+    _, state = begin(client, 'github')
+    first = callback(client, 'github', state)
+    assert first.headers['location'].endswith('/investigations?notice=guest-reset')
+    client.cookies.clear()
+    _, state = begin(client, 'github')
+    assert '?notice' not in callback(client, 'github', state).headers['location']

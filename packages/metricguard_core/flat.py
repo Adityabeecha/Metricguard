@@ -68,6 +68,37 @@ def _error(code, message):
     raise CoreError(code, message)
 
 
+# Refused clauses, named in plain words with where they start (refusal text only: accepted SQL,
+# its IR and every hash are untouched).
+_CLAUSES = {'group': ('GROUP BY', 'Use the Where it sits tab to break a result down by a column.'),
+            'order': ('ORDER BY', 'Records are already listed largest change first.'),
+            'having': ('HAVING', 'Filter rows with WHERE instead.'), 'limit': ('LIMIT', 'The whole dataset is always used.'),
+            'offset': ('OFFSET', 'The whole dataset is always used.'), 'joins': ('JOIN', 'Upload two connected tables to use a lookup table.'),
+            'distinct': ('SELECT DISTINCT', 'Use COUNT(DISTINCT column) to count distinct values.'),
+            'with_': ('WITH', 'Write one SELECT without a WITH clause.'), 'qualify': ('QUALIFY', 'Filter rows with WHERE instead.')}
+
+
+def _clause_position(sql, keyword):
+    """1-based character position of a keyword token (outside strings and comments), or None."""
+    try:
+        tokens = sqlglot.tokenize(sql, read='duckdb')
+    except Exception:
+        return None
+    first = keyword.split()[-1] if keyword.startswith('SELECT') else keyword.split()[0]
+    for token in tokens:
+        if (token.text.upper().split() or [''])[0] == first:
+            return token.start + 1
+    return None
+
+
+def _refuse_clause(sql, tree):
+    for key, (keyword, hint) in _CLAUSES.items():
+        value = tree.args.get(key)
+        if value is not None and value is not False and value != []:
+            where = _clause_position(sql, keyword)
+            _error('unsupported_sql', f"{keyword} isn't supported" + (f' (at character {where})' if where else '') + f'. {hint}')
+
+
 def _quote(name):
     return '"' + name.replace('"', '""') + '"'
 
@@ -280,11 +311,23 @@ def validate_contract(payload):
     return result
 
 
+def _shown(value) -> str:
+    """An offending cell for an error message: quoted and cut to 40 characters."""
+    text = str(value)
+    return repr(text if len(text) <= 40 else text[:39] + '…')
+
+
+def _amount_fix(value) -> str:
+    if isinstance(value, str) and re.search(r'[₹$€£¥,]|\b[A-Z]{3}\b', value):
+        return ' Remove currency symbols and thousands separators: 1,250.00 → 1250.00.'
+    return ' Amounts must be plain numbers such as 1250.00 or -3.5.'
+
+
 def _amount(value, contract, row_number):
     if value is None:
         return None
     if not isinstance(value, str) or not DECIMAL.fullmatch(value):
-        _error('invalid_row', f'{contract["measure"]} requires an exact decimal at row {row_number}')
+        _error('invalid_row', f'{contract["measure"]} requires an exact decimal at row {row_number} (found {_shown(value)}).{_amount_fix(value)}')
     try:
         number = Decimal(value)
     except InvalidOperation as exc:
@@ -293,7 +336,8 @@ def _amount(value, contract, row_number):
     fractional = max(-number.as_tuple().exponent, 0)
     integer = max(len(digits) + number.as_tuple().exponent, 0)
     if fractional > contract['scale'] or integer > contract['precision'] - contract['scale']:
-        _error('invalid_row', f'{contract["measure"]} exceeds declared DECIMAL({contract["precision"]},{contract["scale"]}) at row {row_number}')
+        _error('invalid_row', f'{contract["measure"]} exceeds declared DECIMAL({contract["precision"]},{contract["scale"]}) at row {row_number} '
+               f'(found {_shown(value)}: at most {contract["scale"]} decimal places and {contract["precision"] - contract["scale"]} digits before the point).')
     return format(number, 'f')
 
 
@@ -307,7 +351,9 @@ def _validate_flat_cell(value, field, logical_type, row_number):
     if value is None:
         return None
     if not _canonical_type(value, logical_type):
-        _error('invalid_row', f'{field} requires canonical {logical_type} at row {row_number}')
+        hint = {'date': ' Use YYYY-MM-DD, e.g. 2026-10-01.', 'timestamp': ' Use YYYY-MM-DD HH:MM:SS.',
+                'boolean': ' Use true or false.'}.get(logical_type, '')
+        _error('invalid_row', f'{field} requires canonical {logical_type} at row {row_number} (found {_shown(value)}).{hint}')
     return value
 
 
@@ -442,7 +488,8 @@ def _ingest_flat(source, destination, contract, preparation, folder, sinks):
                     if len(rows) >= MAX_FLAT_ROWS: _error('too_many_rows', f'Flat snapshot exceeds {MAX_FLAT_ROWS} rows')
                     if None in raw or any(v is None for v in raw.values()): _error('invalid_row', f'Wrong field count at line {index}')
                     key = _text_value(raw[contract['row_key']], contract['row_key'], index)
-                    if not key or key == token or rows.seen(key): _error('invalid_row', f'Missing or duplicate row key at line {index}')
+                    if not key or key == token: _error('invalid_row', f'Missing row key ({contract["row_key"]} is blank) at line {index}')
+                    if rows.seen(key): _error('invalid_row', f'Duplicate row key {_shown(key)} in {contract["row_key"]} at line {index}: each row needs its own ID')
                     if ver in (6, 8):
                         amounts = [_amount(None if raw[c['name']] == token else raw[c['name']],
                                            {**contract, 'precision': c['precision'], 'scale': c['scale'], 'measure': c['name']}, index)
@@ -762,9 +809,15 @@ def parse_flat(sql, contract):
     except CoreError:
         raise
     except Exception as exc:
-        raise CoreError('unsupported_sql', 'SQL could not be parsed') from exc
+        errors = getattr(exc, 'errors', None) or []
+        line, col = (errors[0].get('line'), errors[0].get('col')) if errors and isinstance(errors[0], dict) else (None, None)
+        where = ''
+        if isinstance(line, int) and isinstance(col, int) and line >= 1:
+            where = f' (at character {sum(len(part) + 1 for part in sql.split(chr(10))[:line - 1]) + col})'
+        raise CoreError('unsupported_sql', f'SQL could not be parsed{where}') from exc
     if len(statements) != 1 or not isinstance(statements[0], exp.Select): _error('unsupported_sql', 'Exactly one SELECT is required')
     tree = statements[0]
+    _refuse_clause(sql, tree)
     if ver == 7:
         from .flat_case import validate_case_ast
         validate_case_ast(tree)

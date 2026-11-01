@@ -8,6 +8,7 @@ import {
   FolderOpen,
   Menu,
   MessageSquare,
+  BookOpen,
   Settings,
   X,
 } from 'lucide-react';
@@ -385,6 +386,10 @@ function WorkspaceApp() {
             <MessageSquare size={17} />
             <span>Feedback</span>
           </button>}
+          <a className="nav-item" href="/guide" target="_blank" rel="noreferrer">
+            <BookOpen size={17} />
+            <span>Guide</span>
+          </a>
 
           <div className={`status-indicator ${runnerReady ? 'ready' : 'warning'}`} role="status">
             <span className="status-dot" />

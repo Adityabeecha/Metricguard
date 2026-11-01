@@ -52,8 +52,10 @@ def sweep(store, data_dir) -> list[str]:
     erased, waiting = [], 0
     for user_id in store.expired_guests():
         try:
+            hashes = store.guest_identity_hashes(user_id)  # read before the identities are deleted
             delete_account(store, user_id, data_dir)
             erased.append(user_id)
+            store.remember_guest_erasure(hashes)
         except Exception as exc:  # retried on the next sweep
             waiting += 1
             print(f'guests: could not erase {user_id} yet: {getattr(exc, "code", type(exc).__name__)}', file=sys.stderr, flush=True)

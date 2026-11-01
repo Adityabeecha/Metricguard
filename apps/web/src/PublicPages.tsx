@@ -9,6 +9,7 @@ import { HashPrint } from './views/evidence/HashPrint';
 import { Stamp } from './views/evidence/Stamp';
 import { homeRedirect, type SitePage } from './router';
 import { DemoCasePage } from './DemoCasePage';
+import { GuidePage } from './GuidePage';
 import { scrollToHash } from './publicScroll';
 import { CONTACT_EMAIL, HOSTING_REGION } from './publicFacts';
 import './public.css';
@@ -24,7 +25,7 @@ export function PublicPages({ page }: { page: PublicPage }) {
     return () => window.removeEventListener('scroll', update);
   }, []);
   useEffect(() => {
-    const titles = { home: 'MetricGuard — Explain the difference. Keep the proof.', privacy: 'Privacy — MetricGuard', terms: 'Terms — MetricGuard', demo: 'Sample case MG-F3A3 — MetricGuard', 'not-found': 'Page not found — MetricGuard' };
+    const titles = { home: 'MetricGuard — Explain the difference. Keep the proof.', privacy: 'Privacy — MetricGuard', terms: 'Terms — MetricGuard', guide: 'User guide — MetricGuard', demo: 'Sample case MG-F3A3 — MetricGuard', 'not-found': 'Page not found — MetricGuard' };
     document.title = titles[page];
     if (page !== 'home') return;
     let active = true;
@@ -44,13 +45,13 @@ export function PublicPages({ page }: { page: PublicPage }) {
     <a className="skip-link" href="#public-content">Skip to content</a>
     <header className={`public-header ${scrolled ? 'is-scrolled' : ''}`}><div className="public-header-inner public-width">
       <a className="public-brand" href="/" aria-label="MetricGuard home"><Logo size={32} /><strong>MetricGuard</strong></a>
-      <nav className="public-anchors" aria-label="On this page"><a href={`${page === 'home' ? '' : '/'}#how`}>How it works</a><a href={`${page === 'home' ? '' : '/'}#evidence`}>Evidence</a><a href={`${page === 'home' ? '' : '/'}#security`}>Security</a></nav>
+      <nav className="public-anchors" aria-label="On this page"><a href={`${page === 'home' ? '' : '/'}#how`}>How it works</a><a href={`${page === 'home' ? '' : '/'}#evidence`}>Evidence</a><a href={`${page === 'home' ? '' : '/'}#security`}>Security</a><a href="/guide">Guide</a></nav>
       <div className="public-header-actions"><ThemeSwitch compact /><a className="public-signin" href="/signin">Sign in</a><a className="button primary" href="/signup">Sign up</a></div>
     </div></header>
     <main id="public-content" className={page === 'home' ? 'public-home-main' : 'public-width'}>
-      {page === 'home' ? <Homepage /> : page === 'demo' ? <DemoCasePage /> : page === 'not-found' ? <NotFound /> : <LegalPage kind={page} />}
+      {page === 'home' ? <Homepage /> : page === 'demo' ? <DemoCasePage /> : page === 'not-found' ? <NotFound /> : page === 'guide' ? <GuidePage /> : <LegalPage kind={page} />}
     </main>
-    <footer className="public-footer public-width"><div><span>© MetricGuard</span><span>Built for data analysts</span></div><nav aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://github.com/Adityabeecha/Metricguard" rel="noreferrer">GitHub</a></nav></footer>
+    <footer className="public-footer public-width"><div><span>© MetricGuard</span><span>Built for data analysts</span></div><nav aria-label="Legal"><a href="/guide">User guide</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://github.com/Adityabeecha/Metricguard" rel="noreferrer">GitHub</a></nav></footer>
   </div>;
 }
 
@@ -203,7 +204,7 @@ function LegalPage({ kind }: { kind: 'privacy' | 'terms' }) {
       <h2>Using the beta</h2><p>Use MetricGuard only with data you are authorised to process and share with your workspace. Protect your account and API keys. The beta may change or be unavailable; keep independent copies of anything you need.</p>
       <h2>What a result means</h2><p>MetricGuard compares supported calculations on the frozen inputs you provide. A matching replay verifies reproducibility, not the business meaning of a metric or the accuracy of its source data. Review the definitions, context and evidence before relying on a result.</p>
       <h2>Your information</h2><p>Guest accounts and their owned data are erased after the guest period.</p><p>We store your account email and name, uploaded datasets and results. The hosted setup uses Neon (Postgres), Cloudflare R2 and Northflank in {HOSTING_REGION}. See the <a href="/privacy">privacy page</a> for details.</p>
-      <h2>Keeping and deleting data</h2><p>There is no automatic expiry during this beta. Use Settings → Delete my account to remove your account and sole-member owned workspaces. Shared workspace records remain for other members. Downloaded or independently retained copies remain outside this deletion.</p>
+      <h2>Keeping and deleting data</h2><p>Full accounts have no automatic expiry during this beta; guest accounts are erased after the guest period. Use Settings → Delete my account to remove your account and sole-member owned workspaces. Shared workspace records remain for other members. Downloaded or independently retained copies remain outside this deletion.</p>
       <h2>Questions</h2><p>Contact <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> for support or questions about these terms.</p>
     </>}
   </article>;

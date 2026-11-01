@@ -161,3 +161,28 @@ def test_route_queues_an_isolated_import_without_storing_the_token(tmp_path, mon
         assert job['state'] == 'validated', job.get('error')
         snapshot = client.get(f"/api/v1/snapshots/{job['snapshot_id']}").json()
         assert snapshot['row_count'] == 4
+
+
+def test_count_query_reuses_the_extract_filter():
+    sql, _ = wr.snowflake_query(_selection('snowflake', cutoff_column='ordered_on', cutoff_type='date', cutoff_value='2026-09-30'))
+    counted = wr._count_query(sql, '"')
+    assert counted == 'SELECT COUNT(*) AS "n" FROM analytics.sales.orders WHERE ordered_on <= TO_DATE(?)'
+
+
+def test_over_limit_table_is_refused_before_reading_rows(tmp_path, monkeypatch):
+    monkeypatch.setenv('METRICGUARD_MAX_ROWS', '50000')
+    requests = []
+
+    def handle(request):
+        requests.append(json.loads(request.content)['query'])
+        return httpx.Response(200, json={'jobReference': {'jobId': 'job_c'}, 'jobComplete': True, 'rows': [{'f': [{'v': '182400'}]}]})
+    with pytest.raises(CollectorError) as refused:
+        wr.extract_to_csv(_selection('bigquery'), tmp_path / 'out.csv', client=httpx.Client(transport=httpx.MockTransport(handle)))
+    assert refused.value.code == 'FREE_TIER_ROWS' and '182,400 rows' in refused.value.message and '50,000' in refused.value.message
+    assert len(requests) == 1 and requests[0].startswith('SELECT COUNT(*)')
+
+
+def test_unknown_count_falls_back_to_the_streaming_limit(tmp_path, monkeypatch):
+    monkeypatch.setenv('METRICGUARD_MAX_ROWS', '50000')
+    monkeypatch.setattr(wr, 'count_rows', lambda selection, client: -1)
+    assert wr.extract_to_csv(_selection('snowflake'), tmp_path / 'out.csv', client=snowflake_fake([])) == 4

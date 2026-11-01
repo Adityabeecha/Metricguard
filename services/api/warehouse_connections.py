@@ -37,6 +37,13 @@ class ConnectionInput(BaseModel):
     location: str | None = Field(default=None, max_length=32)
 
 
+class CredentialInput(BaseModel):
+    """New credentials for a saved connection (e.g. an expired token); nothing else changes."""
+    model_config = ConfigDict(extra='forbid')
+    source_uri: str | None = Field(default=None, max_length=2000, repr=False)
+    token: str | None = Field(default=None, max_length=8192, repr=False)
+
+
 class InspectInput(BaseModel):
     model_config = ConfigDict(extra='forbid')
     connection_id: str | None = Field(default=None, max_length=64)
@@ -121,6 +128,32 @@ def install_warehouse_connection_routes(app, store):
         with store.engine.begin() as conn:
             conn.execute(insert(warehouse_connections).values(**item))
         return {k: item[k] for k in ('id', 'kind', 'label', 'public', 'created_at')}
+
+    @app.patch('/api/v1/projects/{pid}/warehouse-connections/{connection_id}')
+    def replace_credentials(pid: str, connection_id: str, body: CredentialInput, request: Request):
+        import json
+        from sqlalchemy import update
+        auth = get_auth_context(request, store)
+        verify_project_access(store, pid, auth, allowed_roles=('owner',), require_verified=True)
+        cipher = _cipher()
+        with store.engine.begin() as conn:
+            row = conn.execute(select(warehouse_connections).where(warehouse_connections.c.id == connection_id,
+                                                                   warehouse_connections.c.project_id == pid)).mappings().first()
+            if not row:
+                raise DomainError('NOT_FOUND', 'Saved connection not found.', 404)
+            public = dict(row['public'])
+            if row['kind'] == 'postgres':
+                if not body.source_uri:
+                    raise DomainError('INVALID_CONNECTION', 'Enter the new connection string.')
+                public = _public('postgres', ConnectionInput(kind='postgres', label=row['label'], source_uri=body.source_uri))
+                secret = {'source_uri': body.source_uri}
+            else:
+                if not body.token or len(body.token.strip()) < 8:
+                    raise DomainError('INVALID_CONNECTION', 'Paste the new access token.')
+                secret = {'token': body.token.strip()}
+            conn.execute(update(warehouse_connections).where(warehouse_connections.c.id == connection_id).values(
+                public=public, secret=cipher.encrypt(json.dumps(secret).encode()).decode()))
+        return {'id': connection_id, 'kind': row['kind'], 'label': row['label'], 'public': public, 'created_at': row['created_at']}
 
     @app.delete('/api/v1/projects/{pid}/warehouse-connections/{connection_id}')
     def remove(pid: str, connection_id: str, request: Request):

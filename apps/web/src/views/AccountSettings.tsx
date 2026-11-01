@@ -12,6 +12,16 @@ export function AccountSettings() {
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState<'signout' | 'delete' | null>(null);
   const [problem, setProblem] = useState('');
+  type Summary = { erased_workspaces: string[]; datasets: number; comparisons: number; cases: number; left_workspaces: string[] };
+  const [summary, setSummary] = useState<Summary | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setSummary(null);
+    api.get<Summary>('/auth/account/summary').then(value => { if (active) setSummary(value); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [open]);
+  const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
   const close = () => { if (!busy) { setOpen(false); setConfirmation(''); setProblem(''); } };
   const dialog = useDialog<HTMLFormElement>(open, close, !busy);
 
@@ -61,6 +71,12 @@ export function AccountSettings() {
           <div className="modal-header"><h2 id="delete-account-title">Delete your account?</h2><button type="button" className="modal-close-button" onClick={close} disabled={!!busy} aria-label="Close dialog"><X size={18} /></button></div>
           <div className="modal-body form-stack">
             <p id="delete-account-description">This permanently deletes your account, sign-ins, API keys, and workspaces you own with no other members, including their uploaded data and evidence. Shared workspace records remain available to other members.</p>
+            {summary && <ul className="account-delete-summary">
+              {summary.erased_workspaces.length > 0
+                ? <li><strong>Erased:</strong> {summary.erased_workspaces.join(', ')}, with {plural(summary.datasets, 'dataset')}, {plural(summary.comparisons, 'comparison')} and {plural(summary.cases, 'saved case')}.</li>
+                : <li>No workspace is erased: every workspace you own has other members.</li>}
+              {summary.left_workspaces.length > 0 && <li><strong>You leave:</strong> {summary.left_workspaces.join(', ')}. Their data stays for the other members.</li>}
+            </ul>}
             {problem && <p className="auth-message error" role="alert">{problem}</p>}
             <label className="account-delete-label">Type DELETE to confirm<input type="text" value={confirmation} onChange={event => setConfirmation(event.target.value)} autoComplete="off" spellCheck={false} disabled={!!busy} data-autofocus /></label>
           </div>
