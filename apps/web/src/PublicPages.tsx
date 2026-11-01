@@ -18,6 +18,8 @@ type PublicPage = Exclude<SitePage, 'workspace' | 'signin' | 'signup' | 'shared-
 
 export function PublicPages({ page }: { page: PublicPage }) {
   const [scrolled, setScrolled] = useState(false);
+  // Signed-in visitors get "Open workspace" instead of Sign in / Sign up on every public page.
+  const [workspaceUrl, setWorkspaceUrl] = useState<string | null>(null);
   useEffect(() => {
     const update = () => setScrolled(window.scrollY > 8);
     update();
@@ -27,13 +29,13 @@ export function PublicPages({ page }: { page: PublicPage }) {
   useEffect(() => {
     const titles = { home: 'MetricGuard — Explain the difference. Keep the proof.', privacy: 'Privacy — MetricGuard', terms: 'Terms — MetricGuard', guide: 'User guide — MetricGuard', demo: 'Sample case MG-F3A3 — MetricGuard', 'not-found': 'Page not found — MetricGuard' };
     document.title = titles[page];
-    if (page !== 'home') return;
     let active = true;
     // Public pages make no workspace/bootstrap/provider requests. Identity supplies
     // an authorised destination; never guess a workspace from a user's id.
     api.identity().then(identity => {
       const destination = homeRedirect(identity);
-      if (active && destination) {
+      if (active) setWorkspaceUrl(destination);
+      if (active && destination && page === 'home') {
         window.history.replaceState(null, '', destination);
         window.dispatchEvent(new PopStateEvent('popstate'));
       }
@@ -46,7 +48,9 @@ export function PublicPages({ page }: { page: PublicPage }) {
     <header className={`public-header ${scrolled ? 'is-scrolled' : ''}`}><div className="public-header-inner public-width">
       <a className="public-brand" href="/" aria-label="MetricGuard home"><Logo size={32} /><strong>MetricGuard</strong></a>
       <nav className="public-anchors" aria-label="On this page"><a href={`${page === 'home' ? '' : '/'}#how`}>How it works</a><a href={`${page === 'home' ? '' : '/'}#evidence`}>Evidence</a><a href={`${page === 'home' ? '' : '/'}#security`}>Security</a><a href="/guide">Guide</a></nav>
-      <div className="public-header-actions"><ThemeSwitch compact /><a className="public-signin" href="/signin">Sign in</a><a className="button primary" href="/signup">Sign up</a></div>
+      <div className="public-header-actions"><ThemeSwitch compact />{workspaceUrl
+        ? <a className="button primary" href={workspaceUrl}>Open workspace</a>
+        : <><a className="public-signin" href="/signin">Sign in</a><a className="button primary" href="/signup">Sign up</a></>}</div>
     </div></header>
     <main id="public-content" className={page === 'home' ? 'public-home-main' : 'public-width'}>
       {page === 'home' ? <Homepage /> : page === 'demo' ? <DemoCasePage /> : page === 'not-found' ? <NotFound /> : page === 'guide' ? <GuidePage /> : <LegalPage kind={page} />}
