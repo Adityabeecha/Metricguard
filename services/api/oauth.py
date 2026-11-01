@@ -15,7 +15,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse, JSONResponse
 
 from .auth import SESSION_COOKIE, SESSION_SECONDS
-from .guests import guest_terms
+from .guests import full_access_emails, guest_terms, sweep as sweep_guests
 from .store import DomainError
 
 STATE_SECONDS = 600
@@ -129,7 +129,9 @@ def install_oauth_routes(app, store, data_dir, secure_cookies=False):
     @app.get('/api/v1/auth/providers')
     def providers():
         config = settings()
-        return {'providers': list(config['providers']), 'signup_mode': 'open',
+        terms = guest_terms('') if full_access_emails() else None
+        guest = {'hours': terms['seconds'] // 3600, 'storage_mb': terms['storage_bytes'] // (1024 * 1024)} if terms else None
+        return {'providers': list(config['providers']), 'signup_mode': 'open', 'guest': guest,
                 'auth_required': os.environ.get('METRICGUARD_ALLOW_UNVERIFIED_LOCAL', 'true').lower() in ('false', '0', 'no', 'off')}
 
     @app.get('/api/v1/auth/oauth/{provider}/start')
@@ -171,7 +173,17 @@ def install_oauth_routes(app, store, data_dir, secure_cookies=False):
                 raise ValueError('provider refused')
             if len(codes) != 1 or not 1 <= len(codes[0]) <= 4096:
                 raise ValueError('code')
-            subject, email, name = verified_profile(provider, codes[0], payload, config)
+            try:
+                subject, email, name = verified_profile(provider, codes[0], payload, config)
+            except ValueError as exc:
+                if str(exc) == 'unverified':
+                    error = 'unverified'
+                raise
+            try:
+                # An expired guest signing in again gets a fresh account, not the one being erased.
+                sweep_guests(store, data_dir)
+            except Exception:
+                pass
             user, pid = store.oauth_sign_in(provider, subject, email, name, guest_terms(email))
             session = store.create_session(user['id'], SESSION_SECONDS)
             old = request.cookies.get(SESSION_COOKIE)

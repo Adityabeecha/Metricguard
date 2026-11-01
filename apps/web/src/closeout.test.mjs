@@ -4,7 +4,7 @@ import { chooseWorkspaceAfterConnect, classifyLoadError, readReloadEnded } from 
 import { NOT_DECLARED, summarizeDataset } from './datasetSummary.ts';
 import { buildFlatSql, buildRelationalSql, describeCalculation, flatFilterColumns, formProblems } from './comparisonBuilder.ts';
 import { summarizeResult } from './resultSummary.ts';
-import { buildLibraryItems, filterLibraryItems } from './investigationLibrary.ts';
+import { buildLibraryItems, filterLibraryItems, sortLibraryItems } from './investigationLibrary.ts';
 import './resultUnits.test.mjs';
 
 // ---------- fixtures (the 8-row V8 flat case and the 5-row relational case) ----------
@@ -280,4 +280,16 @@ test('a new condition starts on a column with a short list of values, not on an 
   assert.equal(defaultConditionColumn(withTime, {}), 'status');
   assert.equal(defaultConditionColumn(withTime, { customer_id: known.customer_id }), 'status');
   assert.equal(defaultConditionColumn(withTime.slice(0, 1), {}), '');
+});
+
+
+test('case search includes conclusions and sorting uses exact difference magnitude', () => {
+  const items = [
+    { title: 'B', conclusion: 'Refunded orders', datasetName: 'Sales', number: '1', currentLabel: '', proposedLabel: '', metricNames: [], status: 'saved', kind: 'single', change: '-9007199254740993', updatedAt: '2026-01-01' },
+    { title: 'A', conclusion: '', datasetName: 'Stock', number: '2', currentLabel: '', proposedLabel: '', metricNames: [], status: 'saved', kind: 'single', change: '9007199254740992', updatedAt: '2026-02-01' },
+  ];
+  assert.equal(filterLibraryItems(items, { query: 'refunded', kind: 'all', status: 'all' })[0].title, 'B');
+  assert.deepEqual(sortLibraryItems(items, 'name').map(x => x.title), ['A', 'B']);
+  assert.deepEqual(sortLibraryItems(items, 'difference').map(x => x.title), ['B', 'A']);
+  assert.deepEqual(sortLibraryItems(items, 'updated').map(x => x.title), ['A', 'B']);
 });

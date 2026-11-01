@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { type ChangeCategory, type Evidence, type FlatEvidence, type RelationalEvidence } from '../../api';
 import { groupDigits } from '../../resultSummary';
 import { runningTotals } from '../../exactDecimal';
-import { categoryLabel, type CategoryKey } from './categories';
+import { categoryDescription, categoryLabel, type CategoryKey } from './categories';
 import { RecordContext } from './RecordContext';
 import { workspaceEvidenceClient, type EvidenceDataClient } from './evidenceClient';
 
@@ -87,7 +87,7 @@ export function Ledger(props: LedgerProps) {
             All changes <span className="n">{groupDigits(String(allCount))}</span>
           </button>
           {categories.map(c => (
-            <button key={c.key} type="button" role="tab" aria-selected={category === c.key} onClick={() => onCategory(c.key)}>
+            <button key={c.key} title={categoryDescription(c.key, labels)} type="button" role="tab" aria-selected={category === c.key} onClick={() => onCategory(c.key)}>
               {categoryLabel(c.key, labels)} <span className="n">{groupDigits(String(c.records))}</span>
             </button>
           ))}
@@ -118,7 +118,7 @@ export function Ledger(props: LedgerProps) {
         </tbody>
         {!query && <tfoot>
           <tr className="ledger-total">
-            <th scope="row" colSpan={2}>{group ? `Total · ${group.columnLabel} = ${group.label}` : category ? `Total · ${categoryLabel(category, labels)}` : 'Total of listed changes'}</th>
+            <th scope="row" colSpan={2} title={category ? categoryDescription(category, labels) : undefined}>{group ? `Total · ${group.columnLabel} = ${group.label}` : category ? `Total · ${categoryLabel(category, labels)}` : 'Total of listed changes'}</th>
             <td className="num"><span className="double-rule">{group ? group.totalText : props.totalText}</span></td>
             {showRunning && <td />}
           </tr>

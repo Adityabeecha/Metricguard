@@ -294,7 +294,13 @@ class PostgresCollector:
             final_manifest.unlink(missing_ok=True)
 
             code = exc.code if isinstance(exc, (CollectorError, FreeTierLimit)) else 'EXTRACTION_FAILED'
-            msg = exc.message if isinstance(exc, (CollectorError, FreeTierLimit)) else redact_credentials(str(exc))
+            if isinstance(exc, (CollectorError, FreeTierLimit)):
+                msg = exc.message
+            elif isinstance(exc, (psycopg.Error, OSError)):
+                from services.supervisor.warehouse_errors import warehouse_error
+                code, msg = warehouse_error(exc)
+            else:
+                msg = redact_credentials(str(exc))
 
             if self.store is not None and hasattr(self.store, 'update_extraction'):
                 self.store.update_extraction(
@@ -318,7 +324,9 @@ class PostgresCollector:
         except CollectorError:
             raise
         except Exception as exc:
-            raise CollectorError('CONNECTION_FAILED', f"Failed to connect to PostgreSQL source: {redact_credentials(str(exc))}") from None
+            from services.supervisor.warehouse_errors import warehouse_error
+            code, message = warehouse_error(exc)
+            raise CollectorError(code, message) from None
 
     def _resolve_contract_and_mapping(self, selection: PostgresSourceSelection, pid: str) -> dict:
         """Resolve and validate dataset contract and optional column mapping."""

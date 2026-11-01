@@ -2,7 +2,7 @@ import { evidenceCountLabel } from './evidencePresentation';
 import { Stamp } from './Stamp';
 import { bridgeGeometry } from './bridgeGeometry';
 
-export type BridgeStep = { key: string; label: string; value: string|number; text: string; records: number };
+export type BridgeStep = { key: string; label: string; value: string|number; text: string; records: number; description?: string };
 export type BridgeProps = {
   start: { label: string; value: string|number; text: string };
   end: { label: string; value: string|number; text: string };
@@ -62,6 +62,7 @@ export function Bridge({ start, end, steps, residualText, balanced, description,
                role={onPick ? 'button' : undefined} tabIndex={onPick ? 0 : undefined}
                onKeyDown={onPick ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(s.key); } }) : undefined}
                aria-label={onPick ? `${s.label}: ${s.text}, ${evidenceCountLabel(s.records, recordsAffectTotal)}. Show these records.` : undefined}>
+              <title>{s.description}</title>
               <line x1={x(col - 1) + bw} x2={x(col)} y1={y(from)} y2={y(from)} className="bridge-connector" />
               <rect x={x(col)} y={top} width={bw} height={height} className={plot.steps[i] < 0n ? 'bridge-down' : 'bridge-up'} />
               <text x={x(col) + bw / 2} y={top - 8} className="bridge-figure" textAnchor="middle">{s.text}</text>
@@ -90,7 +91,7 @@ export function Bridge({ start, end, steps, residualText, balanced, description,
       <ol className="bridge-list" aria-label="Reconciliation steps">
         <li className="total"><span>{start.label}</span><b>{start.text}</b></li>
         {steps.map(s => (
-          <li key={s.key}>
+          <li key={s.key} title={s.description}>
             <button type="button" disabled={!onPick} onClick={() => onPick?.(s.key)}>
               <span>{s.label}<small>{evidenceCountLabel(s.records, recordsAffectTotal)}</small></span><b>{s.text}</b>
             </button>

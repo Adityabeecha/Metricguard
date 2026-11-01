@@ -13,7 +13,7 @@ const keyOf = (row: Record<string, unknown>) => String(row.fact_key ?? row.row_k
  */
 export function caseSummaryMarkdown(opts: {
   detail: InvestigationDetail; unit: string; summary: EvidenceSummary | null; breakdown: EvidenceBreakdown | null;
-  link: string; replayVerifiedAt?: string | null;
+  link?: string; replayVerifiedAt?: string | null;
 }): string {
   const { detail, unit, summary, breakdown, link } = opts;
   const result = detail.run.result;
@@ -43,6 +43,6 @@ export function caseSummaryMarkdown(opts: {
     lines.push(`• Where it sits: ${column} = ${value} ${withUnit(lead.group.change)} (${breakdownSharePercent(lead)}% of the difference).`);
   }
   lines.push(`Evidence sealed ${day(detail.created_at)}${opts.replayVerifiedAt ? ` · replay verified ${day(opts.replayVerifiedAt)}` : ''}`);
-  lines.push(link);
+  if (link) lines.push(link);
   return lines.join('\n');
 }

@@ -1,3 +1,4 @@
+import { engineDownMessage, isLocalHost } from './hostedCopy';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Check, KeyRound, Layers3, RefreshCw, ServerCrash, ShieldOff, X } from 'lucide-react';
 import { api, hasApiCredential, setApiCredential, setSessionSignedIn, type Workspace } from './api';
@@ -43,12 +44,13 @@ export function KeyHelp() {
   return (
     <details className="gate-help">
       <summary>Where do I get an API key?</summary>
-      <p>
+      {isLocalHost(window.location.hostname) ? <><p>
         Each person receives their own key from a workspace owner. On the machine that runs MetricGuard,
         the owner issues one with the command below, using the same data folder the app was started with
         (<code>data\demo-app</code> when started by <code>scripts\mg.ps1</code>):
       </p>
       <pre className="gate-command">.venv\Scripts\python -m scripts.issue_api_key --data-dir DATA_FOLDER --name "Your name" --email you@example.com --workspace WORKSPACE_ID:analyst</pre>
+      </> : <p>Ask a workspace owner for an API key.</p>}
       <p>Roles are <b>reader</b> (view), <b>analyst</b> (compare and save) and <b>owner</b> (approve and manage members).</p>
     </details>
   );
@@ -170,7 +172,7 @@ export function GateScreen({ state, workspaceId, onRetry, onChooseWorkspace }: G
         <h1 id="gate-title">{unavailable ? 'MetricGuard service is unavailable' : 'The workspace could not be opened'}</h1>
         <p>
           {unavailable
-            ? 'The browser could not reach the MetricGuard API. Check that the application is running (scripts\\mg.ps1 status) and try again. Nothing you saved is lost.'
+            ? engineDownMessage(window.location.hostname)
             : 'The server returned an unexpected response. Try again; if it keeps happening, share the detail below with whoever runs MetricGuard.'}
         </p>
         <div className="gate-actions">

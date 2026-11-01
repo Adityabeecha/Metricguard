@@ -66,7 +66,7 @@ During the beta, new accounts may be **guest accounts**. If yours is one, you'll
 - **Guest storage is limited to 25 MB in total.** That covers all your files and results together.
 - You can sign in again afterwards. You get a fresh, empty workspace.
 
-If you need a permanent account, ask the MetricGuard team using **Feedback** (section 14).
+When less than an hour remains, open a case and use **Records (CSV)** to keep a copy. Choose **Need a permanent account?** in the notice to open Feedback with a request ready to send. Guest lifetime and storage limits are shown before sign-up and can vary by deployment.
 
 ---
 
@@ -106,6 +106,8 @@ Once you're comfortable, add your own data.
 
 1. Go to **Datasets → Add dataset** (or **Upload a file** on the first-run page).
 2. Choose your CSV, Excel or Parquet file. MetricGuard reads it and shows **Columns found**, with a sample value for each column.
+Excel uploads read only the first worksheet. Move the data to the first sheet or save that sheet as CSV. Upload progress appears as a percentage before the row checks.
+
 3. Answer the questions:
    - **Which column identifies each row?** Pick your ID column (e.g. `order_id`).
    - **What do you want to total?** Choose **A total of one amount column (most common)** and pick the amount (e.g. `revenue`).
@@ -116,6 +118,8 @@ Once you're comfortable, add your own data.
 5. Click **Check dataset**. MetricGuard checks every row, column type and amount. When it's done you'll see **Dataset ready**.
 
 If something is wrong, for example a duplicate ID or text in an amount column, you'll see **Dataset checks failed** with a **Recommended fix**. Correct the file and upload it again.
+
+If an amount includes currency symbols or thousands separators, remove them before uploading (for example, `1,250.00` becomes `1250.00`).
 
 **Advanced details** (precision, how blanks are treated and so on) are optional. The defaults suit most files.
 
@@ -141,8 +145,8 @@ Use **New comparison → Warehouse table**:
    - **Snowflake:** account identifier, database and access token.
    - **BigQuery:** project ID, dataset and access token.
 2. Click **Test connection & load columns**. MetricGuard lists your tables. When you pick a table, it suggests the ID, amount and date columns. You can change any of them.
-3. Optional: fill in **Save as** to keep the connection for next time. Only workspace owners can save connections, and saved credentials are stored encrypted.
-4. Optional: set a **Cutoff column** and **Cutoff value** to take a fixed point in time (e.g. all orders up to 31 October).
+3. Optional: fill in **Save as** to keep the connection for next time, if saving connections is enabled. Only workspace owners can save connections, and saved credentials are stored encrypted.
+4. Optional: set a **Cutoff column** and use the date or date-and-time picker for the **Cutoff value** to take a fixed point in time (e.g. all orders up to 31 October).
 5. Import. The table becomes a dataset just like an uploaded file.
 
 > **Good practice:** use a **read-only** database user. MetricGuard only reads. The database must be reachable from the internet; private office networks can't be reached.
@@ -169,7 +173,7 @@ Use this when two teams calculate "the same" number differently.
    - **Include only records where…** add conditions, e.g. `status` *is* `paid`, or `order_date` *between* two dates. Choose **All conditions (AND)** or **Any condition (OR)**.
 
    Prefer typing SQL? Switch from **Guided form** to **SQL editor**. It understands simple totals and counts, such as `SELECT SUM(revenue) FROM orders_october WHERE status = 'paid'`. Click a column chip to insert its name. The form can also show the **SQL this form produces**.
-3. Click **Check and compare**.
+3. Click **Check and compare**. If a daily limit applies, the remaining comparisons appear alongside the button. Going back to the same dataset keeps your calculations.
 
 ### 7B. Same calculation on two data loads, or two sources
 
@@ -183,7 +187,7 @@ Use this when the **data** changed, not the formula.
    - **Two loads of the same dataset:** pick the **Earlier load** and the **Later load**.
    - **Two different sources:** pick **Source A** and **Source B**. They need compatible columns: the same ID, amount and filter columns.
 3. Describe the calculation once (or **Start from a saved calculation**): what to total or count, and which records must match.
-4. Click **Compare the two loads** (or **Compare the two sources**).
+4. Click **Compare the two loads** (or **Compare the two sources**). This comparison supports totals and record counts; distinct counts, ratios, averages, subtraction, CASE and connected tables require **Two calculations on the same data**.
 
 ---
 
@@ -212,12 +216,12 @@ The difference is split into categories, and the categories add up **exactly** t
   - **Search** for an ID or value, or **filter** by category or group.
   - **Show columns** adds more fields to the table.
 - **B · Where it sits:** splits the difference by a column (region, status, date…). It opens on the column where the difference is most concentrated.
-  - The **Concentration** section names the column or pair of columns that best explains it, e.g. "62% of the difference is in `region = South` with `status = refunded`".
+  - The **Concentration** section compares each value or pair of values with its share of records, e.g. "62% of the difference is in `region = South` with `status = refunded`".
   - If the difference is spread evenly, it says so.
 - **C · Definitions:** the exact calculations that were compared.
 - **D · Limits:** what this result does and doesn't prove.
 
-> Detailed records are kept for a limited time. If you see **Detailed records expired — rerun to see them**, run the comparison again from the case.
+> Detailed records are kept while storage allows; rerun the case if they expire. If you see **Detailed records expired — rerun to see them**, run the comparison again from the case.
 
 ---
 
@@ -232,6 +236,8 @@ Under the result, in **Save as a case**:
 
 The case is now in **Cases**. Each case keeps the exact data fingerprint and calculations, so anyone can open it and use **Replay & verify** to recompute it and confirm the answer is still exact.
 
+Search cases by name, conclusion or dataset, and sort by last updated, name or the size of the difference.
+
 **Managing cases**
 
 - **Cases → Needs a conclusion** lists comparisons you ran but haven't concluded yet. Use **Write conclusion** to finish them.
@@ -245,7 +251,7 @@ The case is now in **Cases**. Each case keeps the exact data fingerprint and cal
 
 ## 10. Share a case
 
-Open a case and click **Share**. There are two ways:
+Open a case and click **Share**. **Copy summary** includes the saved case link. Use **Print / Save PDF** for the answer, reconciliation, conclusion and visible records. There are two ways:
 
 - **Workspace members:** anyone in your workspace can already open the case.
 - **Public read-only link:** anyone with the link can view the case without signing in. They can't change anything.
@@ -295,7 +301,7 @@ If you belong to more than one workspace, use the workspace switcher in the side
 ## 14. Settings, usage and feedback
 
 - **Settings → Workspace information:** the workspace name and ID.
-- **Settings → Usage:** your current limits and how much you've used: rows per dataset, upload size, comparisons in the last 24 hours, and storage used.
+- **Settings → Usage:** your current limits and how much you've used: rows per dataset, upload size, comparisons in the last 24 hours, and storage used. Bars show storage and comparison usage when limits are set; guest accounts also show the time until erasure.
 - **Settings → Account:** sign out, or permanently **delete your account**. You must type `DELETE` to confirm. Deleting erases your personal workspace and everything in it. Shared workspaces stay, minus you.
 - **Settings → Appearance:** light or dark mode.
 - **Feedback** (sidebar): tell the team what's confusing or broken. Mention the page you were on.
@@ -326,10 +332,10 @@ If you belong to more than one workspace, use the workspace switcher in the side
 | **Dataset checks failed** | Read the **Recommended fix**. Common causes are duplicate IDs, text such as `₹` or `N/A` in the amount column, or mixed date formats. |
 | **No records match** | Your conditions exclude everything. Check spelling and capitals (`Paid` ≠ `paid`) and date ranges. |
 | **The two calculations are identical** | Change one of them. There's nothing to compare. |
-| **This calculation is outside the supported grammar** | The SQL is too complex. Use the **Guided form**, or keep the SQL to one `SUM(...)` or `COUNT(*)` with an optional `WHERE`. |
+| **This calculation uses SQL MetricGuard can't check exactly yet** | The SQL is too complex. Use the **Guided form**, or keep the SQL to one `SUM(...)` or `COUNT(*)` with an optional `WHERE`. |
 | **Choose two different datasets / loads** | You picked the same thing twice. |
 | **Detailed records expired** | Rerun the comparison from the case. |
-| A comparison stays "waiting" | Only 1 comparison runs at a time per workspace. Wait for the current one to finish. |
+| **Waiting for your other comparison to finish** | Only 1 comparison runs at a time per workspace. Wait for the current one to finish. |
 | Can't connect to a database | Check the details and that the database accepts connections from the internet. Use **Test connection & load columns** to see the error. |
 | An invited person can't see the workspace | They must sign in with **exactly the invited email address**. |
 | Sign-in fails | Your Google or GitHub email must be **verified**. Try the other provider, or check the email in that account's settings. |

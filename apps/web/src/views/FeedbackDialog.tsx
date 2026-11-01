@@ -4,8 +4,8 @@ import { api } from '../api';
 import { useDialog } from '../useDialog';
 
 /** "Report a problem or suggest something": free text, sent with the page it came from. */
-export function FeedbackDialog({ workspaceId, onClose }: { workspaceId: string; onClose: () => void }) {
-  const [message, setMessage] = useState('');
+export function FeedbackDialog({ workspaceId, onClose, initialMessage = '' }: { workspaceId: string; onClose: () => void; initialMessage?: string }) {
+  const [message, setMessage] = useState(initialMessage);
   const [state, setState] = useState<'idle' | 'sending' | 'sent'>('idle');
   const [problem, setProblem] = useState('');
   const ref = useDialog<HTMLDivElement>(true, onClose, state !== 'sending');

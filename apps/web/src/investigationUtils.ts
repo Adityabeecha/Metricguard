@@ -340,7 +340,7 @@ export function classifyInvestigationError(err: unknown, measurePolicy?: string)
     lowerMsg.includes('syntax or operations outside')
   ) {
     let guidance = 'Supported filters: =, !=, <>, IN, >, <, >=, <=, BETWEEN, IS NULL, IS NOT NULL, boolean predicates.';
-    let message = rawMsg || 'This query uses syntax MetricGuard does not currently support.';
+    let message = rawMsg ? rawMsg.replace(/is outside the supported grammar/gi, "uses SQL MetricGuard can't check exactly yet") : 'This query uses syntax MetricGuard does not currently support.';
 
     if (measurePolicy === 'flat-case-v1' || lowerMsg.includes('case') || lowerMsg.includes('when') || lowerMsg.includes('else')) {
       guidance = 'CASE mode supports SUM(CASE WHEN <bounded predicate> THEN <registered measure> ELSE 0 END) FROM snapshot, with optional supported WHERE. Exactly one WHEN branch; no nested CASE or arithmetic branches.';

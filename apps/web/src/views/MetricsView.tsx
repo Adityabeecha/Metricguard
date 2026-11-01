@@ -391,7 +391,7 @@ export function MetricsView({
       setImplSqlName('');
       setImplRawSql('');
       setImplExistingDefId('');
-      setNotice('Implementation added successfully.');
+      setNotice('Calculation linked successfully.');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -417,7 +417,7 @@ export function MetricsView({
       setTransitions(updatedTransitions.items || []);
 
       setPromoteCandidateTarget(null);
-      setNotice(`Promoted ${promoteCandidateTarget.defName} to active implementation.`);
+      setNotice(`Promoted ${promoteCandidateTarget.defName} as the approved calculation.`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -517,7 +517,7 @@ export function MetricsView({
             onClick={() => handleSelectMetric(null)}
           >
             <ArrowLeft size={16} />
-            <span>Back to Metrics catalog</span>
+            <span>Back to metrics catalog</span>
           </button>
         </div>
 
@@ -575,7 +575,7 @@ export function MetricsView({
               }}
             >
               <Plus size={15} />
-              <span>Add implementation</span>
+              <span>Link a calculation</span>
             </button>
             {supportInfo.isAnalyzable && activeVersion && onComparePair && (
               <button
@@ -592,7 +592,7 @@ export function MetricsView({
                 }}
               >
                 <Layers size={15} />
-                <span>Investigate in studio</span>
+                <span>Open in New comparison</span>
               </button>
             )}
           </div>
@@ -605,7 +605,7 @@ export function MetricsView({
             className={`section-tab-button ${detailTab === 'implementations' ? 'active' : ''}`}
             onClick={() => handleDetailTabClick('implementations')}
           >
-            Implementations ({(activeBinding ? 1 : 0) + candidateBindings.length + retiredBindings.length})
+            Calculations ({(activeBinding ? 1 : 0) + candidateBindings.length + retiredBindings.length})
           </button>
           <button
             type="button"
@@ -639,15 +639,15 @@ export function MetricsView({
         {/* Tab 1: Implementations */}
         {detailTab === 'implementations' && (
           <div className="implementations-list">
-            {/* Active Implementation */}
-            <div className="implementation-group-title">Active Implementation</div>
+            {/* Approved calculation */}
+            <div className="implementation-group-title">Approved calculation</div>
             {activeDef && activeVersion ? (
               <div className="implementation-card active">
                 <div className="implementation-card-header">
                   <div className="implementation-card-title-line">
                     <span className="status-pill ready">
                       <span className="status-dot" />
-                      ACTIVE
+                      APPROVED
                     </span>
                     <span className="implementation-name">{activeDef.name}</span>
                     <span className="source-badge">{activeDef.source_label}</span>
@@ -661,7 +661,7 @@ export function MetricsView({
 
                 <div className="implementation-card-meta-grid">
                   <div className="implementation-meta-item">
-                    <span className="meta-label">Bound Version</span>
+                    <span className="meta-label">Bound version</span>
                     <span className="meta-value mono">v{activeVersion.version_number}</span>
                   </div>
                   <div className="implementation-meta-item">
@@ -671,11 +671,11 @@ export function MetricsView({
                     </span>
                   </div>
                   <div className="implementation-meta-item">
-                    <span className="meta-label">Observed Date</span>
+                    <span className="meta-label">Observed date</span>
                     <span className="meta-value">{activeVersion.observed_at ? activeVersion.observed_at.slice(0, 10) : 'Recent'}</span>
                   </div>
                   <div className="implementation-meta-item">
-                    <span className="meta-label">Change Kind</span>
+                    <span className="meta-label">Change kind</span>
                     <span className="meta-value">{activeVersion.change_kind || 'Production query'}</span>
                   </div>
                 </div>
@@ -688,19 +688,19 @@ export function MetricsView({
               </div>
             ) : (
               <div className="empty-card" style={{ padding: '24px', textAlign: 'center', background: 'var(--panel)', border: '1px dashed var(--line)', borderRadius: '8px' }}>
-                <p style={{ margin: '0 0 12px', color: 'var(--muted)' }}>No active implementation currently bound to this metric.</p>
+                <p style={{ margin: '0 0 12px', color: 'var(--muted)' }}>No approved calculation is linked to this metric.</p>
                 <button
                   type="button"
                   className="button secondary"
                   onClick={() => setShowAddImplModal(true)}
                 >
-                  <Plus size={14} /> Attach implementation
+                  <Plus size={14} /> Link a calculation
                 </button>
               </div>
             )}
 
             {/* Candidate Implementations */}
-            <div className="implementation-group-title">Candidate Implementations ({candidateBindings.length})</div>
+            <div className="implementation-group-title">Trial calculations ({candidateBindings.length})</div>
             {candidateBindings.length > 0 ? (
               candidateBindings.map((c) => {
                 const candDef = definitions.find((d) => d.id === c.definition_id);
@@ -713,7 +713,7 @@ export function MetricsView({
                       <div className="implementation-card-title-line">
                         <span className="status-pill warn">
                           <span className="status-dot" />
-                          CANDIDATE
+                          TRIAL
                         </span>
                         <span className="implementation-name">{candDef.name}</span>
                         <span className="source-badge">{candDef.source_label}</span>
@@ -726,7 +726,7 @@ export function MetricsView({
                             disabled={!matchingMetricLoads(activeVersion, data.snapshots, candVer).length || !['executable', 'supported'].includes(candVer.support_state)}
                             onClick={() => startComparison(activeVersion, candVer, 'candidate_review')}
                           >
-                            Compare with active
+                            Compare with approved
                           </button>
                         )}
                         <button
@@ -741,14 +741,14 @@ export function MetricsView({
                             })
                           }
                         >
-                          Promote to active
+                          Approve calculation
                         </button>
                       </div>
                     </div>
 
                     <div className="implementation-card-meta-grid">
                       <div className="implementation-meta-item">
-                        <span className="meta-label">Target Version</span>
+                        <span className="meta-label">Target version</span>
                         <span className="meta-value mono">v{candVer.version_number}</span>
                       </div>
                       <div className="implementation-meta-item">
@@ -758,12 +758,12 @@ export function MetricsView({
                         </span>
                       </div>
                       <div className="implementation-meta-item">
-                        <span className="meta-label">Bound At</span>
+                        <span className="meta-label">Bound at</span>
                         <span className="meta-value">{c.created_at ? c.created_at.slice(0, 10) : 'Recent'}</span>
                       </div>
                       <div className="implementation-meta-item">
                         <span className="meta-label">Rationale</span>
-                        <span className="meta-value">Candidate evaluation</span>
+                        <span className="meta-value">Trial result</span>
                       </div>
                     </div>
 
@@ -777,14 +777,14 @@ export function MetricsView({
               })
             ) : (
               <div style={{ padding: '16px', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '6px', color: 'var(--muted)', fontSize: '13px' }}>
-                No candidate implementations currently pending review.
+                No trial calculations are waiting for review.
               </div>
             )}
 
             {/* Retired Implementations */}
             {retiredBindings.length > 0 && (
               <>
-                <div className="implementation-group-title">Retired Implementations ({retiredBindings.length})</div>
+                <div className="implementation-group-title">Retired calculations ({retiredBindings.length})</div>
                 {retiredBindings.map((r) => {
                   const retDef = definitions.find((d) => d.id === r.definition_id);
                   return (
@@ -810,7 +810,7 @@ export function MetricsView({
         {detailTab === 'versions' && (
           <div className="implementations-list">
             <div className="unassigned-header">
-              <h3>Version Timeline</h3>
+              <h3>Version timeline</h3>
               <p>Previous calculations and the versions approved for this metric.</p>
             </div>
 
@@ -828,7 +828,7 @@ export function MetricsView({
                           Approved baseline
                         </span>
                       ) : status === 'candidate' ? (
-                        <span className="status-pill warn">Candidate</span>
+                        <span className="status-pill warn">Trial</span>
                       ) : (
                         <span className="status-pill neutral">Superseded</span>
                       )}
@@ -842,7 +842,7 @@ export function MetricsView({
                           className="button secondary"
                           onClick={() => startComparison(activeVersion, ver, 'version_comparison')}
                         >
-                          Compare with active
+                          Compare with approved
                         </button>
                       )}
                     </div>
@@ -850,7 +850,7 @@ export function MetricsView({
 
                   <div className="implementation-card-meta-grid">
                     <div className="implementation-meta-item">
-                      <span className="meta-label">Observed Timestamp</span>
+                      <span className="meta-label">Observed timestamp</span>
                       <span className="meta-value">{ver.observed_at ? ver.observed_at.slice(0, 19).replace('T', ' ') : 'Recent'}</span>
                     </div>
                     <div className="implementation-meta-item">
@@ -860,7 +860,7 @@ export function MetricsView({
                       </span>
                     </div>
                     <div className="implementation-meta-item">
-                      <span className="meta-label">Time Column</span>
+                      <span className="meta-label">Time column</span>
                       <span className="meta-value mono">{ver.time_column || 'None specified'}</span>
                     </div>
                     <div className="implementation-meta-item">
@@ -1027,7 +1027,7 @@ export function MetricsView({
 
             {metricDiffs.length > 0 && (
               <div style={{ marginTop: '20px' }}>
-                <div className="implementation-group-title">Related CI Metric Diffs ({metricDiffs.length})</div>
+                <div className="implementation-group-title">Related CI metric diffs ({metricDiffs.length})</div>
                 {metricDiffs.map((md) => (
                   <div key={md.id} className="implementation-card" style={{ padding: '12px 16px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1060,8 +1060,8 @@ export function MetricsView({
             >
               <div className="modal-header">
                 <div>
-                  <h3 id="add-impl-title" style={{ margin: 0 }}>Add implementation to {selectedMetric.display_name}</h3>
-                  <p className="modal-subtitle">Bind a query definition as a candidate or active baseline.</p>
+                  <h3 id="add-impl-title" style={{ margin: 0 }}>Link a calculation to {selectedMetric.display_name}</h3>
+                  <p className="modal-subtitle">Link a calculation to this metric, either to try it out or as the approved one.</p>
                 </div>
                 <button
                   type="button"
@@ -1098,7 +1098,7 @@ export function MetricsView({
                           checked={implChoice === 'new_sql'}
                           onChange={() => setImplChoice('new_sql')}
                         />
-                        <span>Import new SQL query</span>
+                        <span>Add SQL</span>
                       </label>
                     </div>
                   </div>
@@ -1122,7 +1122,7 @@ export function MetricsView({
                         </select>
                       ) : (
                         <p className="muted-text font-small" style={{ margin: '4px 0 0', color: 'var(--muted)' }}>
-                          No unassigned definitions currently available. Choose "Import new SQL query" instead.
+                          No unassigned definitions currently available. Choose "Add SQL" instead.
                         </p>
                       )}
                     </div>
@@ -1134,7 +1134,7 @@ export function MetricsView({
                           <option value="">Choose a dataset…</option>
                           {availableFlatContracts.map(c => <option key={c.id} value={c.id}>{c.name} · {c.unit_label}</option>)}
                         </select>
-                        {!availableFlatContracts.length && <p className="disabled-reason">Add a dataset in Data Sources before adding SQL.</p>}
+                        {!availableFlatContracts.length && <p className="disabled-reason">Add a dataset in Datasets before adding SQL.</p>}
                         <p className="muted-text font-small">Use the table name <code>snapshot</code> in your SQL.</p>
                       </div>
                       <div className="form-group" style={{ marginBottom: 0 }}>
@@ -1178,8 +1178,8 @@ export function MetricsView({
                       value={implStatus}
                       onChange={(e) => setImplStatus(e.target.value as 'candidate' | 'active')}
                     >
-                      <option value="candidate">Candidate (Recommended for verification)</option>
-                      <option value="active">Active (Immediately replaces active baseline)</option>
+                      <option value="candidate">Trial: compare it with the approved one first (recommended)</option>
+                      <option value="active">Approved: replaces the current approved calculation now</option>
                     </select>
                   </div>
                 </div>
@@ -1193,7 +1193,7 @@ export function MetricsView({
                     Cancel
                   </button>
                   <button type="submit" className="button primary" disabled={busy || (implChoice === 'new_sql' && !implContractId)}>
-                    {busy ? 'Adding…' : 'Add implementation'}
+                    {busy ? 'Adding…' : 'Link a calculation'}
                   </button>
                 </div>
               </form>
@@ -1217,8 +1217,8 @@ export function MetricsView({
             >
               <div className="modal-header">
                 <div>
-                  <h3 id="promote-modal-title" style={{ margin: 0 }}>Promote Candidate to Active</h3>
-                  <p className="modal-subtitle">Replace current approved baseline with verified candidate.</p>
+                  <h3 id="promote-modal-title" style={{ margin: 0 }}>Approve trial calculation</h3>
+                  <p className="modal-subtitle">Replace the current approved calculation with this trial calculation.</p>
                 </div>
                 <button
                   type="button"
@@ -1231,7 +1231,7 @@ export function MetricsView({
 
               <div style={{ padding: '16px 20px', fontSize: '13px', color: 'var(--text-2)' }}>
                 <p style={{ margin: '0 0 12px' }}>
-                  Are you sure you want to promote <strong>{promoteCandidateTarget.defName}</strong> as the active implementation for this metric?
+                  Are you sure you want to promote <strong>{promoteCandidateTarget.defName}</strong> as the approved calculation for this metric?
                 </p>
                 <div style={{ background: 'var(--panel-2)', padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--line)' }}>
                   <div>Target version: <span className="mono-cell font-semibold">{promoteCandidateTarget.versionId.slice(0, 10)}…</span></div>
@@ -1568,7 +1568,7 @@ export function MetricsView({
             >
               <div className="modal-header">
                 <div>
-                  <h3 id="create-metric-title" style={{ margin: 0 }}>Create Declared Metric</h3>
+                  <h3 id="create-metric-title" style={{ margin: 0 }}>Create declared metric</h3>
                   <p className="modal-subtitle">Define business metric identity, importance tier, and binding.</p>
                 </div>
                 <button
@@ -1611,16 +1611,16 @@ export function MetricsView({
                       value={newMetricImportance}
                       onChange={(e) => setNewMetricImportance(e.target.value as any)}
                     >
-                      <option value="critical">Critical (Highest visibility, red badge on material drift)</option>
-                      <option value="important">Important (High visibility, standard governance)</option>
-                      <option value="standard">Standard (Default analytical governance)</option>
+                      <option value="critical">Critical: shown first, red badge when it moves</option>
+                      <option value="important">Important: shown prominently</option>
+                      <option value="standard">Standard: normal</option>
                       <option value="unclassified">Unclassified</option>
                     </select>
                   </div>
 
                   <div className="form-group" style={{ marginBottom: 0 }}>
                     <label className="form-label" htmlFor="create-metric-def" style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>
-                      Initial implementation (optional)
+                      Initial calculation (optional)
                     </label>
                     <select
                       id="create-metric-def"
@@ -1629,11 +1629,11 @@ export function MetricsView({
                       value={newMetricAttachDefId}
                       onChange={(e) => setNewMetricAttachDefId(e.target.value)}
                     >
-                      <option value="">None (Leave unbound for now)</option>
+                      <option value="">Don't link a calculation yet</option>
                       {definitionOptions(false)}
                     </select>
                     <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--muted)' }}>
-                      You can attach or change implementations at any time from the metric detail view.
+                      You can link or change calculations at any time from the metric detail view.
                     </p>
                   </div>
                 </div>

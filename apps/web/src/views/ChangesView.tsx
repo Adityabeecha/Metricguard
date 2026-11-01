@@ -130,7 +130,6 @@ export function ChangesView({
   const [isExecutingDiff, setIsExecutingDiff] = useState(false);
 
   // Expanded technical refusal IDs
-  const [expandedRefusalIds, setExpandedRefusalIds] = useState<Record<string, boolean>>({});
 
   // Escape key handler for dialogs
   useEffect(() => {
@@ -474,7 +473,8 @@ export function ChangesView({
               {outcome.label}
             </span>
             <span className="badge neutral">
-              {activeDiff.mode === 'enforcing' ? `Enforcing (Exit ${activeDiff.exit_code})` : 'Advisory'}
+              {activeDiff.mode === 'enforcing' ? 'Enforcing' : 'Advisory'}
+              <details><summary>Technical details</summary>Exit code: {activeDiff.exit_code}</details>
             </span>
             <button
               className="button secondary small"
@@ -491,7 +491,8 @@ export function ChangesView({
           <div className="changes-edge-banner warning-amber" role="alert">
             <AlertTriangle size={18} color="var(--warn)" style={{ flexShrink: 0, marginTop: '1px' }} />
             <div>
-              <strong>CI Exit Code 2 (Refusal Precedence)</strong>
+              <strong>Some changes could not be measured exactly</strong>
+              <details><summary>Technical details</summary>CI exit code 2 (refusal precedence)</details>
               <div>
                 MetricGuard refused quantitative analysis on one or more declared metrics. In MetricGuard, analytical refusal
                 strictly takes precedence over passing checks and material drift to prevent unanalyzed changes from silently shipping.
@@ -598,7 +599,6 @@ export function ChangesView({
             const currency = metricResult ? resultUnit(metricResult, declaredUnit) : '';
             const metricValue = (value: string | null | undefined) => resultDisplayValue(metricResult, value);
 
-            const isExpandedRefusal = Boolean(expandedRefusalIds[m.metric_id]);
 
             return (
               <article
@@ -758,35 +758,24 @@ export function ChangesView({
                   <div className="refusal-box">
                     <div className="refusal-header">
                       <AlertTriangle size={16} />
-                      <span>Quantitative Analysis Refused (Amber Warning)</span>
+                      <span>Refused: this change can't be measured exactly</span>
                     </div>
                     <div className="refusal-message">
+                      <strong>Why it was refused</strong><br />
                       {humanizeRefusalReason(m.refusal_reason)}
                     </div>
-                    <button
-                      className="refusal-tech-toggle"
-                      onClick={() =>
-                        setExpandedRefusalIds((prev) => ({
-                          ...prev,
-                          [m.metric_id]: !prev[m.metric_id],
-                        }))
-                      }
-                    >
-                      {isExpandedRefusal ? 'Hide technical diagnostics' : 'View reason & diagnostics'}
-                    </button>
-                    {isExpandedRefusal && (
-                      <div className="refusal-tech-details">
-                        <div><strong>Support State:</strong> {m.support_state}</div>
-                        <div><strong>Raw Diagnostic:</strong> {m.refusal_reason || 'None'}</div>
-                        {m.target_version_id && <div><strong>Target Version ID:</strong> {m.target_version_id}</div>}
-                        {m.diagnostics && (
-                          <div style={{ marginTop: '4px' }}>
-                            <strong>Diagnostics payload:</strong>
-                            <pre style={{ margin: '4px 0 0' }}>{JSON.stringify(m.diagnostics, null, 2)}</pre>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    <details className="refusal-tech-details">
+                      <summary>Technical details</summary>
+                      <div><strong>Support state:</strong> {m.support_state}</div>
+                      <div><strong>Raw diagnostic:</strong> {m.refusal_reason || 'None'}</div>
+                      {m.target_version_id && <div><strong>Target version ID:</strong> {m.target_version_id}</div>}
+                      {m.diagnostics && (
+                        <div style={{ marginTop: '4px' }}>
+                          <strong>Diagnostics payload:</strong>
+                          <pre style={{ margin: '4px 0 0' }}>{JSON.stringify(m.diagnostics, null, 2)}</pre>
+                        </div>
+                      )}
+                    </details>
                   </div>
                 )}
               </article>
@@ -805,7 +794,7 @@ export function ChangesView({
           <section className="coverage-section">
             <div>
               <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: 'var(--ink)' }}>
-                Coverage Analysis
+                Coverage analysis
               </h3>
               <p style={{ margin: '2px 0 0', fontSize: '13px', color: 'var(--muted)' }}>
                 How much of this revision did MetricGuard actually analyze against frozen evidence?
@@ -813,10 +802,10 @@ export function ChangesView({
             </div>
 
             <div className="coverage-views-grid">
-              {/* 1. Declared Metric Coverage */}
+              {/* 1. Declared metric coverage */}
               <div className="coverage-card">
                 <span className="coverage-card-title">
-                  <span>Declared Metric Coverage</span>
+                  <span>Declared metric coverage</span>
                   <strong>{activeDiff.coverage.declared_metrics.coverage_pct}%</strong>
                 </span>
                 <div className="coverage-progress-bar">
@@ -847,7 +836,7 @@ export function ChangesView({
               {/* 2. Structural & Resource Coverage */}
               <div className="coverage-card">
                 <span className="coverage-card-title">
-                  <span>Resource Breakdown</span>
+                  <span>Resource breakdown</span>
                   <span className="badge neutral">dbt DAG</span>
                 </span>
                 <div className="coverage-tier-row">
@@ -873,8 +862,8 @@ export function ChangesView({
               {/* 3. Importance-Weighted Coverage */}
               <div className="coverage-card">
                 <span className="coverage-card-title">
-                  <span>Importance Tiers</span>
-                  <span className="badge neutral">Explicit Only</span>
+                  <span>Importance tiers</span>
+                  <span className="badge neutral">Explicit only</span>
                 </span>
                 {['critical', 'important', 'standard', 'unclassified'].map((tier) => {
                   const item = activeDiff.coverage.importance_weighted?.[tier];
@@ -904,11 +893,11 @@ export function ChangesView({
                 })}
               </div>
 
-              {/* 4. Observable Structural Signals */}
-              <div className="coverage-card">
+              {/* 4. Observable Structural signals */}
+              <details className="coverage-card"><summary>Technical details</summary>
                 <span className="coverage-card-title">
-                  <span>Structural Signals</span>
-                  <span className="badge neutral">Non-Metric</span>
+                  <span>Structural signals</span>
+                  <span className="badge neutral">Non-metric</span>
                 </span>
                 <div className="coverage-signals-list">
                   <div>
@@ -921,7 +910,7 @@ export function ChangesView({
                     <strong>{activeDiff.coverage.observable_structural_signals.other_observable_metadata.tagged_changed_resources.count}</strong> tagged resources
                   </div>
                 </div>
-              </div>
+              </details>
             </div>
           </section>
         )}
@@ -936,7 +925,7 @@ export function ChangesView({
               Changed dbt resources ({changeSet?.resources?.length || activeDiff.counts.total_changed_resources})
             </h3>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span className="badge neutral">Secondary Detail</span>
+              <span className="badge neutral">Secondary detail</span>
               {showResourcesPanel ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
             </div>
           </div>
@@ -951,11 +940,11 @@ export function ChangesView({
                 <table className="changed-resources-table">
                   <thead>
                     <tr>
-                      <th>Resource Unique ID</th>
+                      <th>Resource unique ID</th>
                       <th>Category</th>
-                      <th>Linked Business Metric</th>
-                      <th>Support State</th>
-                      <th>Diagnostics / Details</th>
+                      <th>Linked business metric</th>
+                      <th>Support</th>
+                      <th>Details</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -980,12 +969,10 @@ export function ChangesView({
                             )}
                           </td>
                           <td>
-                            <span className={`badge ${isExe ? 'attention' : 'warning'}`}>
-                              {res.new_support_state || 'unknown'}
-                            </span>
+                            <details><summary>Technical details</summary><span className={`badge ${isExe ? 'attention' : 'warning'}`}>{res.new_support_state || 'unknown'}</span></details>
                           </td>
                           <td style={{ fontSize: '12px', color: 'var(--muted)' }}>
-                            {res.new_diagnostics?.[0] || res.summary_label || 'None'}
+                            <details><summary>Technical details</summary>{res.new_diagnostics?.[0] || res.summary_label || 'None'}</details>
                           </td>
                         </tr>
                       );

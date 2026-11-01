@@ -102,6 +102,7 @@ export function SignInScreen({ mode }: { mode: 'signin' | 'signup' }) {
                   : 'Sign-in is not configured on this server. Contact the workspace owner for access.'}</p>}
               </div>
               {mode === 'signup' && providers && providers.providers.length > 0 && <p className="auth-invite">Choose Google or GitHub to create your account and open your workspace. No password needed. <a href="/demo/MG-F3A3">See a sample case first</a></p>}
+              {mode === 'signup' && providers?.guest && <p className="auth-invite">Free beta: new accounts are guest accounts. Everything is erased {providers.guest.hours} hours after sign-up, with {providers.guest.storage_mb} MB of storage.</p>}
               <p className="auth-alternate">{mode === 'signup' ? 'Already have an account?' : 'New to MetricGuard?'} <a href={alternateUrl}>{mode === 'signup' ? 'Sign in' : 'Create an account'}</a></p>
               {localKeyAccess(providers?.auth_required) && <button type="button" className="auth-text-button" onClick={() => { setUseKey(true); setProblem(''); }}>Use an API key instead</button>}
             </>

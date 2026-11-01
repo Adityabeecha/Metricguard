@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { COMPARISON_KINDS, comparisonDatasetGroups, initialComparisonLoad, emptyCalculationSides, matchCountKey, recordedByDefault } from './comparisonSelection.ts';
+import { shouldResetCalculations, COMPARISON_KINDS, comparisonDatasetGroups, initialComparisonLoad, emptyCalculationSides, matchCountKey, recordedByDefault } from './comparisonSelection.ts';
 import { buildFlatSql } from './comparisonBuilder.ts';
 
 const choice = (id, name, hash, at, policy = 'flat_snapshot_v1') => ({
@@ -60,4 +60,10 @@ test('recorded by starts from the account name but respects typing and existing 
 
 test('comparison type offers the two separate analyst questions', () => {
   assert.deepEqual(COMPARISON_KINDS.map(k => k.label), ['Two calculations on the same data', 'Same calculation on two data loads']);
+});
+
+
+test('returning to the same dataset preserves calculations', () => {
+  assert.equal(shouldResetCalculations('same-contract', 'same-contract'), false);
+  assert.equal(shouldResetCalculations('first-contract', 'second-contract'), true);
 });

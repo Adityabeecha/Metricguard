@@ -1,3 +1,4 @@
+import { trackGet } from './wakingServer';
 import { groupDigits } from './resultSummary';
 export type Version={id:string;definition_id:string;version_number:number;raw_sql:string;bound_sql?:string|null;time_column:string|null;source_time_column?:string|null;mapping_id?:string|null;contract_hash?:string|null;mapping_hash?:string|null;support_state:string;support_reason:string|null;raw_hash:string;ir_hash:string|null;ir:Record<string,unknown>|null;observed_at:string;source_changed_at?:string|null;effective_from?:string|null;change_kind:string};
 export type Definition={id:string;name:string;source_label:string;owner_label:string;versions:Version[]};
@@ -25,7 +26,7 @@ export type ColumnMapping={id:string;contract_id:string;version_number:number;co
 export type Investigation={id:string;title:string;decision:string;actor_label:string;run_id:string;snapshot_id:string;baseline_version_id:string;target_version_id:string;context:Context;relationship:string;review_status:string;created_at:string};
 export type InvestigationDetail=Investigation&{record_type?:'investigation'|'draft';is_draft?:boolean;snapshot:Snapshot;run:Run;baseline_version:Version;target_version:Version;replay_available:boolean};
 /** Explicit public case payload: no actor, workspace, credentials, or storage locations. */
-export type PublicCaseDetail=Pick<InvestigationDetail,'id'|'title'|'decision'|'created_at'|'context'|'relationship'|'run_id'|'snapshot_id'|'baseline_version_id'|'target_version_id'|'snapshot'|'run'|'baseline_version'|'target_version'> & {workspace_name:string};
+export type PublicCaseDetail=Pick<InvestigationDetail,'id'|'title'|'decision'|'created_at'|'context'|'relationship'|'run_id'|'snapshot_id'|'baseline_version_id'|'target_version_id'|'snapshot'|'run'|'baseline_version'|'target_version'> & {workspace_name:string; expires_at?:string|null};
 export type CaseShare={id:string;created_at:string;expires_at:string|null;revoked_at:string|null};
 export type DatasetPreview={row_count?:number;headers:string[];declared_types:Record<string,string|null>;observed_types:Record<string,string>;sample_rows:Array<Record<string,string|null>>;source_hash:string;
   /** Excel only: the first worksheet's name and its converted CSV's first lines (bounded). */
@@ -486,7 +487,10 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
   // Lets the API tell this app's requests from forged cross-site ones when a session cookie is used.
   reqHeaders['X-MetricGuard-Client'] = 'web';
   const epoch = identityEpoch;
-  const response = await fetch(`/api/v1${path}`, { ...init, headers: reqHeaders });
+  const finish = (init?.method || 'GET').toUpperCase() === 'GET' ? trackGet() : undefined;
+  let response: Response;
+  try { response = await fetch(`/api/v1${path}`, { ...init, headers: reqHeaders }); }
+  finally { finish?.(); }
   if (epoch !== identityEpoch) {
     throw new ApiError('IDENTITY_CHANGED', 'The connected identity changed while this request was in flight; its response was discarded.');
   }
@@ -508,6 +512,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json();
 }
 
+/** Upload with the same workspace, credential and identity checks as apiFetch. */
+export function uploadWithProgress<T>(path: string, form: FormData, onProgress: (percent: number) => void, projectId?: string): Promise<T> {
+  if (!path.startsWith('/') || path.startsWith('//')) return Promise.reject(new ApiError('INVALID_PATH', 'Only same-origin API paths are allowed.'));
+  const epoch = identityEpoch;
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/v1${path}`);
+    const pid = projectId || activeWorkspaceId;
+    if (pid) xhr.setRequestHeader('X-Project-Id', pid);
+    if (apiCredential) xhr.setRequestHeader('X-API-Key', apiCredential);
+    xhr.setRequestHeader('X-MetricGuard-Client', 'web');
+    xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(Math.round(event.loaded * 100 / event.total)); };
+    xhr.onerror = () => reject(new TypeError('Failed to fetch'));
+    xhr.onabort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+    xhr.onload = () => {
+      if (epoch !== identityEpoch) { reject(new ApiError('IDENTITY_CHANGED', 'The connected identity changed while this request was in flight; its response was discarded.')); return; }
+      let body: any;
+      try { body = JSON.parse(xhr.responseText); } catch { body = {}; }
+      if (xhr.status < 200 || xhr.status >= 300) reject(new ApiError(body.error?.code || `HTTP_${xhr.status}`, body.error?.message || `Request failed (${xhr.status}).`));
+      else resolve(body as T);
+    };
+    xhr.send(form);
+  });
+}
+
 export type ConnectedIdentity = {
   verified: boolean;
   home_workspace_id?: string | null;
@@ -515,6 +544,8 @@ export type ConnectedIdentity = {
   user: { id: string; name: string | null; email: string | null } | null;
   /** Guest accounts only: when everything the account owns is erased (Unix seconds). */
   guest_expires_at?: number | null;
+  /** Guest accounts only: the storage quota of their personal workspace. */
+  guest_storage_bytes?: number | null;
   project_id: string | null;
   role: 'owner' | 'analyst' | 'reader' | null;
 };
@@ -542,7 +573,7 @@ export function evidenceGroupParams(view: EvidenceGroupView): URLSearchParams {
   return params;
 }
 export type ConcentrationItem = { columns: string[]; values: Array<string | boolean | null>; no_match?: boolean[]; records: number; changed_records: number;
-  change: string | null; change_exact?: string | null; difference_share: number; record_share: number; lift?: number | null };
+  change: string | null; change_exact?: string | null; difference_share: number; record_share?: number | null; lift?: number | null };
 export type EvidenceConcentration = { available: boolean; reason?: string; columns?: string[]; total_records?: number; abs_change_total?: string;
   ratio?: boolean; capped?: string[]; items: ConcentrationItem[]; pairs: ConcentrationItem[] };
 
@@ -726,11 +757,13 @@ export const api = {
       }
     );
   },
-  uploadFlat: (form: FormData, projectId?: string) => {
+  uploadFlat: (form: FormData, projectId?: string, onProgress?: (percent: number) => void) => {
     const pid = projectId || activeWorkspaceId;
     if (pid && !form.has('project_id')) form.append('project_id', pid);
+    const path = pid ? `/flat/snapshots?project_id=${encodeURIComponent(pid)}` : '/flat/snapshots';
+    if (onProgress) return uploadWithProgress<Snapshot | SnapshotImport>(path, form, onProgress, pid);
     return request<Snapshot | SnapshotImport>(
-      pid ? `/flat/snapshots?project_id=${encodeURIComponent(pid)}` : '/flat/snapshots',
+      path,
       {
         method: 'POST',
         body: form,
@@ -738,18 +771,20 @@ export const api = {
       }
     );
   },
-  uploadRelational: (form: FormData) => request<RelationalSnapshot | SnapshotImport>('/relational/snapshots', {method:'POST', body:form}),
+  uploadRelational: (form: FormData, onProgress?: (percent: number) => void) => onProgress ? uploadWithProgress<RelationalSnapshot | SnapshotImport>('/relational/snapshots', form, onProgress) : request<RelationalSnapshot | SnapshotImport>('/relational/snapshots', {method:'POST', body:form}),
   relationalRun: (id:string) => request<RelationalRun>(`/comparisons/${encodeURIComponent(id)}`),
   relationalCase: (id:string) => request<RelationalCase>(`/investigations/${encodeURIComponent(id)}`),
   relationalEvidence: (id:string, offset:number) => request<{items:RelationalEvidence[];total:number}>(`/comparisons/${encodeURIComponent(id)}/evidence?offset=${offset}&limit=100`),
   relationalJoinEvidence: (id:string, offset:number) => request<JoinEvidencePage>(`/comparisons/${encodeURIComponent(id)}/join-evidence?offset=${offset}&limit=100`),
   snapshotImport: (id: string) => request<SnapshotImport>(`/snapshot-imports/${encodeURIComponent(id)}`),
   snapshot: (id: string) => request<Snapshot>(`/snapshots/${encodeURIComponent(id)}`),
-  previewDataset: (form: FormData, projectId?: string) => {
+  previewDataset: (form: FormData, projectId?: string, onProgress?: (percent: number) => void) => {
     const pid = projectId || activeWorkspaceId;
     if (pid && !form.has('project_id')) form.append('project_id', pid);
+    const path = pid ? `/dataset-previews?project_id=${encodeURIComponent(pid)}` : '/dataset-previews';
+    if (onProgress) return uploadWithProgress<DatasetPreviewRecord>(path, form, onProgress, pid);
     return request<DatasetPreviewRecord>(
-      pid ? `/dataset-previews?project_id=${encodeURIComponent(pid)}` : '/dataset-previews',
+      path,
       {
         method: 'POST',
         body: form,

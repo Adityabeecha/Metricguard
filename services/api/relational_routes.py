@@ -145,7 +145,7 @@ def install_relational_routes(app, store, data_dir, execution_mode, resolve_proj
                             total += len(blob); size += len(blob)
                             check_upload_size(total)
                             if total > limit:
-                                raise DomainError('UPLOAD_LIMIT', f'CSV files must fit within {limit // (1024 * 1024)} MiB combined.', 413)
+                                raise DomainError('UPLOAD_LIMIT', f'CSV files must fit within {limit // (1024 * 1024)} MB combined.', 413)
                             sha.update(blob); output.write(blob)
                     if not size:
                         raise DomainError('UPLOAD_LIMIT', 'Every CSV must be non-empty.', 413)

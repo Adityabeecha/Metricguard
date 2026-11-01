@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { onWakingChange } from './wakingServer';
 import {
   Database,
   FileCode2,
@@ -49,6 +50,12 @@ const NAV_ITEMS: Array<{ id: Page; label: string; icon: React.ReactNode }> = [
   { id: 'changes', label: 'Changes', icon: <GitCompareArrows size={17} /> },
 ];
 
+function WakingNotice() {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => onWakingChange(setVisible), []);
+  return visible ? <div className="waking-notice" role="status">Waking up the server{'\u2026'}</div> : null;
+}
+
 export function App() {
   const [pathname, setPathname] = useState(window.location.pathname);
   useEffect(() => {
@@ -57,10 +64,10 @@ export function App() {
     return () => window.removeEventListener('popstate', sync);
   }, []);
   const page = sitePage(pathname);
-  if (page === 'shared-case') return <PublicCasePage token={sharedCaseToken(pathname)!} />;
-  if (page === 'signin' || page === 'signup') return <SignInScreen mode={page} />;
-  if (page !== 'workspace') return <PublicPages page={page} />;
-  return <WorkspaceApp />;
+  if (page === 'shared-case') return <><WakingNotice /><PublicCasePage token={sharedCaseToken(pathname)!} /></>;
+  if (page === 'signin' || page === 'signup') return <><WakingNotice /><SignInScreen mode={page} /></>;
+  if (page !== 'workspace') return <><WakingNotice /><PublicPages page={page} /></>;
+  return <><WakingNotice /><WorkspaceApp /></>;
 }
 
 function WorkspaceApp() {
@@ -101,6 +108,7 @@ function WorkspaceApp() {
 
   useEffect(() => {
     if (!shouldRedirectToSignIn(gate, authRequired === true, hasApiCredential())) return;
+    if (gate.kind === 'signin' && gate.reason === 'guest_expired') { window.location.replace('/signin?error=guest-expired'); return; }
     const returnTo = window.location.pathname + window.location.search;
     window.location.replace(`/signin?return_to=${encodeURIComponent(returnTo)}`);
   }, [gate, authRequired, identityEpoch]);

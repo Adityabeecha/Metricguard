@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { insertAt, sqlTokens } from './views/evidence/sqlHighlight.ts';
 import { datasetTableName, flatSqlColumns } from './comparisonBuilder.ts';
-import { categoryLabel } from './views/evidence/categories.ts';
+import { categoryDescription, categoryLabel } from './views/evidence/categories.ts';
 
 test('SQL highlighting marks keywords, functions, strings, numbers, columns and the table', () => {
   const tokens = sqlTokens("SELECT SUM(amount) FROM orders_october WHERE status = 'paid' AND qty > 2", ['amount', 'status'], ['orders_october', 'snapshot']);
@@ -43,4 +43,11 @@ test('two sources read as A and B, not earlier and later', () => {
   assert.equal(categoryLabel('removed', { loads: true, sources: true }), 'Only in source A');
   assert.equal(categoryLabel('value_changed', { loads: true, sources: true }), 'Value differs');
   assert.equal(categoryLabel('added', { loads: true }), 'New in the later load');
+});
+
+
+test('every category has a description for each comparison mode', () => {
+  for (const mode of [{}, { distinct: true }, { loads: true }, { loads: true, sources: true }])
+    for (const key of ['excluded', 'added', 'value_changed', 'removed', 'entered_filter', 'left_filter'])
+      assert.ok(categoryDescription(key, mode));
 });

@@ -1,3 +1,4 @@
+import { engineDownMessage } from '../hostedCopy';
 import './onboarding.css';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -344,8 +345,9 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
         const form = new FormData();
         form.append('file', file);
         form.append('project_id', projectId);
-        let record = await api.previewDataset(form, projectId);
+        let record = await api.previewDataset(form, projectId, percent => { if (isCurrent()) setValidationProgress(`Uploading: ${percent}%`); });
         if (!isCurrent()) return;
+        setValidationProgress(isExcel ? 'Reading the first worksheet...' : 'Analyzing Parquet schema...');
         for (let waited = 0; !record.preview && ['queued', 'running'].includes(record.state) && waited < 120; waited++) {
           await new Promise(resolve => setTimeout(resolve, 1000));
           if (!isCurrent()) return;
@@ -353,7 +355,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
           if (!isCurrent()) return;
         }
         if (!record.preview) {
-          throw new Error(record.error?.message || 'The file could not be previewed. Check that the comparison engine is running.');
+          throw new Error(record.error?.message || engineDownMessage(window.location.hostname));
         }
         if (isExcel && record.preview.csv_head) {
           // The runner converted the sheet exactly; infer columns from its first rows as for a CSV.
@@ -402,8 +404,8 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
       // Infer from the complete bounded source; display only a small sample.
       setBusy(true);
       try {
-        if (file.size > 512 * 1024 * 1024) throw new Error('Source exceeds 512 MiB');
-        // Large extracts: suggest types from the first 2 MiB of complete lines; the
+        if (file.size > 512 * 1024 * 1024) throw new Error('Source exceeds 512 MB');
+        // Large extracts: suggest types from the first 2 MB of complete lines; the
         // isolated import still checks every row against the approved types.
         const large = file.size > 25 * 1024 * 1024;
         let text = large ? await file.slice(0, 2 * 1024 * 1024).text() : await file.text();
@@ -451,7 +453,8 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
     const size = selectedFile!.size;
     setValidationProgress(size > 5 * 1024 * 1024 ? `Uploading ${formatBytes(size)}…` : 'Checking rows, column types, and data consistency…');
     setImportStarted(Date.now());
-    const result = await api.uploadFlat(form, projectId);
+    const result = await api.uploadFlat(form, projectId, percent => setValidationProgress(`Uploading: ${percent}%`));
+    setValidationProgress('Checking rows, column types, and data consistency...');
     if ('id' in result && !('state' in result)) return result as Snapshot;  // an identical load already exists
     const queued = result as SnapshotImport;
     let current: SnapshotImport = queued;
@@ -521,21 +524,21 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
     if (enableSubtraction) {
       if (!minuendColumn || !subtrahendColumn) {
         setValidationError({
-          title: 'Selection Required',
-          message: 'Please choose both a minuend and a subtrahend column for subtraction.',
+          title: 'Selection required',
+          message: 'Please choose both an amount to start from and an amount to subtract.',
         });
         return;
       }
       if (minuendColumn === subtrahendColumn) {
         setValidationError({
-          title: 'Distinct Fields Required',
-          message: 'The minuend and subtrahend must be different columns.',
+          title: 'Distinct fields required',
+          message: 'The amount to start from and the amount to subtract must be different columns.',
         });
         return;
       }
       if (confirmedKey === minuendColumn || confirmedKey === subtrahendColumn) {
         setValidationError({
-          title: 'Distinct Fields Required',
+          title: 'Distinct fields required',
           message: 'The row ID cannot be used as a subtraction operand.',
         });
         return;
@@ -543,7 +546,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
     } else {
       if (!confirmedKey || !confirmedMeasure) {
         setValidationError({
-          title: 'Selection Required',
+          title: 'Selection required',
           message: 'Choose a row ID and an amount column.',
         });
         return;
@@ -551,7 +554,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
 
       if (confirmedKey === confirmedMeasure) {
         setValidationError({
-          title: 'Distinct Fields Required',
+          title: 'Distinct fields required',
           message: 'The row ID and numeric measure must be different columns.',
         });
         return;
@@ -784,7 +787,11 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                       year: 'numeric',
                     })
                   : 'Frozen';
-                const runCount = runs.filter((r) => r.snapshot_id === snap.id).length;
+                const datasetLoads = snapshots.filter(item => snap.contract_hash ? item.contract_hash === snap.contract_hash : item.id === snap.id);
+                const datasetIds = new Set(datasetLoads.map(item => item.id));
+                const datasetRuns = runs.filter(r => datasetIds.has(r.snapshot_id) || (r.target_snapshot_id && datasetIds.has(r.target_snapshot_id)));
+                const latestComparison = datasetRuns.map(r => r.created_at).filter(Boolean).sort().at(-1);
+                const runCount = datasetRuns.length;
 
                 return (
                   <div
@@ -807,6 +814,8 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                       <span className="meta-stat">
                         <strong>{snap.row_count?.toLocaleString('en-US') || '0'}</strong> rows
                       </span>
+                      <span className="meta-stat">{datasetLoads.length} load{datasetLoads.length === 1 ? '' : 's'}</span>
+                      {latestComparison && <span className="meta-stat">Last comparison {new Date(latestComparison).toLocaleDateString()}</span>}
                       <span className="meta-sep">·</span>
                       <span className="meta-stat">
                         <Clock size={12} /> {formattedDate}
@@ -1192,9 +1201,11 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                         />
                       </label>
 
+                      {selectedFile && validationProgress.startsWith('Uploading:') && <p role="status">{validationProgress}</p>}
                       {selectedFile && !uploadLimits && !limitsProblem && <p className="helper-muted" role="status">Checking upload limits…</p>}
                       {busy && <p className="helper-muted" role="status">Reading your file…</p>}
                       {selectedFile && uploadLimits && <p className="helper-muted">{uploadLimitText(uploadLimits)}</p>}
+                      {selectedFile?.name.toLowerCase().endsWith('.xlsx') && <p className="helper-muted">Only the first worksheet is read. If your data is on another sheet, move it to the first sheet or save that sheet as CSV.</p>}
                       {limitsProblem && <p role="alert" className="disabled-reason">{limitsProblem}</p>}
                       {previewProblem && <p role="alert" className="disabled-reason">{previewProblem}</p>}
                       {loadProblem && <p className="disabled-reason" role="alert">{loadProblem}</p>}
@@ -1469,7 +1480,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                                   display: 'inline-block',
                                 };
                               } else if (isMinuend) {
-                                roleLabel = `Minuend Decimal (${confirmedUnit || 'units'})`;
+                                roleLabel = `Amount to start from decimal (${confirmedUnit || 'units'})`;
                                 roleStyle = {
                                   background: 'var(--tint)',
                                   color: 'var(--link)',
@@ -1481,7 +1492,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                                   display: 'inline-block',
                                 };
                               } else if (isSubtrahend) {
-                                roleLabel = `Subtrahend Decimal (${confirmedUnit || 'units'})`;
+                                roleLabel = `Amount to subtract decimal (${confirmedUnit || 'units'})`;
                                 roleStyle = {
                                   background: 'var(--tint)',
                                   color: 'var(--link)',
@@ -1693,13 +1704,13 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                       >
                         <div className="form-grid two">
                           <label>
-                            Minuend column (A)
+                            Amount to start from (A)
                             <select
                               required={enableSubtraction}
                               value={minuendColumn}
                               onChange={(e) => setMinuendColumn(e.target.value)}
                             >
-                              <option value="">Select minuend…</option>
+                              <option value="">Select amount to start from…</option>
                               {filePreview?.headers
                                 .filter((h) => h !== confirmedKey && h !== subtrahendColumn)
                                 .map((h) => (
@@ -1711,13 +1722,13 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                           </label>
 
                           <label>
-                            Subtrahend column (B)
+                            Amount to subtract (B)
                             <select
                               required={enableSubtraction}
                               value={subtrahendColumn}
                               onChange={(e) => setSubtrahendColumn(e.target.value)}
                             >
-                              <option value="">Select subtrahend…</option>
+                              <option value="">Select amount to subtract…</option>
                               {filePreview?.headers
                                 .filter((h) => h !== confirmedKey && h !== minuendColumn)
                                 .map((h) => (
@@ -1842,6 +1853,8 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                   </div>
                 </form>
               )}
+
+              {filePreview && [confirmedMeasure, minuendColumn, subtrahendColumn, ...multiExtras].filter(Boolean).some(column => filePreview.sample_rows.some(row => /[\u20b9$\u20ac\u00a3]|(?:\s|\d)[A-Za-z]{3}\s*$/.test(row[column] || ''))) && (step === 'upload' || step === 'confirm') && <p className="field-hint">Remove currency symbols and thousands separators: 1,250.00 → 1250.00</p>}
 
               {/* STEP 3: VALIDATING PROGRESS */}
               {step === 'validating' && (

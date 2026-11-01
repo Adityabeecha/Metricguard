@@ -46,6 +46,7 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
   const [sameUnit, setSameUnit] = useState(false);
   const [job, setJob] = useState<SnapshotImport | null>(null);
   const [busy, setBusy] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [problem, setProblem] = useState<ClassifiedInvestigationError | null>(null);
   const [extras, setExtras] = useState<ExtraLookup[]>([]);
   const previewRequests = useRef<Record<Role, number>>({ fact: 0, dimension: 0 });
@@ -148,7 +149,7 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
     : '';
 
   async function submit() {
-    setBusy(true); setProblem(null);
+    setBusy(true); setProblem(null); setUploadProgress(null);
     try {
       const factTable = tableName(files.fact, 'fact_records');
       let dimTable = tableName(files.dimension, 'dim_records');
@@ -181,7 +182,7 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
         for (const x of lookups) form.append(`lookup_${x.table}`, x.file);
         form.append('contract_id', contract.id);
         form.append('name', (name.trim() || [files.fact!.name, ...lookups.map(x => x.file.name)].join(' + ')).slice(0, 160));
-        const result = await api.uploadRelational(form);
+        const result = await api.uploadRelational(form, setUploadProgress);
         if ('state' in result) setJob(result as SnapshotImport);
         else { await refresh(); onCreated((result as RelationalSnapshot).id); }
         return;
@@ -200,13 +201,13 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
       form.append('dimension_file', files.dimension!);
       form.append('contract_id', contract.id);
       form.append('name', (name.trim() || `${files.fact!.name} + ${files.dimension!.name}`).slice(0, 160));
-      const result = await api.uploadRelational(form);
+      const result = await api.uploadRelational(form, setUploadProgress);
       if ('state' in result) setJob(result as SnapshotImport);
       else { await refresh(); onCreated((result as RelationalSnapshot).id); }
     } catch (e) {
       setProblem(classifyInvestigationError(e));
     } finally {
-      setBusy(false);
+      setBusy(false); setUploadProgress(null);
     }
   }
 
@@ -251,6 +252,7 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
             <div className="calc-card">
               <label>Which column uniquely identifies each record in the main table?{columnSelect('fact', factKey, setFactKey)}<span className="example">Example: <code>rental_id</code></span></label>
               <label>Which amount do you want to total?{columnSelect('fact', amount, setAmount, [factKey])}<span className="example">Example: <code>rides</code> or <code>sales_amount</code></span></label>
+              {factPreview?.sample_rows.some(row => /[\u20b9$\u20ac\u00a3]|(?:\s|\d)[A-Za-z]{3}\s*$/.test(row[amount] || '')) && <p className="field-hint">Remove currency symbols and thousands separators: 1,250.00 → 1250.00</p>}
               <label>What unit does that amount use?<input value={unit} onChange={e => setUnit(e.target.value)} placeholder="e.g. INR, rentals, points" /><span className="example">MetricGuard never converts units.</span></label>
               <label>In a few words, what does one amount mean? (optional)<input value={meaning} onChange={e => setMeaning(e.target.value)} placeholder="e.g. Rentals in one hour" /></label>
             </div>
@@ -322,7 +324,7 @@ export function TwoTableUpload({ onCreated, refresh, canUpload, blocker }: Props
             </div>
           </details>
           <div className="guided-nav">
-            <span id="two-table-blocker" className="disabled-reason">{missing}</span>
+            <span id="two-table-blocker" className="disabled-reason">{uploadProgress != null ? `Uploading: ${uploadProgress}%` : missing}</span>
             <button className="button primary" disabled={busy || !canUpload || Boolean(missing) || pending(job?.state)} aria-describedby={missing ? 'two-table-blocker' : undefined} onClick={() => void submit()}>
               <UploadCloud size={15} /> {busy || pending(job?.state) ? 'Validating both files…' : 'Validate and use these tables'}
             </button>

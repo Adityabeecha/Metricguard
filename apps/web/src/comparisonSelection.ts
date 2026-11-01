@@ -47,3 +47,8 @@ export function emptyCalculationSides(snapshotId: string, sql: { baseline: strin
 export function recordedByDefault(current: string, identity: { user: { name: string | null; email: string | null } | null } | null, edited: boolean): string {
   return edited ? current : identity?.user?.name || identity?.user?.email || current;
 }
+
+/** Preserve calculations while returning to the same dataset, including another load. */
+export function shouldResetCalculations(previous: string | null, current: string): boolean {
+  return previous !== current;
+}

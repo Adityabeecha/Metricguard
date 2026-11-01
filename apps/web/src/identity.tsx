@@ -1,3 +1,4 @@
+import { FeedbackDialog } from './views/FeedbackDialog';
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { clearConnectedIdentity, connectWithKey } from './AuthScreens';
 import { useDialog } from './useDialog';
@@ -21,7 +22,7 @@ const drafts = new Map<string, unknown>();
 export function readDraft<T>(key: string): T | undefined { return drafts.get(key) as T | undefined; }
 export function writeDraft(key: string, value: unknown) { drafts.set(key, value); }
 
-export function describeAuthError(error: unknown, workspaceId?: string): string {
+export function describeAuthError(error: unknown, _workspaceId?: string): string {
   if (error instanceof ApiError) {
     if (error.code === 'UNAUTHORIZED' || error.code === 'HTTP_401') {
       return hasApiCredential()
@@ -30,8 +31,8 @@ export function describeAuthError(error: unknown, workspaceId?: string): string 
     }
     if (error.code === 'FORBIDDEN' || error.code === 'HTTP_403') {
       return hasApiCredential()
-        ? `The connected identity is not an active member of workspace “${workspaceId ?? ''}” or its role does not permit this action. Ask a workspace owner to grant or restore membership, or switch workspace. (${error.message})`
-        : `Sign in with an account that has access to this workspace. (${error.message})`;
+        ? `This API key doesn't have access to this workspace, or its role can't do this. (${error.message})`
+        : "You don't have access to this workspace, or your role can't do this. Ask the workspace owner, or switch workspace.";
     }
     return error.message;
   }
@@ -201,6 +202,9 @@ export function GuestNotice({ workspaceId }: { workspaceId: string }) {
   const { identity } = useConnectedIdentity(workspaceId);
   const [, tick] = useState(0);
   useEffect(() => { const t = window.setInterval(() => tick(n => n + 1), 60000); return () => window.clearInterval(t); }, []);
-  const text = guestNotice(identity?.guest_expires_at);
-  return text ? <div className="alert notice guest-notice" role="status"><span>{text}</span></div> : null;
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const expiry = identity?.guest_expires_at;
+  const text = guestNotice(expiry, identity?.guest_storage_bytes);
+  const urgent = expiry != null && expiry * 1000 - Date.now() < 60 * 60000;
+  return text ? <><div className={`alert notice guest-notice${urgent ? ' urgent' : ''}`} role="status"><span>{text}</span><button type="button" className="button secondary small" onClick={() => setFeedbackOpen(true)}>Need a permanent account?</button></div>{feedbackOpen && <FeedbackDialog workspaceId={workspaceId} initialMessage="Please give this account full access." onClose={() => setFeedbackOpen(false)} />}</> : null;
 }

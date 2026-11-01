@@ -51,7 +51,7 @@ def test_rename_and_delete_datasets_and_cases(tmp_path):
         case = client.post('/api/v1/investigations', json={'title': 'Paid only', 'run_id': run['id'],
                                                            'decision': 'Void order B removed.', 'actor_label': 'Tester'}).json()
         refused = client.delete(f'/api/v1/snapshots/{snapshot_id}')
-        assert refused.status_code == 409 and '“Paid only”' in refused.json()['error']['message']
+        assert refused.status_code == 409 and refused.json()['error']['message'] == "Used by the case 'Paid only'. Delete or change that first."
 
         retitled = client.patch(f"/api/v1/investigations/{case['id']}", json={'title': 'Paid orders only'})
         assert retitled.status_code == 200
@@ -107,7 +107,8 @@ def test_a_saved_case_can_become_an_approved_metric(tmp_path):
         active = [b for b in client.get(f'/api/v1/projects/{pid}/metrics/{metric_id}/bindings').json()['items'] if b['status'] == 'active']
         assert [b['approved_version_id'] for b in active] == [version]
         # The approval relies on the comparison, so its dataset can no longer be deleted.
-        assert client.delete(f'/api/v1/snapshots/{snapshot_id}').status_code == 409
+        refused = client.delete(f'/api/v1/snapshots/{snapshot_id}')
+        assert refused.status_code == 409 and "Paid revenue" in refused.json()['error']['message']
 
 
 def test_bundled_sample_orders_import_through_the_normal_path(tmp_path, monkeypatch):

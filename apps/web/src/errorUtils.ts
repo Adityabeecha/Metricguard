@@ -89,7 +89,7 @@ export function humanizeError(
     case 'UPLOAD_LIMIT':
       return {
         title: 'File Size Limit Exceeded',
-        message: 'The selected file exceeds the upload limit: 512 MiB for one-table CSV or Parquet files, 25 MiB for other uploads.',
+        message: 'The selected file exceeds the upload limit: 512 MB for one-table CSV or Parquet files, 25 MB for other uploads.',
         suggestion: 'Upload a smaller file, or prepare a narrower one (fewer rows or columns).',
         code: rawCode,
       };

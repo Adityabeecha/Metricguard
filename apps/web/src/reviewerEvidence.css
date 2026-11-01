@@ -20,8 +20,8 @@
 @media print {
   :root { color-scheme: light; }
   html,body,#root { height: auto !important; overflow: visible !important; background: var(--panel) !important; }
-  .app-shell,.main-content,.content,.view-container,.guided-page,.public-case-page { display: block !important; width: auto !important; max-width: none !important; min-height: 0 !important; height: auto !important; overflow: visible !important; margin: 0 !important; padding: 0 !important; }
-  .sidebar,.nav-rail,.rail-backdrop,.topbar,.shared-case-header,.skip-link,.tabs-wrap,.heading-actions,.report-actions,.modal-backdrop,.ledger:not(.print-records),.detail-stack,.guided-page > .guided-card,.public-custody,.no-print { display: none !important; }
+  .shell,.main,.app-shell,.main-content,.content,.view-container,.guided-page,.public-case-page { display: block !important; width: auto !important; max-width: none !important; min-height: 0 !important; height: auto !important; overflow: visible !important; margin: 0 !important; padding: 0 !important; }
+  .sidebar,.mobile-navigation-backdrop,.nav-rail,.rail-backdrop,.topbar,.shared-case-header,.skip-link,.tabs-wrap,.heading-actions,.report-actions,.modal-backdrop,.detail-stack,.guided-page > .guided-card,.public-custody,.no-print { display: none !important; }
   button,form,input,select,.seal-custody,.record-concentration { display: none !important; }
   .print-only,.definitions-exhibit[hidden] { display: block !important; }
   .case-header { display: block; }
@@ -49,3 +49,7 @@
 .concentration ul { list-style: none; margin: 8px 0 0; padding: 0; }
 .concentration li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .concentration-figures { font: 500 12px var(--font-mono); color: var(--text-2); }
+
+@media print { .print-footer { display: block; border-top: 1px solid var(--line); margin-top: 20px; padding-top: 8px; overflow-wrap: anywhere; } }
+
+@media print { .ledger-tabs, .ledger-toolbar, .ledger-foot { display: none !important; } .result-summary:has(.ledger) .print-records { display: none !important; } }

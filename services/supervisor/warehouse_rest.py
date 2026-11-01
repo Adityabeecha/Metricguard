@@ -178,9 +178,7 @@ def _response(client, method, url, token, **kwargs):
     try:
         response = client.request(method, url, **kwargs)
     except httpx.HTTPError as error:
-        raise CollectorError('CONNECTION_FAILED', f'Could not reach the warehouse: {_redact(error, token)}') from None
-    if response.status_code in (401, 403):
-        raise CollectorError('AUTHENTICATION_FAILED', 'The warehouse refused the token (expired, or missing access to this table).')
+        raise CollectorError('CONNECTION_FAILED', "Couldn't reach the database. It must accept connections from the internet.") from None
     if response.status_code >= 400 and response.status_code not in (202,):
         detail = ''
         try:
@@ -188,7 +186,9 @@ def _response(client, method, url, token, **kwargs):
             detail = body.get('message') or (body.get('error') or {}).get('message') or ''
         except ValueError:
             pass
-        raise CollectorError('WAREHOUSE_ERROR', f'The warehouse returned HTTP {response.status_code}: {_redact(detail, token)[:300]}')
+        from services.supervisor.warehouse_errors import warehouse_error
+        code, message = warehouse_error(detail, response.status_code)
+        raise CollectorError(code, message)
     return response
 
 
@@ -206,7 +206,7 @@ def snowflake_rows(selection, client):
     deadline = time.monotonic() + WAIT_SECONDS
     while response.status_code == 202:  # still running: poll its status URL
         if time.monotonic() > deadline:
-            raise CollectorError('WAREHOUSE_TIMEOUT', 'The Snowflake statement did not finish in time.')
+            raise CollectorError('WAREHOUSE_TIMEOUT', 'The warehouse took too long to answer. Try a smaller table or an earlier cutoff.')
         time.sleep(POLL_SECONDS)
         handle = response.json().get('statementHandle')
         if not isinstance(handle, str) or not re.fullmatch(r'[0-9a-fA-F-]{1,64}', handle):
@@ -244,7 +244,7 @@ def bigquery_rows(selection, client):
     params = {'maxResults': 50_000, **({'location': location} if location else {})}
     while not page.get('jobComplete'):
         if time.monotonic() > deadline:
-            raise CollectorError('WAREHOUSE_TIMEOUT', 'The BigQuery job did not finish in time.')
+            raise CollectorError('WAREHOUSE_TIMEOUT', 'The warehouse took too long to answer. Try a smaller table or an earlier cutoff.')
         time.sleep(POLL_SECONDS)
         page = _response(client, 'GET', f'{base}/queries/{job_id}', selection.token, headers=headers,
                          params={**params, 'timeoutMs': 60_000}).json()

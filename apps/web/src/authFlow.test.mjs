@@ -82,6 +82,7 @@ test('key actions wait for identity verification to avoid flashing on cookie-ses
 
 test('OAuth errors use friendly fixed copy and never echo untrusted callback text', () => {
   assert.equal(oauthErrorMessage('waitlist'), 'We couldn’t sign you in. Please try again.'); // no waitlist: sign-up is open
+  assert.match(oauthErrorMessage('unverified'), /email isn't verified/);
   assert.match(oauthErrorMessage('cancelled'), /cancelled/i);
   assert.match(oauthErrorMessage('failed'), /try again/i);
   assert.equal(oauthErrorMessage('raw provider secret'), oauthErrorMessage('failed'));
@@ -112,9 +113,19 @@ test('hosted signed-out gates redirect while local access and invalid keys retai
 test('guest notice counts down and is empty for full accounts', async () => {
   const { guestNotice } = await import('./authFlow.ts');
   const now = 1_000_000_000_000;
-  assert.equal(guestNotice(null, now), '');
-  assert.equal(guestNotice(undefined, now), '');
-  assert.match(guestNotice(now / 1000 + 8 * 3600, now), /erased in 8 h\. Storage is limited to 25 MB/);
-  assert.match(guestNotice(now / 1000 + 95 * 60, now), /in 1 h 35 min/);
-  assert.match(guestNotice(now / 1000 + 20, now), /any minute now/);
+  assert.equal(guestNotice(null, null, now), '');
+  assert.equal(guestNotice(undefined, null, now), '');
+  assert.match(guestNotice(now / 1000 + 8 * 3600, null, now), /erased in 8 h\. Storage is limited to 25 MB/);
+  assert.match(guestNotice(now / 1000 + 95 * 60, null, now), /in 1 h 35 min/);
+  assert.match(guestNotice(now / 1000 + 20, null, now), /Less than an hour left/);
+  assert.match(guestNotice(now / 1000 + 3600, 40 * 1024 * 1024, now), /40 MB/);
+  assert.match(guestNotice(now / 1000 + 3599, null, now), /Less than an hour left/);
+});
+
+test('an expired guest is sent to sign-in with its own message', async () => {
+  const { classifyLoadError } = await import('./authState.ts');
+  const { oauthErrorMessage } = await import('./authFlow.ts');
+  assert.deepEqual(classifyLoadError({ code: 'GUEST_EXPIRED', message: 'x' }, { connected: false, reloadEnded: false }),
+    { kind: 'signin', reason: 'guest_expired' });
+  assert.match(oauthErrorMessage('guest-expired'), /guest account reached its time limit/);
 });

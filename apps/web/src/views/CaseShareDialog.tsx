@@ -62,7 +62,7 @@ export function CaseShareDialog({ caseId, memberLink, onClose }: { caseId: strin
         {loading ? <p role="status">Loading public links…</p> : <section aria-label="Existing public links"><h3>Public links</h3>
           {!shares.length ? <p className="hint">No public links have been created.</p> : <ul className="case-share-links">{shares.map(share => {
             const expired = Boolean(share.expires_at && new Date(share.expires_at).getTime() <= Date.now());
-            return <li key={share.id}><span>Created {new Date(share.created_at).toLocaleString('en-GB')}<br /><small>{share.revoked_at ? 'Revoked' : expired ? 'Expired' : share.expires_at ? `Expires ${new Date(share.expires_at).toLocaleString('en-GB')}` : 'No expiry'}</small></span>
+            return <li key={share.id}><span>Created {new Date(share.created_at).toLocaleString('en-GB')}<br /><small>{share.expires_at ? `Expires ${new Date(share.expires_at).toLocaleString('en-GB')}` : 'No expiry'}{share.revoked_at ? ' (revoked)' : expired ? ' (expired)' : ''}</small></span>
               {!share.revoked_at && !expired && <button className="button secondary small" disabled={busy} onClick={() => void revoke(share.id)}>Revoke link</button>}</li>;
           })}</ul>}
         </section>}

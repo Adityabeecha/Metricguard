@@ -1,7 +1,7 @@
 import type { GateState } from './authState';
 
 export type OAuthProvider = 'google' | 'github';
-export type AuthProviders = { providers: OAuthProvider[]; auth_required: boolean };
+export type AuthProviders = { providers: OAuthProvider[]; auth_required: boolean; guest: { hours: number; storage_mb: number } | null };
 
 /** Only an explicit server capability enables the local key workflow. */
 export function localKeyAccess(authRequired: boolean | null | undefined): boolean {
@@ -54,7 +54,9 @@ export function connectionControls(identity: { session?: boolean } | null, conne
 
 export function oauthErrorMessage(code: string | null): string {
   if (!code) return '';
+  if (code === 'unverified') return "Your Google or GitHub email isn't verified. Verify it in that account, or try the other provider.";
   if (code === 'cancelled') return 'Sign-in was cancelled. Choose a provider to try again.';
+  if (code === 'guest-expired') return 'Your guest account reached its time limit and is being erased. Sign in again to start a fresh one.';
   return 'We couldn’t sign you in. Please try again.';
 }
 
@@ -76,10 +78,12 @@ export function shouldRedirectToSignIn(gate: Pick<GateState, 'kind'>, authRequir
 }
 
 /** The guest-account notice, or '' for a full account. */
-export function guestNotice(expiresAt: number | null | undefined, nowMs = Date.now()): string {
+export function guestNotice(expiresAt: number | null | undefined, storageBytes: number | null | undefined = null, nowMs = Date.now()): string {
   if (typeof expiresAt !== 'number') return '';
-  const minutes = Math.max(0, Math.round((expiresAt * 1000 - nowMs) / 60000));
-  const left = minutes < 1 ? 'any minute now' : minutes < 60 ? `in ${minutes} min`
-    : `in ${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
-  return `Guest account: your workspace and everything in it is erased ${left}. Storage is limited to 25 MB in total.`;
+  const remaining = expiresAt * 1000 - nowMs;
+  if (remaining < 60 * 60000) return 'Less than an hour left. Open a case and use Records (CSV) to keep a copy.';
+  const minutes = Math.round(remaining / 60000);
+  const left = `in ${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
+  const storage = storageBytes == null ? 25 : storageBytes / (1024 * 1024);
+  return `Guest account: your workspace and everything in it is erased ${left}. Storage is limited to ${storage.toLocaleString()} MB in total.`;
 }

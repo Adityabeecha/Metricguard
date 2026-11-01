@@ -7,7 +7,7 @@ import { caseNumber } from '../investigationLibrary';
 import { decimalSum } from '../exactDecimal';
 import { Bridge } from './evidence/Bridge';
 import { Ledger, type LedgerGroup } from './evidence/Ledger';
-import { categoryLabel, type CategoryKey } from './evidence/categories';
+import { categoryDescription, categoryLabel, type CategoryKey } from './evidence/categories';
 import { HashPrint } from './evidence/HashPrint';
 import { groupShare, preferredBreakdownColumn } from './evidence/breakdownSelection';
 import { recordConcentrationLine } from './evidence/recordConcentration';
@@ -336,7 +336,8 @@ function Concentration({ data, exclude, unit, percent, onPick }: { data: Evidenc
               column2: item.columns[1], value2: item.columns[1] ? item.values[1] ?? null : undefined, noMatch2: item.no_match?.[1],
               label: item.columns.map((_, i) => valueText(item.values[i], item.no_match?.[i])).join(' × '), totalText: changeText(item.change) })}>{label(item)}</button>
           : <b>{label(item)}</b>}
-        <span className="concentration-figures">{(item.difference_share * 100).toFixed(1)}% of the difference · {(item.record_share * 100).toFixed(1)}% of records · {changeText(item.change)}</span>
+        <p>{label(item)} holds {(item.difference_share * 100).toFixed(1)}% of the difference{item.record_share != null ? ` but only ${(item.record_share * 100).toFixed(1)}% of the records` : ''}.</p>
+        <span className="concentration-figures">{(item.difference_share * 100).toFixed(1)}% of the difference · {item.record_share != null ? `${(item.record_share * 100).toFixed(1)}% of records` : 'Record share unavailable'} · {changeText(item.change)}</span>
       </li>)}
     </ul>
     {(data.capped || []).map(note => <small key={note} style={{ display: 'block' }}>{note}</small>)}
@@ -499,7 +500,7 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
   const bridge = categories && categories.length > 0 && result.baseline_value != null && result.target_value != null ? {
     start: { label: cur, value: percent ? percentOf(result.baseline_value) : result.baseline_value, text: show(result.baseline_value) },
     end: { label: pro, value: percent ? percentOf(result.target_value) : result.target_value, text: show(result.target_value) },
-    steps: categories.map(c => ({ key: c.key, label: categoryLabel(c.key, labels), records: c.records,
+    steps: categories.map(c => ({ key: c.key, label: categoryLabel(c.key, labels), description: categoryDescription(c.key, labels), records: c.records,
       value: percent ? percentOf(stepValue(c)) : stepValue(c), text: fmt(stepValue(c)) })),
     residualText: fmt(residual),
     balanced,
@@ -535,12 +536,14 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
             <span>Unexplained<b>{result.residual == null ? 'Not applicable' : ratio ? '0 (exact)' : show(result.residual)}</b></span>
           </div>
           {note}
+          {!expired && <p className="hint">Detailed records are kept while storage allows; you can always rerun the case.</p>}
         </section>
         <SealCard run={run} snapshot={snapshot} status={sealStatus} onCustody={onCustody} saved={savedCase} />
       </div>
 
       {bridge && !expired && <Bridge {...bridge} onPick={pickCategory} recordsAffectTotal={loads} />}
 
+      {bridge && !expired && <section className="print-only"><h3>Reconciliation</h3><table className="ledger-table"><tbody><tr><th>{bridge.start.label}</th><td>{bridge.start.text}</td></tr>{bridge.steps.map(step => <tr key={step.key}><th>{step.label}</th><td>{step.text}</td></tr>)}<tr><th>Unexplained</th><td>{bridge.residualText}</td></tr><tr><th>{bridge.end.label}</th><td>{bridge.end.text}</td></tr></tbody></table></section>}
       {loads && !expired && twoLoadCountNotes(result.change_summary, categories).map(note => <p className="helper-muted" key={note}>{note}</p>)}
       <div className="tabs-wrap"><div className="tabs result-tabs" role="tablist" aria-label="Result details">
         {([['records', 'A', kind === 'count_distinct' ? `${keyHeader} values` : 'Records'], ['breakdown', 'B', 'Where it sits'], ['definitions', 'C', 'Definitions'], ['notes', 'D', 'Limits']] as Array<[Tab, string, string]>).map(([id, letter, label]) => (

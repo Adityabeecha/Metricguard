@@ -1,3 +1,4 @@
+import { useConnectedIdentity } from '../identity';
 import { useEffect, useState } from 'react';
 import { Database } from 'lucide-react';
 import { api, type FlatContract } from '../api';
@@ -24,6 +25,7 @@ const SOURCE_LABEL: Record<Source, string> = { postgres: 'PostgreSQL', snowflake
  * Connection strings and tokens are used for one request, unless an owner saves the connection (encrypted on the server).
  */
 export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
+  const { identity } = useConnectedIdentity(workspaceId);
   const [source, setSource] = useState<Source>('postgres');
   const [token, setToken] = useState('');
   const [tokenType, setTokenType] = useState<'PROGRAMMATIC_ACCESS_TOKEN' | 'OAUTH'>('PROGRAMMATIC_ACCESS_TOKEN');
@@ -72,6 +74,18 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
     : source === 'postgres' ? { source_uri: uri.trim() }
     : source === 'snowflake' ? { token: token.trim(), token_type: tokenType, account: account.trim(), database }
     : { token: token.trim(), project: project.trim(), ...(location.trim() ? { location: location.trim() } : {}) };
+  const warehouseProblem = (error: unknown): ClassifiedInvestigationError => {
+    const result = classifyInvestigationError(error);
+    const safe = (value: string | undefined) => {
+      if (!value) return value;
+      let text = value.replace(/postgres(?:ql)?:\/\/[^\s]+/gi, '[connection details]')
+        .replace(/(password|token|secret)\s*[=:]\s*[^\s,;]+/gi, '$1=[redacted]');
+      for (const secret of [uri.trim(), token.trim()]) if (secret) text = text.split(secret).join('[redacted]');
+      try { const password = new URL(uri).password; if (password) text = text.split(decodeURIComponent(password)).join('[redacted]'); } catch { /* not a URL */ }
+      return text;
+    };
+    return { ...result, message: safe(result.message) || '', guidance: safe(result.guidance) };
+  };
   async function testConnection(forTable?: string) {
     setTesting(true); setProblem(null);
     try {
@@ -84,7 +98,7 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
         const names = result.columns.map(c => c.name);
         if (!key) setKey(names.find(n => /(^id$|_id$|_key$)/.test(n)) || names[0]);
         if (!amount) setAmount(result.columns.find(c => c.kind === 'amount')?.name || '');
-        if (!cutoffColumn) setCutoffColumn(result.columns.find(c => c.kind === 'date' || c.kind === 'timestamp')?.name || '');
+        if (!cutoffColumn) { const col = result.columns.find(c => c.kind === 'date' || c.kind === 'timestamp'); setCutoffColumn(col?.name || ''); if (col?.kind === 'timestamp') { setCutoffType('timestamp'); setCutoffValue(value => value.length === 10 ? `${value}T00:00` : value); } }
       }
       if (saveAs.trim() && !connectionId) {
         const created = await api.post<Saved>(`/projects/${encodeURIComponent(workspaceId)}/warehouse-connections`, {
@@ -95,7 +109,7 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
         setConnectionId(created.id); setSaveAs(''); setUri(''); setToken('');
       }
     } catch (e) {
-      setProblem(classifyInvestigationError(e));
+      setProblem(warehouseProblem(e));
     } finally {
       setTesting(false);
     }
@@ -184,7 +198,7 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
       setDone(`${full ? 'Full table' : `Sample of ${sampleRows} rows`} frozen: ${extraction.row_count ?? ''} rows.`);
       onCreated(extraction.snapshot_id);
     } catch (e) {
-      setProblem(classifyInvestigationError(e));
+      setProblem(warehouseProblem(e));
     } finally {
       setBusy(false);
     }
@@ -245,6 +259,7 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
           {testing ? 'Connecting…' : 'Test connection & load columns'}
         </button>
         {inspected && <span className="example" role="status">Connected · {inspected.tables.length} table{inspected.tables.length === 1 ? '' : 's'}{inspected.columns.length ? ` · ${inspected.columns.length} columns in ${table}` : ''}</span>}
+        {!connectionId && identity?.role === 'owner' && !savingAvailable && <span className="example">Saving connections isn't enabled on this server.</span>}
         {!connectionId && savingAvailable && <label className="warehouse-save">Save as (optional, owners)<input value={saveAs} onChange={e => setSaveAs(e.target.value)} placeholder="e.g. Production read-only" maxLength={120} /></label>}
       </div>
       <datalist id="warehouse-tables">{(inspected?.tables || []).map(t => <option key={t} value={t} />)}</datalist>
@@ -279,9 +294,9 @@ export function WarehouseSource({ workspaceId, onCreated, refresh }: Props) {
             ))}
             <button type="button" className="button secondary small" style={{ width: 'fit-content' }} disabled={filters.length >= 8} onClick={() => setFilters(fs => [...fs, { name: '', type: 'string' }])}>Add filter column</button>
           </fieldset>
-          <label>Cutoff column {cloud ? '(optional) ' : ''}(rows up to this point are included)<input list="warehouse-columns" value={cutoffColumn} onChange={e => setCutoffColumn(e.target.value)} placeholder="created_at" /></label>
-          {cloud && cutoffColumn && <label>Cutoff column type<select value={cutoffType} onChange={e => setCutoffType(e.target.value as 'date' | 'timestamp')}><option value="date">date</option><option value="timestamp">timestamp</option></select></label>}
-          <label>Cutoff value<input value={cutoffValue} onChange={e => setCutoffValue(e.target.value)} placeholder="2026-10-01" /></label>
+          <label>Cutoff column {cloud ? '(optional) ' : ''}(rows up to this point are included)<input list="warehouse-columns" value={cutoffColumn} onChange={e => { const value = e.target.value; setCutoffColumn(value); const kind = inspected?.columns.find(c => c.name === value)?.kind; if (kind === 'date' || kind === 'timestamp') { setCutoffType(kind); setCutoffValue(current => kind === 'date' ? current.slice(0, 10) : current.length === 10 ? `${current}T00:00` : current); } }} placeholder="created_at" /></label>
+          {cloud && cutoffColumn && <label>Cutoff column type<select value={cutoffType} onChange={e => { const type = e.target.value as 'date' | 'timestamp'; setCutoffType(type); setCutoffValue(value => type === 'date' ? value.slice(0, 10) : value.length === 10 ? `${value}T00:00` : value); }}><option value="date">date</option><option value="timestamp">timestamp</option></select></label>}
+          <label>Cutoff value<input type={cutoffType === 'date' ? 'date' : 'datetime-local'} value={cutoffValue} onChange={e => setCutoffValue(e.target.value)} placeholder="2026-10-01" /></label>
         </div>
       </div>
       <details>

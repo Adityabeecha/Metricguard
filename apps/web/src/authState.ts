@@ -5,7 +5,7 @@ export type GateState =
   | { kind: 'loading' }
   | { kind: 'ready' }
   /** No key (or the key ended on reload) and the server requires one. */
-  | { kind: 'signin'; reason: 'required' | 'invalid_key' | 'reload_ended' }
+  | { kind: 'signin'; reason: 'required' | 'invalid_key' | 'reload_ended' | 'guest_expired' }
   /** Identity is valid (or local) but has no role in this workspace, or the workspace does not exist. */
   | { kind: 'denied'; reason: 'not_member' | 'not_found' | 'needs_key'; message: string }
   /** The API could not be reached or failed internally. */
@@ -20,6 +20,7 @@ export function classifyLoadError(error: unknown, opts: { connected: boolean; re
   const code = typeof e.code === 'string' ? e.code : '';
   const message = typeof e.message === 'string' ? e.message : String(error);
 
+  if (code === 'GUEST_EXPIRED') return { kind: 'signin', reason: 'guest_expired' };
   if (code === 'UNAUTHORIZED' || code === 'HTTP_401') {
     if (opts.connected) return { kind: 'signin', reason: 'invalid_key' };
     return { kind: 'signin', reason: opts.reloadEnded ? 'reload_ended' : 'required' };

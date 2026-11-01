@@ -1,3 +1,5 @@
+import { runsLeft, useUsage } from '../useUsage';
+import { engineDownMessage } from '../hostedCopy';
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, Plus, Save, Trash2 } from 'lucide-react';
 import { api, type Bootstrap, type ColumnValues, type FlatContract, type Run, type Snapshot, type SnapshotChangeKind } from '../api';
@@ -65,6 +67,7 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
   const [title, setTitle] = useState('');
   const [decision, setDecision] = useState('');
   const [actor, setActor] = useRecordedBy(data.project.id);
+  const { usage } = useUsage(data.project.id, run?.id);
   const engineReady = data.mode === 'isolated' && data.runner_available;
   const contract = group?.contract;
   const columns = useMemo(() => contract ? flatFilterColumns(contract) : [], [contract]);
@@ -76,7 +79,7 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
 
   const saved = useMemo(() => group ? data.definitions.flatMap(d => d.versions
     .filter(v => v.contract_hash === group.contract.contract_hash && v.support_state === 'executable')
-    .map(v => ({ id: v.id, label: `${d.name} · v${v.version_number}`, sql: v.raw_sql }))) : [], [data.definitions, group]);
+    .map(v => ({ id: v.id, label: `${d.name} · v${v.version_number}`, sql: v.raw_sql, unsupported: v.ir != null && !['sum', 'count'].includes(String(v.ir.aggregate || 'sum')) }))) : [], [data.definitions, group]);
 
   // Choosing a dataset defaults to its two most recent loads and a plain total.
   useEffect(() => {
@@ -127,7 +130,7 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
   const formIssue = mode === 'form' && !versionId && contract ? formProblems(form, columns)[0] || (formSql() ? '' : 'Complete the conditions.') : '';
 
   const baseline = group?.snapshots.find(s => s.id === baselineId), target = group?.snapshots.find(s => s.id === targetId);
-  const blocker = !engineReady ? 'The comparison engine is not running. Start it with scripts\\mg.ps1 start.'
+  const blocker = !engineReady ? engineDownMessage(window.location.hostname)
     : !group ? (sources ? 'Choose source A.' : 'Choose a dataset with at least two loads.')
     : !baseline || !target ? (sources ? 'Choose both sources.' : 'Choose both loads.')
     : baseline.id === target.id ? (sources ? 'Choose two different datasets.' : 'Choose two different loads.')
@@ -151,7 +154,7 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
             '/flat/definitions', { name, raw_sql: text, contract_id: group.contract.id });
           const version = def.versions.at(-1);
           if (!version || version.support_state !== 'executable') {
-            setProblem(classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: version?.support_reason || 'This calculation is outside the supported grammar.' }));
+            setProblem(classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: version?.support_reason || 'This calculation uses SQL MetricGuard can\'t check exactly yet.' }));
             return;
           }
           id = version.id;
@@ -255,10 +258,11 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
                 <label>Start from a saved calculation (optional)
                   <select value={versionId} onChange={e => { setVersionId(e.target.value); setRun(null); }}>
                     <option value="">— Describe the calculation below —</option>
-                    {saved.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                    {saved.map(s => <option key={s.id} value={s.id} disabled={s.unsupported}>{s.label}{s.unsupported ? ' - Not available when comparing two loads yet; use Two calculations on the same data' : ''}</option>)}
                   </select>
                 </label>
               )}
+              <p className="hint">Not available when comparing two loads yet; use Two calculations on the same data for distinct counts, ratios, averages, subtraction, CASE or connected tables.</p>
               {!versionId && (
                 <div className="calc-card">
                   <div className="mode-switch" role="group" aria-label="Calculation editor">
@@ -332,7 +336,7 @@ export function SnapshotChange({ data, refresh, onSaved, prefillDataset }: Props
                 </div>
               )}
               <div className="guided-nav">
-                <span className="example">{blocker}</span>
+                <span className="example">{blocker} {runsLeft(usage)}</span>
                 <button className="button primary" disabled={Boolean(blocker) || busy || (run !== null && pending(run.state))} onClick={compare}>
                   {busy || (run && pending(run.state)) ? 'Comparing…' : sources ? 'Compare the two sources' : 'Compare the two loads'} <ArrowRight size={15} />
                 </button>

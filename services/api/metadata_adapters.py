@@ -130,7 +130,7 @@ def analyze_dbt_sql(compiled_sql: str | None) -> tuple[bool, str, list[str]]:
 def parse_run_results(content: bytes) -> dict[str, dict]:
     """Parse dbt run_results.json and index by unique_id."""
     if len(content) > MAX_DBT_RUN_RESULTS_BYTES:
-        raise AdapterError(f'run_results.json exceeds {MAX_DBT_RUN_RESULTS_BYTES // (1024 * 1024)} MiB')
+        raise AdapterError(f'run_results.json exceeds {MAX_DBT_RUN_RESULTS_BYTES // (1024 * 1024)} MB')
     try:
         data = json.loads(content)
     except (UnicodeError, ValueError) as err:
@@ -157,7 +157,7 @@ def parse_dbt_project_artifacts(manifest_content: bytes,
                                 source_revision: dict | None = None) -> dict:
     """Parse dbt manifest (v7-12) and companion run_results into structured revision resources."""
     if len(manifest_content) > MAX_DBT_MANIFEST_BYTES:
-        raise AdapterError(f'dbt manifest exceeds {MAX_DBT_MANIFEST_BYTES // (1024 * 1024)} MiB')
+        raise AdapterError(f'dbt manifest exceeds {MAX_DBT_MANIFEST_BYTES // (1024 * 1024)} MB')
     try:
         artifact = json.loads(manifest_content)
     except (UnicodeError, ValueError) as error:
@@ -313,7 +313,7 @@ def _unquote(name: str) -> str:
 
 def import_tmdl(content: bytes) -> dict:
     if len(content) > 5 * 1024 * 1024:
-        raise AdapterError('TMDL document exceeds 5 MiB')
+        raise AdapterError('TMDL document exceeds 5 MB')
     try:
         source = content.decode('utf-8-sig')
     except UnicodeError as error:

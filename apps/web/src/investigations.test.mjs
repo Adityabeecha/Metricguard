@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   buildComparisonPayload,
   classifyResidual,
+  classifyInvestigationError,
   computeSqlDifferences,
   detectExecutionPath,
   formatInvestigationStatus,
@@ -199,3 +200,9 @@ test('snapshot context regression: switching from sales INR snapshot to inventor
   assert.equal(serialized.includes('INR'), false, 'Inventory payload must strictly NOT contain INR');
 });
 
+
+
+test('unsupported grammar errors use plain language', () => {
+  const result = classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: 'This calculation is outside the supported grammar.' });
+  assert.equal(result.message, "This calculation uses SQL MetricGuard can't check exactly yet.");
+});

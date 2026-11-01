@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
 
 SWEEP_SECONDS = 300
 
@@ -37,16 +38,28 @@ def guest_terms(email: str) -> dict | None:
             'storage_bytes': _positive('METRICGUARD_GUEST_STORAGE_MB', 25) * 1024 * 1024}
 
 
+_last = {'at': None, 'erased': 0, 'waiting': 0}
+
+
+def last_sweep() -> dict:
+    """The latest sweep's time (Unix seconds) and counts, for the health check; no user ids."""
+    return dict(_last)
+
+
 def sweep(store, data_dir) -> list[str]:
     """Erase expired guest accounts; a busy one (job still running) is retried next sweep."""
     from .account_deletion import delete_account
-    erased = []
+    erased, waiting = [], 0
     for user_id in store.expired_guests():
         try:
             delete_account(store, user_id, data_dir)
             erased.append(user_id)
         except Exception as exc:  # retried on the next sweep
+            waiting += 1
             print(f'guests: could not erase {user_id} yet: {getattr(exc, "code", type(exc).__name__)}', file=sys.stderr, flush=True)
+    _last.update(at=time.time(), erased=len(erased), waiting=waiting)
+    if erased:
+        print(f'guests: erased {len(erased)} expired account{"s" if len(erased) != 1 else ""}', file=sys.stderr, flush=True)
     return erased
 
 

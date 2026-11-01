@@ -68,7 +68,7 @@ def _run_files(run: dict, root: Path) -> set[Path]:
 
 
 def delete_snapshot(store, snapshot_id: str, data_dir) -> dict:
-    from .store import (metric_diff_reports, metric_impact_reports, metric_state_transitions, postgres_extractions,
+    from .store import (metric_diff_reports, metric_impact_reports, metric_state_transitions, metrics, postgres_extractions,
                         records, runs, snapshot_imports, snapshots)
     root = Path(data_dir).resolve()
     with store.engine.begin() as conn:
@@ -94,13 +94,19 @@ def delete_snapshot(store, snapshot_id: str, data_dir) -> dict:
                  if r['data'].get('snapshot_id') == snapshot_id or r['data'].get('target_snapshot_id') == snapshot_id
                  or r['data'].get('run_id') in run_ids]
         if cases:
-            titles = ', '.join(f"“{c.get('title') or 'Untitled'}”" for c in cases[:5]) + (f' and {len(cases) - 5} more' if len(cases) > 5 else '')
-            raise DomainError('DATASET_IN_USE', f'Saved cases use this dataset: {titles}. Delete those cases first.', 409)
-        if run_ids and conn.execute(select(metric_state_transitions.c.id).where(metric_state_transitions.c.comparison_run_id.in_(run_ids))).first():
-            raise DomainError('DATASET_IN_USE', 'A metric approval relies on a comparison of this dataset, so it is kept.', 409)
+            titles = ', '.join(f"'{c.get('title') or 'Untitled'}'" for c in cases[:3])
+            raise DomainError('DATASET_IN_USE', f"Used by the case {titles}. Delete or change that first.", 409)
+        if run_ids:
+            names = list(conn.execute(select(metrics.c.display_name).join(metric_state_transitions,
+                metrics.c.id == metric_state_transitions.c.metric_id).where(
+                metric_state_transitions.c.comparison_run_id.in_(run_ids)).distinct().limit(3)).scalars())
+            if names:
+                raise DomainError('DATASET_IN_USE', f"Used by the metric approval {', '.join(repr(name) for name in names)}. Delete or change that first.", 409)
         for table in (metric_impact_reports, metric_diff_reports):
-            if conn.execute(select(table.c.id).where(table.c.snapshot_id == snapshot_id)).first():
-                raise DomainError('DATASET_IN_USE', 'A dbt or Power BI change report uses this dataset, so it is kept.', 409)
+            reports = list(conn.execute(select(table.c.id, table.c.data).where(table.c.snapshot_id == snapshot_id).limit(3)).mappings())
+            if reports:
+                names = [r['data'].get('name') or r['data'].get('title') or r['id'] for r in reports]
+                raise DomainError('DATASET_IN_USE', f"Used by the report {', '.join(repr(name) for name in names)}. Delete or change that first.", 409)
 
         files: set[Path] = set()
         artifact = _owned_path(row['data'].get('artifact_path'), root)

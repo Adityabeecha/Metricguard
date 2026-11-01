@@ -118,8 +118,8 @@ def test_token_never_appears_in_errors(tmp_path):
         return httpx.Response(400, json={'message': f'bad statement near Bearer {TOKEN}'})
     with pytest.raises(CollectorError) as error:
         wr.extract_to_csv(_selection('snowflake'), tmp_path / 'out.csv', client=httpx.Client(transport=httpx.MockTransport(refuse)))
-    assert TOKEN not in error.value.message and 'HTTP 400' in error.value.message
-    with pytest.raises(CollectorError, match='refused the token'):
+    assert TOKEN not in error.value.message and 'Check the connection and table settings' in error.value.message
+    with pytest.raises(CollectorError, match='refused the login'):
         wr.extract_to_csv(_selection('bigquery'), tmp_path / 'out.csv',
                           client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(401, json={}))))
 

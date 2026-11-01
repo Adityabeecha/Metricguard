@@ -7,7 +7,7 @@ export function uploadLimitText(limits: UploadLimits): string {
   const pieces = [limits.max_upload_mb == null ? '' : `${count(limits.max_upload_mb)} MB`,
     limits.max_rows == null ? '' : `${count(limits.max_rows)} rows`].filter(Boolean);
   return pieces.length ? `Up to ${pieces.join(' and ')} on the free beta`
-    : 'Drop a CSV (up to 512 MiB), Parquet or Excel (.xlsx) file';
+    : 'Drop a CSV (up to 512 MB), Parquet or Excel (.xlsx) file';
 }
 export function previewRowLimitMessage(limits: Pick<UploadLimits, 'max_rows'>, rows: number, exact = true): string {
   if (limits.max_rows == null || rows <= limits.max_rows) return '';
@@ -64,7 +64,11 @@ export function loadCompatibilityProblem(preview:LoadPreview, contract:LoadContr
   const amounts = contract.decimal_columns?.length ? contract.decimal_columns : [{name:contract.measure || '',scale:contract.scale,unit_label:contract.unit_label}];
   const columns = [contract.row_key,...amounts.map(d => d.name),...contract.categories];
   const sameColumns = columns.length === preview.headers.length && new Set(columns).size === columns.length && columns.every(c => preview.headers.includes(c));
-  if (!sameColumns) return 'A newer load must have the same columns as this dataset.';
+  if (!sameColumns) {
+    const missing = columns.filter(c => !preview.headers.includes(c));
+    const extra = preview.headers.filter(c => !columns.includes(c));
+    return `A newer load must have the same columns as this dataset. Missing: ${missing.join(', ') || 'none'}. Extra: ${extra.join(', ') || 'none'}.`;
+  }
   if (preview.key_issues?.[contract.row_key]) return `Row ID “${contract.row_key}” ${preview.key_issues[contract.row_key]}.`;
   const allBlank = (column:string) => preview.totalRowsSampled > 0 && preview.null_counts?.[column] === preview.totalRowsSampled;
   for (const amount of amounts) {

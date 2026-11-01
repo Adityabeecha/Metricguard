@@ -183,3 +183,11 @@ test('group shares work for ratio fractions and plain decimals', async () => {
   assert.equal(groupShare(null, null, '340.00'), 0);
   assert.equal(groupShare('5', null, null), 0);
 });
+
+
+test('case summary appends an optional saved case link', () => {
+  const detail = { title: 'Case', created_at: '2026-01-01', run: { id: 'run1', result: null } };
+  const without = caseSummaryMarkdown({ detail, unit: '', summary: null, breakdown: null });
+  const withLink = caseSummaryMarkdown({ detail, unit: '', summary: null, breakdown: null, link: 'https://example.test/case' });
+  assert.equal(withLink, `${without}\nhttps://example.test/case`);
+});

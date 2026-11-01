@@ -103,3 +103,29 @@ def test_snowflake_and_bigquery_inspect_list_tables_and_typed_columns():
     assert big['tables'] == ['orders'] and [(c['name'], c['kind']) for c in big['columns']] == [('amount', 'amount'), ('paid', 'boolean')]
     with pytest.raises(CollectorError):
         wi.inspect_snowflake('bad account!', 'token-123456', 'OAUTH', 'SALES', 'PUBLIC', client=client)
+
+
+@pytest.mark.parametrize(('message', 'expected'), [
+    ('password authentication failed for postgresql://user:secret@host/db', 'The database refused the login.'),
+    ('connection timed out: token=secret', "Couldn't reach the database."),
+    ('SSL is required password=secret', 'The database requires SSL.'),
+    ('relation orders does not exist token=secret', 'Table not found.'),
+    ('permission denied for table orders password=secret', "The database user can't read this table."),
+])
+def test_inspect_maps_postgres_errors_without_secrets(monkeypatch, message, expected):
+    import psycopg
+    def fail(*args, **kwargs):
+        raise psycopg.OperationalError(message)
+    monkeypatch.setenv('METRICGUARD_BLOCK_PRIVATE_SOURCES', 'false')
+    monkeypatch.setattr(psycopg, 'connect', fail)
+    with pytest.raises(CollectorError) as error:
+        wi.inspect_postgres(SECRET_URI, 'public', 'orders')
+    assert expected in error.value.message
+    assert 'secret' not in error.value.message.lower()
+    assert 'postgresql://' not in error.value.message
+
+
+def test_missing_column_is_not_reported_as_missing_table():
+    from services.supervisor.warehouse_errors import warehouse_error
+    assert warehouse_error(Exception('column "amt" does not exist'))[0] == 'COLUMN_NOT_FOUND'
+    assert warehouse_error(Exception('relation "orders" does not exist'))[0] == 'TABLE_NOT_FOUND'

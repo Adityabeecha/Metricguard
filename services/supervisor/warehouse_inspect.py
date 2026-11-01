@@ -15,7 +15,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from services.supervisor.collector import CollectorError, redact_credentials
+from services.supervisor.collector import CollectorError
+from services.supervisor.warehouse_errors import warehouse_error
 from services.supervisor.warehouse_rest import ACCOUNT_REGEX, DATASET_REGEX, PROJECT_REGEX, _response
 from services.supervisor.collector import IDENTIFIER_REGEX
 
@@ -38,11 +39,10 @@ def public_address(host: str, port: int) -> str:
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except OSError:
-        raise CollectorError('CONNECTION_FAILED', f'Could not find the database host {host}.') from None
+        raise CollectorError('CONNECTION_FAILED', f"Couldn't find the database host {host[:120]}. Check the host name.") from None
     addresses = [ipaddress.ip_address(info[4][0]) for info in infos]
     if not addresses or any(not a.is_global for a in addresses):
-        raise CollectorError('PRIVATE_SOURCE', 'This server cannot connect to private or internal network addresses. '
-                             'Use the database\'s public host name.')
+        raise CollectorError('PRIVATE_SOURCE', "This address is on a private network, which the hosted site can't reach.")
     return str(addresses[0])
 
 
@@ -102,7 +102,8 @@ def inspect_postgres(uri: str, schema: str, table: str | None = None) -> dict:
     except CollectorError:
         raise
     except Exception as exc:
-        raise CollectorError('CONNECTION_FAILED', f'Could not read the database: {redact_credentials(str(exc))[:300]}') from None
+        code, message = warehouse_error(exc)
+        raise CollectorError(code, message) from None
     return {'tables': tables, 'columns': columns}
 
 
@@ -115,7 +116,7 @@ def _snowflake(account, token, token_type, sql, bindings, database, client):
     deadline = time.monotonic() + 30
     while response.status_code == 202:
         if time.monotonic() > deadline:
-            raise CollectorError('WAREHOUSE_TIMEOUT', 'Snowflake did not answer in time.')
+            raise CollectorError('WAREHOUSE_TIMEOUT', 'The warehouse took too long to answer. Try a smaller table or an earlier cutoff.')
         time.sleep(0.5)
         handle = str(response.json().get('statementHandle') or '')
         response = _response(client, 'GET', f'{base}/{handle}', token, headers=headers)

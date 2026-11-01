@@ -95,6 +95,11 @@ oauth_identities = Table('oauth_identities', metadata,
     Column('user_id', ForeignKey('users.id'), nullable=False))
 oauth_states = Table('oauth_states', metadata,
     Column('nonce_hash', String, primary_key=True), Column('expires_at', Float, nullable=False))
+# Jobs whose worker vanished (restart, crash) are retried up to this many attempts, then failed.
+MAX_ATTEMPTS = 3
+ABANDONED_ERROR = {'code': 'WORKER_LOST', 'message': 'The server restarted several times during this job. '
+                   'Run it again; if it keeps happening, try a smaller file or send Feedback.'}
+
 # Guest accounts (open sign-up, email not on the full-access list): erased once expires_at passes.
 guest_accounts = Table('guest_accounts', metadata,
     Column('user_id', ForeignKey('users.id'), primary_key=True), Column('expires_at', Float, nullable=False))
@@ -680,6 +685,10 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
     def claim_import(self, worker_id, lease_seconds=90):
         moment = time.time()
         with self.engine.begin() as conn:
+            # A job whose worker died MAX_ATTEMPTS times (e.g. it keeps crashing the container) stops retrying.
+            conn.execute(update(snapshot_imports).where(snapshot_imports.c.state == 'running',
+                snapshot_imports.c.lease_expires_at < moment, snapshot_imports.c.attempt >= MAX_ATTEMPTS).values(
+                state='failed', error=ABANDONED_ERROR, completed_at=now(), lease_expires_at=None))
             available = or_(snapshot_imports.c.state == 'queued', and_(snapshot_imports.c.state == 'running',
                 snapshot_imports.c.lease_expires_at < moment))
             candidate = conn.execute(select(snapshot_imports.c.id, snapshot_imports.c.attempt).where(available)
@@ -798,6 +807,17 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
                 if daily_limit and conn.execute(select(func.count()).select_from(runs).where(
                         runs.c.project_id == pid, runs.c.created_at >= cutoff)).scalar_one() >= daily_limit:
                     raise DomainError('FREE_TIER_DAILY_RUNS', f'Free beta limit: {daily_limit:,} comparisons per workspace in 24 hours. Try again later.', 429)
+                # Server-wide caps bound the shared container however many accounts exist. Workspaces
+                # are not serialized against each other, so a simultaneous burst may pass by one.
+                busy = 'The beta is busy right now. Try again in a few minutes.'
+                global_active = configured_limit('METRICGUARD_MAX_ACTIVE_RUNS_GLOBAL')
+                if global_active and conn.execute(select(func.count()).select_from(runs).where(
+                        runs.c.state.in_(['queued', 'running']))).scalar_one() >= global_active:
+                    raise DomainError('SERVER_BUSY', busy, 503)
+                global_daily = configured_limit('METRICGUARD_MAX_RUNS_PER_DAY_GLOBAL')
+                if global_daily and conn.execute(select(func.count()).select_from(runs).where(
+                        runs.c.created_at >= cutoff)).scalar_one() >= global_daily:
+                    raise DomainError('SERVER_BUSY', 'The beta has reached today\'s comparison limit. Try again tomorrow.', 503)
                 if configured_limit('METRICGUARD_MAX_ROWS'):
                     for sid in {request['snapshot_id'], request.get('target_snapshot_id')} - {None}:
                         snap = conn.execute(select(snapshots.c.data).where(snapshots.c.id == sid)).scalar_one_or_none()
@@ -828,6 +848,11 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
     def claim(self, worker_id, lease_seconds=90):
         moment = time.time()
         with self.engine.begin() as conn:
+            # A run interrupted by a restart is retried; one that was lost MAX_ATTEMPTS times fails
+            # instead of looping, which frees the workspace's active-run slot.
+            conn.execute(update(runs).where(runs.c.state == 'running', runs.c.lease_expires_at < moment,
+                runs.c.attempt >= MAX_ATTEMPTS).values(state='failed', error=ABANDONED_ERROR,
+                completed_at=now(), lease_expires_at=None))
             available = and_(runs.c.execution_mode == 'isolated', runs.c.cancel_requested.is_(False),
                 or_(runs.c.state == 'queued', and_(runs.c.state == 'running', runs.c.lease_expires_at < moment)))
             candidate = conn.execute(select(runs.c.id, runs.c.attempt).where(available).order_by(runs.c.created_at).limit(1)).first()
@@ -876,6 +901,10 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
         with self.engine.begin() as conn:
             if not conn.execute(update(worker_status).where(worker_status.c.id == ident).values(last_seen=time.time())).rowcount:
                 conn.execute(insert(worker_status).values(id=ident, last_seen=time.time()))
+
+    def database_ok(self) -> bool:
+        with self.engine.connect() as conn:
+            return conn.execute(select(1)).scalar_one() == 1
 
     def worker_available(self):
         with self.engine.connect() as conn:
@@ -996,7 +1025,10 @@ class Store(MetricContractStoreMixin, RelationalStoreMixin):
         import time as _time
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         with self.engine.connect() as conn:
-            row = conn.execute(select(users).join(auth_sessions, auth_sessions.c.user_id == users.c.id).where(
+            # Guests carry their erase time so an expired guest is refused before the sweep runs.
+            row = conn.execute(select(users, guest_accounts.c.expires_at.label('guest_expires_at'))
+                .join(auth_sessions, auth_sessions.c.user_id == users.c.id)
+                .outerjoin(guest_accounts, guest_accounts.c.user_id == users.c.id).where(
                 auth_sessions.c.token_hash == token_hash, auth_sessions.c.expires_at > _time.time(),
                 users.c.is_active == True)).mappings().first()
             return {k: v for k, v in dict(row).items() if k != 'api_key_hash'} if row else None

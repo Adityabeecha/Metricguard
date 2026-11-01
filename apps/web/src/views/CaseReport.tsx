@@ -1,3 +1,4 @@
+import { engineDownMessage } from '../hostedCopy';
 import { resultUnit } from '../resultSummary';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, BookmarkCheck, Copy, Download, Link2, Pencil, Printer, RefreshCw } from 'lucide-react';
@@ -130,7 +131,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
     && (replay.result.ratio?.gap_exact ?? null) === (detail.run.result.ratio?.gap_exact ?? null)
     && (runSha(replay) ?? null) === (runSha(detail.run) ?? null);
   const replayBlocker = !detail.replay_available ? 'The frozen dataset is no longer available, so this case cannot be replayed. The saved result stays readable.'
-    : data.mode !== 'isolated' ? 'Replay needs the isolated engine (scripts\\mg.ps1 start).' : '';
+    : data.mode !== 'isolated' ? engineDownMessage(window.location.hostname) : '';
 
   const link = `${window.location.origin}/w/${encodeURIComponent(data.project.id)}/cases/${encodeURIComponent(detail.id)}`;
   // Replays of this case recorded on the server, plus the one running now.
@@ -228,6 +229,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
         onSaved={async metricId => { setSavingMetric(false); await refresh(); onOpenMetric?.(metricId); }} />}
       {shareOpen && <CaseShareDialog caseId={detail.id} memberLink={link} onClose={() => setShareOpen(false)} />}
       <div className="print-only print-custody"><CasePrintCustody detail={detail} replays={replays} /></div>
+      <footer className="print-only print-footer">{window.location.href} | Printed {new Date().toLocaleString()}</footer>
       {custodyOpen && (
         <CustodyLog detail={detail} replays={replays} live={replay} replaying={replaying} blocker={replayBlocker}
           onReplay={() => void startReplay()} onClose={() => setCustodyOpen(false)} />

@@ -15,6 +15,7 @@ Everything the user asked for so far is implemented and committed on `main`. The
 
 Most recent work, newest first:
 
+0. (2026-11-01) Improvements to existing features (items 1–55 in [prompts/improvements-2026-11-01.md](prompts/improvements-2026-11-01.md); GPT did the small items G1–G3, Claude did the server items): hosted wording, guest notices and terms, upload progress, clearer dataset/warehouse errors, case search and printing, a server-wide run cap (`METRICGUARD_MAX_ACTIVE_RUNS_GLOBAL`, `METRICGUARD_MAX_RUNS_PER_DAY_GLOBAL`), jobs failing after 3 lost workers, expired guests refused immediately, a health check with database status, and `scripts/backup_db.py` (nightly logical DB backup to R2). Browser acceptance not yet done.
 1. `81e6252` End-to-end user guide ([user-guide.md](user-guide.md)).
 2. `e1605dd` Guest accounts. New sign-ups whose email is not on `METRICGUARD_FULL_ACCESS_EMAILS` (fallback `METRICGUARD_INVITE_EMAILS`) are erased with all their data 8 hours after sign-up and get 25 MB of storage. See `services/api/guests.py` and `tests/test_guest_accounts.py`.
 3. `1527269` Open sign-up. Google/GitHub sign-in creates an account plus a personal workspace for any verified email. The invite list and waitlist were removed. Workspace invites (Settings → Members) still exist.

@@ -95,7 +95,7 @@ def test_unverified_email_creates_nothing_and_any_verified_email_signs_up(setup,
     client, store, _, profile = setup
     profile['verified'] = False
     _, state = begin(client, provider)
-    assert callback(client, provider, state).headers['location'].endswith('error=failed')
+    assert callback(client, provider, state).headers['location'].endswith('error=unverified')
     with store.engine.connect() as db:
         assert db.execute(select(users).where(users.c.id != 'local-analyst')).first() is None
     # Sign-up is open: a new, provider-verified email gets an account and its own workspace straight away.
@@ -326,3 +326,14 @@ def test_only_owners_manage_invites_and_revoked_invites_do_not_admit(setup):
     assert callback(client, 'google', state).headers['location'].startswith('https://metricguard.example/w/personal-')
     user = store.get_user_by_session(client.cookies.get('mg_session'))
     assert store.get_project_member(pid, user['id']) is None
+
+
+def test_provider_guest_terms(setup, monkeypatch):
+    client, _, _, _ = setup
+    monkeypatch.delenv('METRICGUARD_FULL_ACCESS_EMAILS', raising=False)
+    monkeypatch.delenv('METRICGUARD_INVITE_EMAILS', raising=False)
+    assert client.get('/api/v1/auth/providers').json()['guest'] is None
+    monkeypatch.setenv('METRICGUARD_FULL_ACCESS_EMAILS', 'owner@example.com')
+    monkeypatch.setenv('METRICGUARD_GUEST_HOURS', '6')
+    monkeypatch.setenv('METRICGUARD_GUEST_STORAGE_MB', '40')
+    assert client.get('/api/v1/auth/providers').json()['guest'] == {'hours': 6, 'storage_mb': 40}

@@ -199,7 +199,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 return JSONResponse({'error': {'code': 'FREE_TIER_UPLOAD',
                     'message': f'Free beta limit: {upload_limit:,} MB per upload (this request has {length:,} bytes).'}}, status_code=413)
             if length > limit:
-                return JSONResponse({'error': {'code': 'UPLOAD_LIMIT', 'message': f'Upload exceeds the {(limit // (1024 * 1024)) - 1} MiB limit.'}}, status_code=413)
+                return JSONResponse({'error': {'code': 'UPLOAD_LIMIT', 'message': f'Upload exceeds the {(limit // (1024 * 1024)) - 1} MB limit.'}}, status_code=413)
         except ValueError:
             return JSONResponse({'error': {'code': 'BAD_REQUEST', 'message': 'Invalid content length.'}}, status_code=400)
         # Cache eviction must not race a paged evidence read. The background
@@ -247,8 +247,24 @@ def create_app(database_url=None, data_dir=None, mode=None):
 
     @app.get('/api/v1/health')
     def health():
-        is_runner_available = True if execution_mode == 'demo' else store.worker_available()
-        return {'status': 'ok', 'mode': execution_mode, 'runner_available': is_runner_available}
+        # Public and cheap for uptime monitors: never touches file storage; the database check
+        # gives up after 2 seconds so a stalled database reports instead of hanging the probe.
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as Timeout
+        from .guests import full_access_emails, last_sweep
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            probe = lambda: store.database_ok() and (True if execution_mode == 'demo' else store.worker_available())
+            is_runner_available = pool.submit(probe).result(timeout=2)
+            database = 'ok'
+        except (Timeout, Exception):
+            is_runner_available, database = False, 'unavailable'
+        finally:
+            pool.shutdown(wait=False)
+        body = {'status': 'ok' if database == 'ok' else 'degraded', 'mode': execution_mode,
+                'runner_available': is_runner_available, 'database': database}
+        if full_access_emails():
+            body['guest_sweep'] = last_sweep()
+        return body
 
     @app.get('/api/v1/evaluation')
     def evaluation():
@@ -312,7 +328,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             raise DomainError('UNSUPPORTED_FORMAT', 'Upload a dbt manifest.json or a .tmdl metadata document.')
         content = await file.read(5 * 1024 * 1024 + 1)
         if len(content) > 5 * 1024 * 1024:
-            raise DomainError('UPLOAD_LIMIT', 'Metadata artifact exceeds 5 MiB.', 413)
+            raise DomainError('UPLOAD_LIMIT', 'Metadata artifact exceeds 5 MB.', 413)
         if len(store.bootstrap(pid)['metadata_imports']) >= 20:
             raise DomainError('IMPORT_LIMIT', 'This local workspace supports at most 20 metadata artifacts.')
         try:
@@ -341,7 +357,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
 
         manifest_content = await manifest.read(10 * 1024 * 1024 + 1)
         if len(manifest_content) > 10 * 1024 * 1024:
-            raise DomainError('UPLOAD_LIMIT', 'dbt manifest exceeds 10 MiB limit.', 413)
+            raise DomainError('UPLOAD_LIMIT', 'dbt manifest exceeds 10 MB limit.', 413)
 
         run_results_content = None
         if run_results:
@@ -349,7 +365,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
                 raise DomainError('UNSUPPORTED_FORMAT', 'run_results.json must be a JSON file.')
             run_results_content = await run_results.read(5 * 1024 * 1024 + 1)
             if len(run_results_content) > 5 * 1024 * 1024:
-                raise DomainError('UPLOAD_LIMIT', 'run_results.json exceeds 5 MiB limit.', 413)
+                raise DomainError('UPLOAD_LIMIT', 'run_results.json exceeds 5 MB limit.', 413)
 
         source_rev = {}
         if git_sha:
@@ -897,11 +913,11 @@ def create_app(database_url=None, data_dir=None, mode=None):
                     size += len(chunk)
                     check_upload_size(size)
                     if size > MAX_FLAT_BYTES:
-                        raise DomainError('UPLOAD_LIMIT', f'Dataset must contain 1 byte to {MAX_FLAT_BYTES // (1024 * 1024)} MiB.', 413)
+                        raise DomainError('UPLOAD_LIMIT', f'Dataset must contain 1 byte to {MAX_FLAT_BYTES // (1024 * 1024)} MB.', 413)
                     hasher.update(chunk)
                     output.write(chunk)
             if not size:
-                raise DomainError('UPLOAD_LIMIT', f'Dataset must contain 1 byte to {MAX_FLAT_BYTES // (1024 * 1024)} MiB.', 413)
+                raise DomainError('UPLOAD_LIMIT', f'Dataset must contain 1 byte to {MAX_FLAT_BYTES // (1024 * 1024)} MB.', 413)
             store.check_storage_quota(pid, size, data_dir)
         except Exception:
             stage.unlink(missing_ok=True)
@@ -974,7 +990,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         content = await file.read(25 * 1024 * 1024 + 1)
         check_upload_size(len(content))
         if not content or len(content) > 25 * 1024 * 1024:
-            raise DomainError('UPLOAD_LIMIT', 'Dataset must contain 1 byte to 25 MiB.', 413)
+            raise DomainError('UPLOAD_LIMIT', 'Dataset must contain 1 byte to 25 MB.', 413)
         store.check_storage_quota(pid, len(content), data_dir)
         source_hash = hashlib.sha256(content).hexdigest()
         for existing in store.bootstrap(pid)['snapshots']:
@@ -1009,7 +1025,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         content = await file.read(25 * 1024 * 1024 + 1)
         check_upload_size(len(content))
         if not content or len(content) > 25 * 1024 * 1024:
-            raise DomainError('UPLOAD_LIMIT', 'Dataset must contain 1 byte to 25 MiB.', 413)
+            raise DomainError('UPLOAD_LIMIT', 'Dataset must contain 1 byte to 25 MB.', 413)
         store.check_storage_quota(pid, len(content), data_dir)
         source_hash = hashlib.sha256(content).hexdigest()
         stage = data_dir / 'uploads' / f'{uuid4()}{suffix}'
@@ -1054,7 +1070,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             raise DomainError('UNSUPPORTED_FORMAT', 'v1 accepts the documented orders CSV or Parquet schema only.')
         content = await file.read(25 * 1024 * 1024 + 1)
         if len(content) > 25 * 1024 * 1024:
-            raise DomainError('UPLOAD_LIMIT', 'Dataset exceeds 25 MiB.', 413)
+            raise DomainError('UPLOAD_LIMIT', 'Dataset exceeds 25 MB.', 413)
         if not content:
             raise DomainError('INVALID_CSV' if suffix == '.csv' else 'INVALID_PARQUET', 'Dataset is empty.')
         store.check_storage_quota(pid, len(content), data_dir)
@@ -1397,7 +1413,12 @@ def create_app(database_url=None, data_dir=None, mode=None):
         pid = resolve_project_id(request, auth, store=store)
         verify_project_access(store, pid, auth, allowed_roles=('owner', 'analyst', 'reader'))
         from .usage import workspace_usage
-        return workspace_usage(store, pid, data_dir)
+        quota = store.get_project_quota(pid) or {}
+        user_id = None if auth.get('is_unverified') else auth['user']['id']
+        return {**workspace_usage(store, pid, data_dir),
+                'storage_quota_bytes': quota.get('max_storage_bytes'),
+                # The viewer's own guest deadline (Unix seconds); null for full accounts.
+                'guest_expires_at': store.guest_expiry(user_id) if user_id else None}
 
     @app.get('/api/v1/comparisons/{ident}')
     def run_detail(ident: str, request: Request):
@@ -2069,7 +2090,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
             bundle['join_evidence'] = page['join_evidence']
         content = html_report(bundle) if format == 'html' else json.dumps(bundle, indent=2, ensure_ascii=False)
         if len(content.encode()) > 25 * 1024 * 1024:
-            raise DomainError('EXPORT_LIMIT', 'Report exceeds 25 MiB; use paginated evidence instead.', 413)
+            raise DomainError('EXPORT_LIMIT', 'Report exceeds 25 MB; use paginated evidence instead.', 413)
         return Response(content, media_type='text/html' if format == 'html' else 'application/json',
                         headers={'Content-Disposition': f'attachment; filename="metricguard-{ident}.{format}"'})
 
@@ -2160,6 +2181,7 @@ def create_app(database_url=None, data_dir=None, mode=None):
         home = next((p for p in accessible if p['id'] == 'personal-' + user['id']),
                     accessible[0] if accessible else None)
         role = None
+        guest_expires_at = store.guest_expiry(user['id'])
         if project_id:
             member = verify_project_access(store, project_id, auth)  # non/revoked member -> 403
             role = member.get('role')
@@ -2169,7 +2191,9 @@ def create_app(database_url=None, data_dir=None, mode=None):
             'home_workspace_id': home['id'] if home else None,
             'user': {'id': user.get('id'), 'name': user.get('name'), 'email': user.get('email')},
             # Guests: when everything this account owns is erased (Unix seconds); null for full accounts.
-            'guest_expires_at': store.guest_expiry(user['id']),
+            'guest_expires_at': guest_expires_at,
+            'guest_storage_bytes': (store.get_project_quota(home['id']) or {}).get('max_storage_bytes')
+                                   if guest_expires_at is not None and home else None,
             'project_id': project_id,
             'role': role,
         }

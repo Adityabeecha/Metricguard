@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 from fastapi import Request
 
@@ -37,6 +38,8 @@ def get_auth_context(request: Request, store: Store) -> dict[str, Any]:
     session_token = request.cookies.get(SESSION_COOKIE)
     if session_token:
         user = store.get_user_by_session(session_token)
+        if user and user.get('guest_expires_at') is not None and user['guest_expires_at'] <= time.time():
+            raise DomainError('GUEST_EXPIRED', 'This guest account has expired and is being erased. Sign in again to start a fresh one.', 401)
         if user:
             # Cross-site request forgery guard: other origins (even another localhost
             # port) cannot add this header without a CORS approval the API never grants.

@@ -1,3 +1,5 @@
+import { runsLeft, useUsage } from '../useUsage';
+import { engineDownMessage } from '../hostedCopy';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Database, Plus, Save, Trash2, UploadCloud } from 'lucide-react';
 import { api, ApiError, type Bootstrap, type ColumnValues, type FlatContract, type InvestigationDraft, type RelationalContract, type Run, type Snapshot } from '../api';
@@ -17,7 +19,7 @@ import { ConditionHelp, ConditionValue } from './ConditionFields';
 import { WarehouseSource } from './WarehouseSource';
 import { SnapshotChange, loadLabel } from './SnapshotChange';
 import { comparisonRequestKey, groupSavedCalculations } from '../guidedWorkflow';
-import { COMPARISON_KINDS, comparisonDatasetGroups, emptyCalculationSides, initialComparisonLoad, matchCountKey } from '../comparisonSelection';
+import { shouldResetCalculations, COMPARISON_KINDS, comparisonDatasetGroups, emptyCalculationSides, initialComparisonLoad, matchCountKey } from '../comparisonSelection';
 import { useRecordedBy } from '../useRecordedBy';
 import './comparisonSelection.css';
 import { SampleDatasetButton } from './FirstRun';
@@ -81,6 +83,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
   const [emptyWarning, setEmptyWarning] = useState<string[] | null>(null);
 
   const isolated = data.mode === 'isolated';
+  const { usage } = useUsage(data.project.id, run?.id);
   const engineReady = isolated && data.runner_available;
 
   const choices: Choice[] = useMemo(() => data.snapshots.flatMap<Choice>(snapshot => {
@@ -178,10 +181,15 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     return () => { active = false; };
   }, [prefill?.from, prefill?.left, prefill?.right]);
 
-  // Choosing a dataset resets calculations to sensible starting points.
+  // Choosing a different dataset resets calculations to sensible starting points.
+  const previousDataset = useRef<string | null>(null);
   useEffect(() => {
     if (!choice) return;
+    const datasetKey = choice.snapshot.contract_hash || choice.snapshot.id;
+    const reset = shouldResetCalculations(previousDataset.current, datasetKey);
+    previousDataset.current = datasetKey;
     if (skipReset.current) { skipReset.current = false; return; }
+    if (!reset) return;
     const forceSql = !guidedFormSupported(choice.flat || choice.relational!);
     setSides(s => ({
       baseline: { ...s.baseline, mode: forceSql ? 'sql' : 'form', form: { filters: [], join: 'left' }, sql: '', refusal: null },
@@ -285,7 +293,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
     }
     return problems;
   };
-  const validationBlocker = !engineReady ? (isolated ? 'The comparison engine is not running. Start it with scripts\\mg.ps1 start.' : 'New comparisons need the isolated engine. Start MetricGuard with scripts\\mg.ps1 start.')
+  const validationBlocker = !engineReady ? engineDownMessage(window.location.hostname)
     : [...sideProblems('baseline'), ...sideProblems('target')][0] || (safeSql('baseline').trim() && safeSql('baseline').trim() === safeSql('target').trim()
       && !(sides.baseline.reuse && sides.baseline.reuse.versionId === sides.target.reuse?.versionId)
       ? 'The two calculations are identical; change one of them.' : '');
@@ -352,7 +360,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
             endpoint, { name: definitionName(side, sql), raw_sql: sql, contract_id: contract.id });
           const version = def.versions.at(-1);
           if (!version || version.support_state !== 'executable') {
-            const refusal = classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: version?.support_reason || 'This calculation is outside the supported grammar.' });
+            const refusal = classifyInvestigationError({ code: 'UNSUPPORTED_SQL', message: version?.support_reason || 'This calculation uses SQL MetricGuard can\'t check exactly yet.' });
             setSides(s => ({ ...s, [side]: { ...s[side], refusal, mode: s[side].mode === 'form' ? 'form' : 'sql', sql: s[side].sql || sql } }));
             return;
           }
@@ -444,8 +452,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
       {!engineReady && (
         <div className="alert error" role="status">
           <span>
-            {isolated ? 'The comparison engine is not running, so new comparisons will wait until it starts.' : 'This server is in demo mode: it can show saved results, but new comparisons need the isolated engine.'}
-            {' '}Start the full application with <code>scripts\mg.ps1 start</code>.
+            {engineDownMessage(window.location.hostname)}
           </span>
         </div>
       )}
@@ -549,7 +556,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
           )}
           {showTwoTable && (
             <TwoTableUpload refresh={refresh} canUpload={engineReady}
-              blocker={isolated ? 'The comparison engine is not running. Start it with scripts\\mg.ps1 start.' : 'Uploads need the isolated engine. Start MetricGuard with scripts\\mg.ps1 start.'}
+              blocker={engineDownMessage(window.location.hostname)}
               onCreated={id => { setShowTwoTable(false); setSnapshotId(id); }} />
           )}
         </section>
@@ -809,6 +816,7 @@ export function StartComparison({ data, refresh, onNavigate, onOpenInvestigation
             </div>
           )}
           <div className="guided-nav">
+            {runsLeft(usage) && <span>{runsLeft(usage)}</span>}
             <button className="button secondary" onClick={() => setStage(0)}><ArrowLeft size={15} /> Back</button>
             <button className="button primary" disabled={busy || Boolean(calcBlocker)} onClick={() => void registerAndCompare()} aria-describedby={calcBlocker ? 'calc-blocker' : undefined}>
               {busy ? 'Checking…' : <>Check and compare <ArrowRight size={15} /></>}

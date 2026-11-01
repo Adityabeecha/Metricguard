@@ -47,3 +47,6 @@ graphify-out/cache/
 .impeccable/config.local.json
 .impeccable/hook.cache.json
 .impeccable/questions/
+
+# Marketing video sources and renders: kept locally, not published.
+/marketing/

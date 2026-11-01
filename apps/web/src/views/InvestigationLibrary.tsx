@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, FolderOpen, Plus, X } from 'lucide-react';
 import { api, versionName, type Bootstrap, type InvestigationDraft, type Run } from '../api';
 import {
-  buildLibraryItems, caseNumber, filterLibraryItems, hasDefinedResult, KIND_LABEL, readDismissedRuns, STAMP, unexplainedRuns, writeDismissedRuns,
+  buildLibraryItems, caseNumber, filterLibraryItems, sortLibraryItems, hasDefinedResult, KIND_LABEL, readDismissedRuns, STAMP, unexplainedRuns, writeDismissedRuns,
   type LibraryItem, type LibraryStatus,
 } from '../investigationLibrary';
 import { groupDigits, resultDisplayValue, resultUnit, valueWithUnit } from '../resultSummary';
@@ -30,6 +30,7 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
   const [drafts, setDrafts] = useState<InvestigationDraft[]>(data.investigation_drafts || []);
   const [draftProblem, setDraftProblem] = useState('');
   const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<'updated' | 'name' | 'difference'>('updated');
   const [status, setStatus] = useState<LibraryStatus | 'all'>('all');
 
   const reload = async () => {
@@ -40,7 +41,7 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
   useEffect(() => { void reload(); }, [workspaceId]);
 
   const items = useMemo(() => buildLibraryItems(data, drafts), [data, drafts]);
-  const visible = filterLibraryItems(items, { query, kind: 'all', status });
+  const visible = sortLibraryItems(filterLibraryItems(items, { query, kind: 'all', status }), sort);
   const [dismissed, setDismissed] = useState<Set<string>>(() => readDismissedRuns(workspaceId));
   useEffect(() => { setDismissed(readDismissedRuns(workspaceId)); }, [workspaceId]);
   const [showHidden, setShowHidden] = useState(false);
@@ -124,7 +125,8 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
         <div className="section-title"><h2 id="cases-title">All cases</h2><span>{items.length}</span></div>
         {draftProblem && <div className="alert error" role="alert"><span>Drafts could not be loaded ({draftProblem}). Saved cases are still listed.</span><button className="button secondary small" onClick={() => void reload()}>Retry</button></div>}
         <div className="cases-toolbar" role="search">
-          <input type="search" aria-label="Search cases" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search by name, metric, dataset or case number" />
+          <input type="search" aria-label="Search cases" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search by name, conclusion, dataset or case number" />
+          <label>Sort <select value={sort} onChange={e => setSort(e.target.value as typeof sort)}><option value="updated">Last updated</option><option value="name">Name</option><option value="difference">Size of the difference</option></select></label>
           <div className="chip-row" role="group" aria-label="Status">
             <button type="button" className="chip" aria-pressed={status === 'all'} onClick={() => setStatus('all')}>All<span className="n">{items.length}</span></button>
             {STATUS_ORDER.filter(s => items.some(i => i.status === s)).map(s => (

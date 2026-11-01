@@ -21,6 +21,7 @@ export type LibraryItem = {
   change: string | null;
   unit: string;
   hasConclusion: boolean;
+  conclusion?: string;
   /** The same calculation on an earlier and a later load of one dataset. */
   twoLoads?: boolean;
   updatedAt: string;
@@ -80,6 +81,7 @@ export function buildLibraryItems(data: Pick<Bootstrap, 'investigations' | 'runs
       change: resultDisplayValue(run?.result, run?.result?.delta_target_minus_baseline),
       unit: resultUnit(run?.result, ctx?.unit_label || ctx?.currency || ''),
       hasConclusion: Boolean(inv.decision),
+      conclusion: inv.decision || '',
       twoLoads: Boolean(run?.target_snapshot_id),
       updatedAt: inv.created_at,
     });
@@ -118,8 +120,29 @@ export function filterLibraryItems(items: LibraryItem[], f: { query: string; kin
     if (f.kind !== 'all' && item.kind !== f.kind) return false;
     if (f.status !== 'all' && item.status !== f.status) return false;
     if (!q) return true;
-    return [item.number, item.title, item.datasetName, item.currentLabel, item.proposedLabel, ...item.metricNames]
+    return [item.number, item.title, item.conclusion || '', item.datasetName, item.currentLabel, item.proposedLabel, ...item.metricNames]
       .some(text => text.toLowerCase().includes(q));
+  });
+}
+
+
+/** Sort exact decimal magnitudes without rounding them to JavaScript numbers. */
+export function sortLibraryItems(items: LibraryItem[], order: 'updated' | 'name' | 'difference'): LibraryItem[] {
+  const magnitude = (value: string | null) => {
+    if (!value || !/^[+-]?\d+(\.\d+)?$/.test(value)) return null;
+    const [whole, fraction = ''] = value.replace(/^[+-]/, '').split('.');
+    return { digits: BigInt(whole + fraction), scale: fraction.length };
+  };
+  return [...items].sort((a, b) => {
+    if (order === 'name') return a.title.localeCompare(b.title);
+    if (order === 'difference') {
+      const left = magnitude(a.change), right = magnitude(b.change);
+      if (!left || !right) return left ? -1 : right ? 1 : 0;
+      const scale = Math.max(left.scale, right.scale);
+      const x = left.digits * 10n ** BigInt(scale - left.scale), y = right.digits * 10n ** BigInt(scale - right.scale);
+      return x === y ? 0 : x > y ? -1 : 1;
+    }
+    return (b.updatedAt || '').localeCompare(a.updatedAt || '');
   });
 }
 

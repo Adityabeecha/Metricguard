@@ -814,6 +814,12 @@ textarea:focus,
   border: 1px dashed var(--line-strong);
 }
 
+.alert.guest-notice.urgent {
+  background: var(--warn-tint);
+  color: var(--warn);
+  border: 1px solid var(--warn-line);
+}
+
 .alert.error {
   background: var(--danger-tint);
   color: var(--danger);
@@ -4858,3 +4864,6 @@ td.weight {
   color: var(--muted);
   margin-top: 2px;
 }
+
+.waking-notice { position: fixed; right: 16px; bottom: 16px; z-index: 200; padding: 8px 12px; background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 6px; }
+@media print { .waking-notice { display: none; } }

@@ -130,7 +130,7 @@ test('humanizeError converts HTTP 413 upload limit cleanly', () => {
   const humanized = humanizeError(backendErr);
 
   assert.equal(humanized.title, 'File Size Limit Exceeded');
-  assert.ok(humanized.message?.includes('512 MiB') && humanized.message.includes('25 MiB'));
+  assert.ok(humanized.message?.includes('512 MB') && humanized.message.includes('25 MB'));
 });
 
 test('inferMeaning handles parquet filename with native_null default', () => {
@@ -188,7 +188,7 @@ import { supportsRatios, buildFlatSql, ratioUnavailableReason } from './comparis
 
 test('hosted upload copy uses actual limits and local copy stays unchanged', () => {
   assert.equal(uploadLimitText({max_upload_mb:25,max_rows:50000}), 'Up to 25 MB and 50,000 rows on the free beta');
-  assert.equal(uploadLimitText({max_upload_mb:null,max_rows:null}), 'Drop a CSV (up to 512 MiB), Parquet or Excel (.xlsx) file');
+  assert.equal(uploadLimitText({max_upload_mb:null,max_rows:null}), 'Drop a CSV (up to 512 MB), Parquet or Excel (.xlsx) file');
   assert.equal(uploadLimitText({max_upload_mb:null,max_rows:50000}), 'Up to 50,000 rows on the free beta');
 });
 test('preview limit blocks confirmation before meaning settings, not just at import', () => {

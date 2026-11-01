@@ -38,7 +38,7 @@ export interface InferredMeaning {
  */
 export function parseCsvText(text: string, maxSampleRows = 25, nullPolicy: 'blank_nullable' | 'literal_NULL' = 'blank_nullable'): ParsedCsvPreview {
   // Scan every record; retain only bounded samples. Preserve quoted newlines and whitespace.
-  if (text.length > 25 * 1024 * 1024) throw new Error('Source exceeds 25 MiB');
+  if (text.length > 25 * 1024 * 1024) throw new Error('Source exceeds 25 MB');
   const records: string[][] = [];
   let row: string[] = [], cell = '', quoted = false, closed = false;
   text = text.replace(/^\uFEFF/, '');

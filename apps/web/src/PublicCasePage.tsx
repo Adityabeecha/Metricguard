@@ -32,7 +32,7 @@ export function PublicCasePage({ token }: { token: string }) {
     <a className="skip-link" href="#shared-case-content">Skip to case</a>
     <header className="shared-case-header"><a href="/" aria-label="MetricGuard home"><Logo size={28} /><strong>MetricGuard</strong></a><ThemeSwitch compact /></header>
     <main id="shared-case-content" className="view-container guided-page">
-      <p className="shared-case-notice">Shared read-only{detail ? ` by ${detail.workspace_name}` : ''}</p>
+      <p className="shared-case-notice">{detail?.expires_at ? `Read-only copy shared from MetricGuard \u00b7 link expires ${new Date(detail.expires_at).toLocaleDateString()}` : <>Shared read-only{detail ? ` by ${detail.workspace_name}` : ''}</>}</p>
       {problem ? <div className="alert error" role="alert"><span>{problem}</span><button className="button secondary small" onClick={() => setAttempt(v => v + 1)}>Try again</button></div>
         : !detail ? <p role="status">Opening shared case…</p> : <>
           <div className="page-heading"><div><h1>{detail.title}</h1><p><span className="case-no">{caseNumber(detail.run.id)}</span> · Sealed {new Date(detail.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</p></div>
@@ -45,6 +45,7 @@ export function PublicCasePage({ token }: { token: string }) {
             note={<div className="case-conclusion"><h2>Conclusion</h2><p style={{ whiteSpace: 'pre-wrap' }}>{detail.decision}</p></div>} />
           <details className="public-custody"><summary>Custody log</summary><CasePrintCustody detail={detail} /></details>
           <div className="print-only print-custody"><CasePrintCustody detail={detail} /></div>
+          <footer className="print-only print-footer">{window.location.href} | Printed {new Date().toLocaleString()}</footer>
         </>}
     </main>
   </div>;
