@@ -106,7 +106,7 @@ export function Bridge({ start, end, steps, residualText, balanced, description,
       </ol>
 
       <figcaption className="bridge-caption">
-        <span>{broken ? 'Totals are drawn on a shortened axis so the steps stay readable; every figure is exact.' : 'Every figure is exact.'}{onPick ? ' Select a step to see its records.' : ''}</span>
+        <span>{broken ? `The axis starts at ${shown(groupDigits(plot.axisStart))}${unit ? ` ${unit}` : ''}, not 0, so the steps stay readable; every figure is exact.` : 'Every figure is exact.'}{onPick ? ' Select a step to see its records.' : ''}</span>
         {balanced && <Stamp kind="balanced" />}
       </figcaption>
     </figure>

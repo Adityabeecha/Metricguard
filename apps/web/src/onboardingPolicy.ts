@@ -66,12 +66,13 @@ export function loadCompatibilityProblem(preview:LoadPreview, contract:LoadContr
   const present = (c:string) => preview.headers.includes(c);
   // Every problem at once (missing, extra and changed columns), so one fix covers them all.
   const problems:string[] = [];
-  const sameColumns = columns.length === preview.headers.length && new Set(columns).size === columns.length && columns.every(present);
-  if (!sameColumns) {
-    const missing = columns.filter(c => !present(c));
+  const missing = columns.filter(c => !present(c));
+  const repeated = [...new Set(preview.headers.filter((h, i) => preview.headers.indexOf(h) !== i))];
+  if (missing.length) {
     const extra = preview.headers.filter(c => !columns.includes(c));
-    problems.push(`A newer load must have the same columns as this dataset. Missing: ${missing.join(', ') || 'none'}. Extra: ${extra.join(', ') || 'none'}.`);
+    problems.push(`This file is missing ${missing.length === 1 ? 'a column' : 'columns'} the dataset needs: ${missing.join(', ')}.${extra.length ? ` Its other columns are: ${extra.join(', ')}.` : ''}`);
   }
+  if (repeated.length) problems.push(`Column names must be unique; this file repeats ${repeated.join(', ')}.`);
   if (present(contract.row_key) && preview.key_issues?.[contract.row_key]) problems.push(`Row ID “${contract.row_key}” ${preview.key_issues[contract.row_key]}.`);
   const allBlank = (column:string) => preview.totalRowsSampled > 0 && preview.null_counts?.[column] === preview.totalRowsSampled;
   const seen = (column:string) => preview.observed_types[column] || 'unknown';
@@ -93,6 +94,40 @@ export function loadCompatibilityProblem(preview:LoadPreview, contract:LoadContr
   const currencyColumn = preview.headers.find(c => /^(currency|currency_code)$/i.test(c));
   if (currencyColumn && preview.sample_rows.some(row => row[currencyColumn] && row[currencyColumn] !== contract.unit_label)) problems.push('The file currency differs from the existing dataset unit.');
   return problems.join(' ');
+}
+
+/** Dataset columns a newer load lacks, the file's unused columns, and a first guess pairing them by normalised name. */
+export function columnMappingNeeds(headers:string[], contract:LoadContract):{missing:string[];extra:string[];guess:Record<string,string>} {
+  const amounts = contract.decimal_columns?.length ? contract.decimal_columns.map(d => d.name) : [contract.measure || ''];
+  const columns = [contract.row_key,...amounts,...contract.categories].filter(Boolean);
+  const missing = columns.filter(c => !headers.includes(c));
+  const extra = headers.filter(h => !columns.includes(h));
+  const norm = (s:string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const guess:Record<string,string> = {};
+  for (const column of missing) {
+    const match = extra.find(h => !Object.values(guess).includes(h) && (norm(h) === norm(column) || norm(h).startsWith(norm(column)) || norm(column).startsWith(norm(h))));
+    if (match) guess[column] = match;
+  }
+  return {missing, extra, guess};
+}
+
+/**
+ * Rename columns in a CSV's header line only; every data row stays byte for byte as it was.
+ * `mapping` is dataset column → file column. Returns null when the header can't be rewritten safely.
+ */
+export function renameCsvHeader(text:string, headers:string[], mapping:Record<string,string>):string|null {
+  const bom = text.startsWith('﻿') ? '﻿' : '';
+  const body = text.slice(bom.length);
+  const end = body.search(/\r?\n/);
+  const firstLine = end < 0 ? body : body.slice(0, end);
+  const quote = (name:string) => /[",\r\n]/.test(name) || name !== name.trim() ? `"${name.replace(/"/g, '""')}"` : name;
+  // Only rewrite when the header line is exactly the previewed headers (no quoted line breaks, no other delimiter).
+  const parsed = firstLine.split(',').map(cell => cell.trim().replace(/^"(.*)"$/, '$1').replace(/""/g, '"'));
+  if (parsed.length !== headers.length || parsed.some((cell, i) => cell !== headers[i])) return null;
+  const reverse = Object.fromEntries(Object.entries(mapping).filter(([, from]) => from).map(([to, from]) => [from, to]));
+  const renamed = headers.map(h => reverse[h] ?? h);
+  if (new Set(renamed).size !== renamed.length) return null;
+  return bom + renamed.map(quote).join(',') + body.slice(firstLine.length);
 }
 
 export async function completeDatasetUpload(snapshotId:string, destination:'compare'|'datasets', onCompare:(id:string)=>void|Promise<void>, onDatasets:(id:string)=>void|Promise<void>):Promise<void> {

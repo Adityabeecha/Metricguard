@@ -49,6 +49,12 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
   const [shareOpen, setShareOpen] = useState(false);
   const [canShare, setCanShare] = useState(false);
   const copyRef = useRef<() => void>(() => undefined);
+  const caseTitle = detail ? `${caseNumber(detail.run.id)} ${detail.title || 'Saved case'}` : '';
+  useEffect(() => {
+    if (!caseTitle) return;
+    document.title = `${caseTitle} — MetricGuard`;
+    return () => { document.title = 'Cases — MetricGuard'; };
+  }, [caseTitle]);
 
   useEffect(() => {
     let active = true;

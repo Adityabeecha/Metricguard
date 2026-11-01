@@ -35,3 +35,10 @@
 .datasources-container .summary-stat-grid { display:flex; flex-wrap:wrap; gap:0; border-top:2px solid var(--ink); border-bottom:1px solid var(--line); }
 .datasources-container .summary-stat-grid .stat-box { flex:1 1 150px; border:0; border-radius:0; box-shadow:none; background:transparent; padding:12px 16px; }
 .datasources-container .summary-stat-grid .stat-num { font-size:18px; }
+
+.column-mapping { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 10px 0; display: grid; gap: 8px; }
+.column-mapping legend { font-weight: 600; padding: 0 4px; }
+.column-mapping-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.column-mapping-row > span { min-width: 180px; }
+.column-mapping-row select { min-width: 200px; max-width: 100%; }
+.column-mapping .button { justify-self: start; }

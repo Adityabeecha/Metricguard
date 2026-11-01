@@ -184,3 +184,6 @@
   .stack-table td[data-label]::before { display: block; margin-bottom: 2px; }
   .table-scroll:has(> .stack-table) { min-width: 0; max-width: 100%; }
 }
+
+.record-context-line { margin: 3px 0 0; max-width: 32ch; font: 400 11px/1.45 var(--font-ui); color: var(--text-2); }
+.record-context-line .k { color: var(--muted); }

@@ -42,3 +42,12 @@ test('SQL diff handles literals, multiline comments, replacements and bounded lo
     assert.equal(diff.filter(p => p.kind !== 'removed').map(p => p.text).join(''), after);
   }
 });
+
+test('a shortened bridge axis starts at a round number below every level, relative to the span', () => {
+  const plot = bridgeGeometry('11284594.00', ['-2123763.59', '0.00'], '9160830.41');
+  assert.equal(plot.startsAtZero, false);
+  assert.equal(plot.axisStart, '8000000');
+  assert.ok(plot.ratio(9160830_41n) > 0);
+  const tiny = bridgeGeometry('90071992547409930.00', ['0.01', '-0.02'], '90071992547409929.99');
+  assert.ok(BigInt(tiny.axisStart.replace('.', '')) < 9007199254740992999n);
+});

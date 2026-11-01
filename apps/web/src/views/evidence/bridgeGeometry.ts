@@ -13,7 +13,19 @@ export function bridgeGeometry(start:string,steps:string[],end:string) {
   const min=levels.reduce((a,b)=>a<b?a:b),max=levels.reduce((a,b)=>a>b?a:b);
   const span=max-min || (max<0n ? -max : max) || 1n;
   const startsAtZero=min>=0n && min*4n<=span;
-  const lo100=startsAtZero ? 0n : min*100n-span*25n,hi100=max*100n+span*8n;
+  // A shortened axis starts at a round number below the lowest level and says so. "Round" is relative to the
+  // span (a power of ten no larger than it), so the steps stay readable however large the totals are.
+  let step=1n;
+  while(step*10n<=span) step*=10n;
+  const below=min-span/4n;
+  const rounded=(below>=0n ? below/step : -((-below+step-1n)/step))*step;
+  const floor=startsAtZero ? 0n : rounded<min ? rounded : rounded-step;
+  const decimal=(v:bigint) => {
+    const digits=(v<0n ? -v : v).toString().padStart(scale+1,'0');
+    const text=scale ? `${digits.slice(0,-scale)}.${digits.slice(-scale)}` : digits;
+    return `${v<0n ? '-' : ''}${text.replace(/\.0+$/,'')}`;
+  };
+  const lo100=floor*100n,hi100=max*100n+span*8n;
   const ratio=(v:bigint) => Number(((v*100n-lo100)*1_000_000n)/(hi100-lo100 || 1n))/1_000_000;
-  return {levels,steps:amounts.slice(1,-1),start:amounts[0],end:amounts.at(-1)!,startsAtZero,ratio};
+  return {levels,steps:amounts.slice(1,-1),start:amounts[0],end:amounts.at(-1)!,startsAtZero,ratio,axisStart:decimal(floor)};
 }

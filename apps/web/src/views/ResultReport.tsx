@@ -275,7 +275,7 @@ function Breakdown({ runId, unit, percent, ratio, onColumns, preferred = [] , lo
           {lines.map(line => {
             const diffShare = groupShare(line.change, line.exact, data.abs_change_total);
             const recordShare = recordTotal ? line.records / recordTotal : 0;
-            const concentrated = !line.other && diffShare >= 0.1 && diffShare >= 2 * recordShare;
+            const concentrated = !line.other && diffShare >= 0.1 && diffShare >= 1.25 * recordShare; // same rule as the server's concentration list (MIN_LIFT)
             const zero = !(line.change != null && /[1-9]/.test(line.change));
             return (
               <tr key={line.key} className={zero ? 'muted' : line.other ? 'other' : undefined}>
@@ -561,6 +561,9 @@ export function ResultReport({ run, unit: declaredUnit, relational, baselineLabe
             <span>{pro} {noun}<b>{show(result.target_value)}</b></span>
             <span>Unexplained<b>{result.residual == null ? 'Not applicable' : ratio ? '0 (exact)' : show(result.residual)}</b></span>
           </div>
+          {!ratio && kind !== 'count' && kind !== 'count_distinct' && (evidence.summary?.blank_amount_rows ?? 0) > 0 && <p className="hint blank-amount-note">
+            Note: {groupDigits(String(evidence.summary!.blank_amount_rows))} record{evidence.summary!.blank_amount_rows === 1 ? ' has' : 's have'} a blank amount. Blank amounts are skipped, so they count toward neither result.
+            {' '}<button type="button" className="link-button" onClick={() => setTab('notes')}>Details in Limits</button></p>}
           {note}
           {!expired && <p className="hint">Detailed records are kept while storage allows; you can always rerun the case.</p>}
         </section>

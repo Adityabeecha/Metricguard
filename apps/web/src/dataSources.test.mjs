@@ -266,12 +266,13 @@ test('early upload waits for limits, previews once, and discards old file/worksp
   assert.deepEqual(applied, ['beta:third.csv:100']);
 });
 
-test('newer-load reuse requires identical columns, compatible roles/types, and allows only declared blanks', () => {
+test('newer-load reuse requires the dataset columns (extras are ignored), compatible roles/types, and allows only declared blanks', () => {
   assert.equal(typeof onboarding.loadCompatibilityProblem, 'function');
   const contract = {row_key:'id',measure:'amount',categories:['day'],dimension_types:{day:'date'},nullable_categories:[],scale:2,unit_label:'USD'};
   const preview = parseCsvText('id,amount,day\nA,1.25,2026-01-01\n');
   assert.equal(onboarding.loadCompatibilityProblem(preview,contract), '');
-  assert.match(onboarding.loadCompatibilityProblem({...preview,headers:[...preview.headers,'extra']},contract), /same columns/);
+  assert.equal(onboarding.loadCompatibilityProblem({...preview,headers:[...preview.headers,'extra']},contract), '');
+  assert.match(onboarding.loadCompatibilityProblem({...preview,headers:['id','amount']},contract), /missing a column the dataset needs: day/);
   assert.match(onboarding.loadCompatibilityProblem({...preview,observed_types:{...preview.observed_types,day:'string'}},contract), /day/);
   assert.match(onboarding.loadCompatibilityProblem({...preview,null_counts:{day:1}},contract), /blanks/);
   assert.match(onboarding.loadCompatibilityProblem({...preview,observed_types:{...preview.observed_types,amount:'string'}},contract), /amount/);
@@ -300,7 +301,25 @@ test('a newer load lists every column problem, including type changes', async ()
   const preview = { headers: ['id', 'amount', 'day', 'region'], observed_types: { id: 'string', amount: 'string', day: 'string', region: 'string' },
     totalRowsSampled: 2, null_counts: {}, sample_rows: [{ id: 'a', amount: 'x', day: 'soon', region: 'n' }] };
   const text = loadCompatibilityProblem(preview, contract);
-  assert.match(text, /Missing: status\. Extra: region\./);
+  assert.match(text, /missing a column the dataset needs: status\. Its other columns are: region\./);
+  // Extra columns alone are fine: the import reads only the dataset's own columns.
+  assert.equal(loadCompatibilityProblem({ ...preview, headers: ['id', 'amount', 'day', 'status', 'note'], observed_types: { id: 'string', amount: 'numeric', day: 'date', status: 'string', note: 'string' },
+    sample_rows: [{ id: 'a', amount: '1.00', day: '2026-10-01', status: 'paid', note: 'x' }] }, contract), '');
   assert.match(text, /Amount “amount” must contain numbers \(this file has string values\)/);
   assert.match(text, /Filter column “day” changed type: this dataset uses date values, this file has string/);
+});
+
+test('newer load with different column names: guess pairs and rename only the header line', async () => {
+  const { columnMappingNeeds, renameCsvHeader } = await import('./onboardingPolicy.ts');
+  const contract = { row_key: 'order_id', measure: 'amount', categories: ['status', 'region'], scale: 2, unit_label: 'INR' };
+  const needs = columnMappingNeeds(['Order ID', 'Amount_INR', 'status', 'Region Name'], contract);
+  assert.deepEqual(needs.missing, ['order_id', 'amount', 'region']);
+  assert.deepEqual(needs.extra, ['Order ID', 'Amount_INR', 'Region Name']);
+  assert.deepEqual(needs.guess, { order_id: 'Order ID', amount: 'Amount_INR', region: 'Region Name' });
+  const text = '﻿Order ID,Amount_INR,status,Region Name\r\nA1,"1,200.50",paid,north\r\nA2,3.00,pending,south\r\n';
+  const out = renameCsvHeader(text, ['Order ID', 'Amount_INR', 'status', 'Region Name'], needs.guess);
+  assert.equal(out, '﻿order_id,amount,status,region\r\nA1,"1,200.50",paid,north\r\nA2,3.00,pending,south\r\n');
+  // A header that doesn't match the preview, or a rename that repeats a column, is refused.
+  assert.equal(renameCsvHeader('"a,b",c\n1,2\n', ['a,b', 'c'], { x: 'c' }), null);
+  assert.equal(renameCsvHeader('a,b\n1,2\n', ['a', 'b'], { b: 'a' }), null);
 });

@@ -799,7 +799,7 @@ export function ChangesView({
         </section>
 
         {/* Coverage Section (04.9) */}
-        {hasImportedRevisions === false && <p>Import a dbt or Power BI project in Settings → Integrations to check definition changes here.</p>}
+        {hasImportedRevisions === false && <p>Import a dbt or Power BI project in {onNavigate ? <button type="button" className="link-button" onClick={() => onNavigate('settings', 'integrations')}>Settings → Integrations</button> : 'Settings → Integrations'} to check definition changes here.</p>}
         {hasImportedRevisions !== false && activeDiff.coverage && (
           <section className="coverage-section">
             <div>
@@ -1090,7 +1090,7 @@ export function ChangesView({
       </div>
 
       <NewLoadChecksPanel data={data} refresh={refresh} onOpenRun={onOpenRun} baselineLoadId={baselineLoadId} targetLoadId={targetLoadId} />
-      {hasImportedRevisions === false && <p>Import a dbt or Power BI project in Settings → Integrations to check definition changes here.</p>}
+      {hasImportedRevisions === false && <p>Import a dbt or Power BI project in {onNavigate ? <button type="button" className="link-button" onClick={() => onNavigate('settings', 'integrations')}>Settings → Integrations</button> : 'Settings → Integrations'} to check definition changes here.</p>}
 
       {/* Search and Filters Toolbar */}
       {rawDiffs.length > 0 && (

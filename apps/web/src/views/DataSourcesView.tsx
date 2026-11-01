@@ -31,7 +31,7 @@ import { SampleDatasetButton } from './FirstRun';
 import { ItemActions } from './ItemActions';
 import { isSampleDataset } from '../sampleDataset';
 import { shortDate } from '../resultSummary';
-import { DEFAULT_COMPOUND_FILTERS, defaultFlatImport, uploadLimitText, previewRowLimitMessage, canConfirmUpload, loadLabelAfterFilePick, inheritedUnit, datasetUsageLabel, type UploadLimits, createUploadPreviewQueue, suggestUploadUnit, loadCompatibilityProblem, completeDatasetUpload, duplicateUploadMessage } from '../onboardingPolicy';
+import { DEFAULT_COMPOUND_FILTERS, defaultFlatImport, uploadLimitText, previewRowLimitMessage, canConfirmUpload, loadLabelAfterFilePick, inheritedUnit, datasetUsageLabel, type UploadLimits, createUploadPreviewQueue, suggestUploadUnit, loadCompatibilityProblem, completeDatasetUpload, duplicateUploadMessage, columnMappingNeeds, renameCsvHeader } from '../onboardingPolicy';
 
 interface DataSourcesViewProps {
   data: Bootstrap;
@@ -145,6 +145,19 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
   const uploadProblem = limitsProblem || previewProblem || (step === 'upload' ? validationError?.message || '' : '');
   const suggestedLoad = useMemo(() => filePreview ? flatContracts.find(contract => snapshots.some(snapshot => snapshot.contract_hash === contract.contract_hash) && !loadCompatibilityProblem(filePreview, contract)) || null : null, [filePreview, flatContracts, snapshots]);
   const loadProblem = loadContract && filePreview ? loadCompatibilityProblem(filePreview, loadContract) : '';
+  // A newer load whose column names differ: pair them up, then the header line is renamed in the browser.
+  const mappingNeeds = loadContract && filePreview && selectedFile?.name.toLowerCase().endsWith('.csv') ? columnMappingNeeds(filePreview.headers, loadContract) : null;
+  const canMapColumns = Boolean(mappingNeeds && mappingNeeds.missing.length && mappingNeeds.extra.length);
+  const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
+  const [mappingProblem, setMappingProblem] = useState('');
+  const mappingKey = canMapColumns ? `${selectedFile?.name}|${filePreview?.headers.join(',')}` : '';
+  useEffect(() => { setColumnMapping(mappingNeeds?.guess || {}); setMappingProblem(''); }, [mappingKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const applyColumnMapping = async () => {
+    if (!selectedFile || !filePreview) return;
+    const renamed = renameCsvHeader(await selectedFile.text(), filePreview.headers, columnMapping);
+    if (renamed == null) { setMappingProblem('This header can’t be renamed here (quoted names or a repeated column). Rename the columns in the file and choose it again.'); return; }
+    handleFilePicked(new File([renamed], selectedFile.name, { type: 'text/csv', lastModified: Date.now() }));
+  };
   const uploadReady = canConfirmUpload(Boolean(selectedFile && filePreview && uploadLimits), busy, uploadProblem || loadProblem)
     && (!suggestedLoad || Boolean(loadContract) || loadChoice !== 'pending');
 
@@ -1193,7 +1206,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                       <strong>Newer load of “{loadContract.name}”</strong>
                       <p>Use the same row IDs, amount meaning, and unit ({loadContract.unit_label}) as the existing dataset.</p>
                       <button type="button" className="button secondary small" onClick={() => { setLoadContract(null); setLoadChoice('new'); }}>Create a new dataset instead</button>
-                      <p>The file must have the same columns: row ID <code>{loadContract.row_key}</code>, amount{(loadContract.decimal_columns?.length || 0) > 1 ? 's' : ''} <code>{loadContract.decimal_columns?.map(d => d.name).join(', ') || loadContract.measure}</code>{loadContract.categories.length > 0 && <> and filter columns <code>{loadContract.categories.join(', ')}</code></>}. Every row is checked against this definition, and the two loads can then be compared record by record.</p>
+                      <p>The file needs these columns (others are ignored): row ID <code>{loadContract.row_key}</code>, amount{(loadContract.decimal_columns?.length || 0) > 1 ? 's' : ''} <code>{loadContract.decimal_columns?.map(d => d.name).join(', ') || loadContract.measure}</code>{loadContract.categories.length > 0 && <> and filter columns <code>{loadContract.categories.join(', ')}</code></>}. Every row is checked against this definition, and the two loads can then be compared record by record.</p>
                       <label>Label for this load
                         <input value={snapshotName} maxLength={160} onChange={e => setSnapshotName(e.target.value)} placeholder="e.g. Final delivery, 1 Feb" />
                       </label>
@@ -1251,6 +1264,21 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                       {limitsProblem && <p role="alert" className="disabled-reason">{limitsProblem}</p>}
                       {previewProblem && <p role="alert" className="disabled-reason">{previewProblem}</p>}
                       {loadProblem && <><p className="disabled-reason" role="alert">{loadProblem}</p><p className="field-hint">Checked on the first rows of the file; the import checks every row.</p></>}
+                      {canMapColumns && mappingNeeds && <fieldset className="column-mapping">
+                        <legend>Match the columns</legend>
+                        <p className="field-hint">Choose which column in your file holds each of this dataset’s columns. Only the names in the first line change; your rows stay exactly as they are.</p>
+                        {mappingNeeds.missing.map(column => <label key={column} className="column-mapping-row">
+                          <span><code>{column}</code> is called</span>
+                          <select value={columnMapping[column] || ''} onChange={event => setColumnMapping(current => ({ ...current, [column]: event.target.value }))}>
+                            <option value="">Choose a file column…</option>
+                            {mappingNeeds.extra.map(header => <option key={header} value={header}
+                              disabled={Object.entries(columnMapping).some(([other, used]) => other !== column && used === header)}>{header}</option>)}
+                          </select>
+                        </label>)}
+                        <button type="button" className="button secondary small" disabled={busy || mappingNeeds.missing.some(column => !columnMapping[column])}
+                          onClick={() => void applyColumnMapping()}>Rename and check again</button>
+                        {mappingProblem && <p className="disabled-reason" role="alert">{mappingProblem}</p>}
+                      </fieldset>}
                       {suggestedLoad && !loadContract && <fieldset className="onboarding-load-choice">
                         <legend>Is this a newer load of “{suggestedLoad.name}”?</legend>
                         <p>The columns and types match. Choose Yes only if the row IDs and amounts have the same meaning and use {suggestedLoad.unit_label}. Every row will be checked using the existing settings.</p>

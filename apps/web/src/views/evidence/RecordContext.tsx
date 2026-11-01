@@ -6,6 +6,8 @@ export function RecordContext({row,loads=false}:{row:ContextRow;loads?:boolean})
   const names=[...new Set([...Object.keys(row.context||{}),...Object.keys(row.baseline_context||{}),...Object.keys(row.target_context||{})])];
   if (!names.length) return null;
   const dual=loads && ('baseline_context' in row || 'target_context' in row);
+  // One quiet line of values; the expandable list stays for loads whose values changed between them.
+  if (!dual) return <p className="record-context-line">{names.map((name,i)=><span key={name}>{i>0 && ' · '}<span className="k">{name}</span> {label(row.context?.[name])}</span>)}</p>;
   return <details className="record-context">
     <summary>Filter columns <span className="n">({names.length})</span></summary>
     <dl>{names.map(name=> {

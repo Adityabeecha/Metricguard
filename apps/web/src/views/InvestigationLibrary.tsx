@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, FolderOpen, Plus, X } from 'lucide-react';
-import { api, versionName, type Bootstrap, type InvestigationDraft, type Run } from '../api';
+import { api, versionName, type Bootstrap, type Definition, type InvestigationDraft, type Run } from '../api';
+
+/** The calculation's own name, without its version number. */
+const calculationName = (definitions: Definition[], versionId: string) =>
+  definitions.find(d => d.versions.some(v => v.id === versionId))?.name || versionName(definitions, versionId);
 import {
   buildLibraryItems, caseNumber, filterLibraryItems, sortLibraryItems, hasDefinedResult, KIND_LABEL, readDismissedRuns, runningRuns, STAMP, unexplainedRuns, writeDismissedRuns,
   type LibraryItem, type LibraryStatus,
@@ -107,8 +111,13 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
                 <span className="case-no">{caseNumber(run.id)}</span>
                 <div>
                   <div className="title">{run.target_snapshot_id
-                    ? <>{versionName(data.definitions, run.baseline_version_id)} · two loads</>
-                    : <>{versionName(data.definitions, run.baseline_version_id)} → {versionName(data.definitions, run.target_version_id)}</>}</div>
+                    ? <>{calculationName(data.definitions, run.baseline_version_id)} · two loads</>
+                    : (() => {
+                      const left = calculationName(data.definitions, run.baseline_version_id), right = calculationName(data.definitions, run.target_version_id);
+                      return left === right
+                        ? <>{versionName(data.definitions, run.baseline_version_id)} → {versionName(data.definitions, run.target_version_id)}</>
+                        : <>{left} vs {right}</>;
+                    })()}</div>
                   <div className="meta">{datasetName(run.snapshot_id)}{run.target_snapshot_id && <> → {datasetName(run.target_snapshot_id)}</>}{!defined && ' · result Undefined (no records matched)'}{isDismissed && ' · dismissed'}</div>
                 </div>
                 <span className="change">{defined ? valueWithUnit(change, unit).replace(/^-/, '−') : 'Undefined'}</span>
