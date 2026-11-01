@@ -28,7 +28,7 @@ export function PublicPages({ page }: { page: PublicPage }) {
     return () => window.removeEventListener('scroll', update);
   }, []);
   useEffect(() => {
-    const titles = { home: 'MetricGuard — Explain the difference. Keep the proof.', privacy: 'Privacy — MetricGuard', terms: 'Terms — MetricGuard', guide: 'User guide — MetricGuard', demo: 'Sample case MG-F3A3 — MetricGuard', 'not-found': 'Page not found — MetricGuard' };
+    const titles = { home: 'MetricGuard — Explain the difference. Keep the proof.', privacy: 'Privacy — MetricGuard', terms: 'Terms — MetricGuard', guide: 'User guide — MetricGuard', demo: `Sample case ${/mg-f3a3/i.test(window.location.pathname) ? 'MG-F3A3' : 'MG-8B79'} — MetricGuard`, 'not-found': 'Page not found — MetricGuard' };
     document.title = titles[page];
     let active = true;
     // Public pages make no workspace/bootstrap/provider requests. Identity supplies
@@ -54,7 +54,7 @@ export function PublicPages({ page }: { page: PublicPage }) {
         : <><a className="public-signin" href="/signin">Sign in</a><a className="button primary" href="/signup">Sign up</a></>}</div>
     </div></header>
     <main id="public-content" className={page === 'home' ? 'public-home-main' : 'public-width'}>
-      {page === 'home' ? <Homepage /> : page === 'demo' ? <DemoCasePage /> : page === 'not-found' ? <NotFound /> : page === 'guide' ? <Suspense fallback={<p role="status">Loading…</p>}><GuidePage /></Suspense> : <LegalPage kind={page} />}
+      {page === 'home' ? <Homepage /> : page === 'demo' ? <DemoCasePage key={window.location.pathname.toLowerCase()} /> : page === 'not-found' ? <NotFound /> : page === 'guide' ? <Suspense fallback={<p role="status">Loading…</p>}><GuidePage /></Suspense> : <LegalPage kind={page} />}
     </main>
     <footer className="public-footer public-width"><div><span>© MetricGuard</span><span>Built for data analysts</span></div><nav aria-label="Legal"><a href="/guide">User guide</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://github.com/Adityabeecha/Metricguard" rel="noreferrer">GitHub</a></nav></footer>
   </div>;
@@ -101,7 +101,7 @@ function Homepage() {
       <div className="hero-copy" data-reveal>
         <h1 id="home-title">Your metric changed. See exactly which records changed it.</h1>
         <p className="public-lead">Compare two calculations, follow the record-level difference, and hand over sealed evidence anyone with access can replay.</p>
-        <div className="hero-actions"><a className="button primary public-cta" href="/signup">Sign up — free beta <ArrowRight size={18} aria-hidden="true" /></a><a className="button secondary public-cta" href="/demo/MG-F3A3">Open the sample case <ArrowRight size={18} aria-hidden="true" /></a></div>
+        <div className="hero-actions"><a className="button primary public-cta" href="/signup">Sign up — free beta <ArrowRight size={18} aria-hidden="true" /></a><a className="button secondary public-cta" href="/demo/MG-8B79">Open the sample case <ArrowRight size={18} aria-hidden="true" /></a></div>
         <p className="hero-sub-links"><a className="home-how-link" href="#how">See how it works <ArrowRight size={14} aria-hidden="true" /></a></p>
         <p className="public-beta">Free during the beta · sign up with Google or GitHub</p>
       </div>

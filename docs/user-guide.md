@@ -56,7 +56,7 @@ A good file looks like this:
 2. Choose **Continue with Google** or **Continue with GitHub**. There's no password to create.
 3. You land in your own **personal workspace**. Nobody else can see it unless you invite them.
 
-> **Want to look first?** Open the public sample case at **https://metricguard.vercel.app/demo/MG-F3A3**. No sign-in is needed. It shows a finished answer so you know what to expect.
+> **Want to look first?** Open the public sample case at **https://metricguard.vercel.app/demo/MG-8B79**. No sign-in is needed. It shows a finished answer so you know what to expect.
 
 ### Guest accounts (free beta)
 

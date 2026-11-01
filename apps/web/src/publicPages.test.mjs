@@ -70,3 +70,21 @@ test('public pages carry no unfilled placeholders or apologetic notes', () => {
   assert.doesNotMatch(source, /stand-in servers|live-service checks pending|not customer data/);
   assert.match(source, /href="\/demo\/MG-F3A3"/);
 });
+
+test('the 5,000-order sample matches the totals the real engine sealed', async () => {
+  const { LARGE_CASE, demoCaseFor, parseSampleCsv } = await import('./demoCase.ts');
+  const rows = parseSampleCsv(readFileSync(new URL('../public/samples/sample_case_orders.csv', import.meta.url), 'utf8'));
+  const t = demoTotals(rows, LARGE_CASE);
+  // From scripts/make_sample_case.py, which ran the comparison, sealing and replay through the API.
+  assert.equal(t.records, 5000);
+  assert.equal(t.current, '11284594.00');
+  assert.equal(t.proposed, '9160830.41');
+  assert.equal(t.delta, '-2123763.59');
+  assert.ok(!/[1-9]/.test(t.residual));
+  assert.equal(demoChanges(rows, LARGE_CASE).length, 904);
+  const app = demoBreakdown('channel', rows, LARGE_CASE).find(g => g.value === 'app');
+  assert.ok(app.share > 0.5 && app.recordShare < 0.33, 'the planted cause concentrates in the app channel');
+  assert.equal(demoCaseFor('/demo').number, 'MG-8B79');
+  assert.equal(demoCaseFor('/demo/MG-F3A3').number, 'MG-F3A3');
+  for (const path of ['/demo/MG-8B79', '/demo/mg-8b79']) assert.equal(sitePage(path), 'demo', path);
+});

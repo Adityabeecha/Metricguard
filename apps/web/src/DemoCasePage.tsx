@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
 import { runningTotals } from './exactDecimal';
-import { groupDigits } from './resultSummary';
-import { DEMO_CASE as C, DEMO_COLUMNS, demoBreakdown, demoChanges, demoReplayResult, demoTotals, type DemoColumn } from './demoCase';
+import { digitStyleFor, groupDigits } from './resultSummary';
+import { DEMO_COLUMNS, DEMO_ROWS, demoBreakdown, demoCaseFor, demoChanges, demoReplayResult, demoTotals, parseSampleCsv, type DemoColumn, type DemoRow } from './demoCase';
 import { Bridge } from './views/evidence/Bridge';
 import { HashPrint } from './views/evidence/HashPrint';
 import { Stamp } from './views/evidence/Stamp';
@@ -11,19 +11,34 @@ import { replayChecks } from './views/evidence/replayChecks';
 
 type Tab = 'records' | 'breakdown' | 'definitions' | 'notes';
 const minus = (v: string) => v.replace(/^-/, '−');
-const money = (v: string) => `${minus(groupDigits(v))} ${C.unit}`;
-const STATUS_WORD: Record<string, string> = { pending: 'pending', returned: 'returned', cancelled: 'cancelled' };
+const PAGE = 100;
 
-/** The public, read-only sample case: the same evidence parts as the app, computed from the bundled synthetic orders. */
+/** The public, read-only sample case: the same evidence parts as the app, computed from the case's synthetic orders. */
 export function DemoCasePage() {
+  const C = demoCaseFor(window.location.pathname);
+  const style = digitStyleFor(C.unit);
+  const digits = (v: string) => groupDigits(v, style);
+  const money = (v: string) => `${minus(digits(v))} ${C.unit}`;
+  const [rows, setRows] = useState<DemoRow[] | null>(C.rowsUrl ? null : DEMO_ROWS);
+  const [problem, setProblem] = useState('');
+  useEffect(() => {
+    if (!C.rowsUrl) return;
+    let active = true;
+    fetch(C.rowsUrl).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); })
+      .then(text => { if (active) setRows(parseSampleCsv(text)); })
+      .catch(() => { if (active) setProblem('The sample orders could not be loaded. Reload the page to try again.'); });
+    return () => { active = false; };
+  }, [C.rowsUrl]);
   const [tab, setTab] = useState<Tab>('records');
-  const [column, setColumn] = useState<DemoColumn>('status');
-  const t = demoTotals();
-  const changes = demoChanges();
+  const [column, setColumn] = useState<DemoColumn>(C.rowsUrl ? 'channel' : 'status');
+  const [shown, setShown] = useState(PAGE);
+  if (!rows) return <article className="demo-case"><p role="status">{problem || 'Loading 5,000 sample orders…'}</p></article>;
+  const t = demoTotals(rows, C);
+  const changes = demoChanges(rows, C);
   const running = runningTotals(changes.map(c => c.delta));
-  const groups = demoBreakdown(column);
+  const groups = demoBreakdown(column, rows, C);
   const balanced = !/[1-9]/.test(t.residual);
-  const checks = replayChecks(demoReplayResult(), demoReplayResult());
+  const checks = replayChecks(demoReplayResult(rows, C), demoReplayResult(rows, C));
   const excludedDescription = categoryDescription('excluded', {});
 
   return <article className="demo-case">
@@ -39,8 +54,8 @@ export function DemoCasePage() {
 
     <section className="demo-answer" aria-labelledby="demo-answer-title">
       <h2 id="demo-answer-title" className="sr-only">Answer</h2>
-      <div className="answer-figure"><span className="figure">{minus(groupDigits(t.delta))}</span><span className="figure-unit">{C.unit}</span></div>
-      <p className="answer-sentence">The proposed calculation is lower than the current one. {changes.length} records explain it, with nothing unexplained.</p>
+      <div className="answer-figure"><span className="figure">{minus(digits(t.delta))}</span><span className="figure-unit">{C.unit}</span></div>
+      <p className="answer-sentence">The proposed calculation is lower than the current one. {groupDigits(String(changes.length))} records explain it, with nothing unexplained.</p>
       <div className="answer-pair">
         <span>Current · {C.current.label}<b>{money(t.current)}</b></span>
         <span>Proposed · {C.proposed.label}<b>{money(t.proposed)}</b></span>
@@ -61,7 +76,7 @@ export function DemoCasePage() {
     <div className="tabs-wrap"><div className="tabs result-tabs" role="tablist" aria-label="Case details">
       {([['records', 'A', 'Records'], ['breakdown', 'B', 'Where it sits'], ['definitions', 'C', 'Definitions'], ['notes', 'D', 'Limits']] as Array<[Tab, string, string]>).map(([id, letter, label]) => (
         <button key={id} type="button" role="tab" aria-selected={tab === id} className={`tab ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
-          <span className="exhibit" aria-hidden="true">{letter}</span>{label}{id === 'records' ? <span className="tab-count">{changes.length}</span> : null}
+          <span className="exhibit" aria-hidden="true">{letter}</span>{label}{id === 'records' ? <span className="tab-count">{groupDigits(String(changes.length))}</span> : null}
         </button>
       ))}
     </div></div>
@@ -71,17 +86,19 @@ export function DemoCasePage() {
       <p className="helper-muted">Excluded by proposed: {excludedDescription}</p>
       <table className="ledger-table">
         <thead><tr><th scope="col">Order</th><th scope="col">Current → Proposed</th><th scope="col" className="num">Change</th><th scope="col" className="num">Running total</th></tr></thead>
-        <tbody>{changes.map((c, i) => <tr key={c.row.row_id}>
-          <td className="key" data-label="Order">{c.row.row_id} <small>{STATUS_WORD[c.row.status] || c.row.status}</small></td>
-          <td className="move" data-label="Current → Proposed"><span className="was left">{groupDigits(c.current)}</span><span className="arrow" aria-label="becomes">→</span><span className="now">{c.proposed == null ? 'excluded' : groupDigits(c.proposed)}</span></td>
-          <td className="num change" data-label="Change">{minus(groupDigits(c.delta))}</td>
-          <td className="num running" data-label="Running total">{minus(groupDigits(running[i]))}</td>
+        <tbody>{changes.slice(0, shown).map((c, i) => <tr key={c.row.row_id}>
+          <td className="key" data-label="Order">{c.row.row_id} <small>{c.row.status} · {c.row.channel}</small></td>
+          <td className="move" data-label="Current → Proposed"><span className="was left">{digits(c.current)}</span><span className="arrow" aria-label="becomes">→</span><span className="now">{c.proposed == null ? 'excluded' : digits(c.proposed)}</span></td>
+          <td className="num change" data-label="Change">{minus(digits(c.delta))}</td>
+          <td className="num running" data-label="Running total">{minus(digits(running[i]))}</td>
         </tr>)}</tbody>
         <tfoot><tr className="ledger-total"><th scope="row" colSpan={2}>Total of listed changes</th><td className="num"><span className="double-rule">{money(t.listed)}</span></td><td /></tr></tfoot>
       </table>
+      {shown < changes.length && <p><button type="button" className="button secondary small" onClick={() => setShown(n => n + PAGE)}>
+        Show {Math.min(PAGE, changes.length - shown)} more of {groupDigits(String(changes.length - shown))}</button></p>}
       <div className="ledger-foot">
         <p className={`ledger-balance${balanced ? ' ok' : ''}`}>Listed changes {money(t.listed)} + unexplained {money(t.residual)} = {money(t.delta)}{balanced ? <> · <b>Balanced ✓</b></> : null}</p>
-        <p className="ledger-unchanged">✓ {t.records - changes.length} orders unchanged, including {t.blank} with a blank amount that neither total counts.</p>
+        <p className="ledger-unchanged">✓ {groupDigits(String(t.records - changes.length))} orders unchanged, including {t.blank} with a blank amount that neither total counts.</p>
       </div>
     </section>}
 
@@ -96,13 +113,13 @@ export function DemoCasePage() {
         <tbody>{groups.map(g => {
           const zero = !/[1-9]/.test(g.change);
           return <tr key={String(g.value)} className={zero ? 'muted' : undefined}>
-            <th scope="row" data-label={column}>{g.value ?? '(blank)'}{!zero && g.share >= 0.1 && g.share >= 2 * g.recordShare && <span className="concentrated">Concentrated</span>}</th>
+            <th scope="row" data-label={column}>{g.value ?? '(blank)'}{!zero && g.share >= 0.1 && g.share >= 1.25 * g.recordShare && <span className="concentrated">Concentrated</span>}</th>
             <td className="num change" data-label="Change">{money(g.change)}</td>
             <td className="shares" data-label="Share">
               <span className="share-track" aria-hidden="true"><span className="share-diff" style={{ width: `${g.share * 100}%` }} /><span className="share-records" style={{ left: `${g.recordShare * 100}%` }} /></span>
               <span className="share-text">{(g.share * 100).toFixed(1)}% <small>of the difference · {(g.recordShare * 100).toFixed(1)}% of records</small></span>
             </td>
-            <td className="num" data-label="Changed records">{g.changed} <small>of {g.records}</small></td>
+            <td className="num" data-label="Changed records">{groupDigits(String(g.changed))} <small>of {groupDigits(String(g.records))}</small></td>
           </tr>;
         })}</tbody>
       </table>
@@ -118,7 +135,7 @@ export function DemoCasePage() {
       <ul>
         <li>Both calculations ran on the same frozen dataset; the result says nothing about whether the source data is right.</li>
         <li>Blank amounts are left out of both totals, so they never appear as a change.</li>
-        <li>This is a sample with eight synthetic orders. Your own cases work the same way on up to 50,000 rows on the free beta.</li>
+        <li>{C.limit}</li>
       </ul>
     </div>}
 
@@ -138,7 +155,7 @@ export function DemoCasePage() {
     <section className="demo-custody" aria-labelledby="demo-custody-title">
       <h2 id="demo-custody-title">Custody log</h2>
       <ol className="custody-log">
-        <li className="done"><div><div className="what">Dataset frozen</div><div className="when">{C.sealedAt}</div><div className="detail">{C.dataset} · {t.records} rows <HashPrint hash={C.hashes.dataset} /></div></div></li>
+        <li className="done"><div><div className="what">Dataset frozen</div><div className="when">{C.sealedAt}</div><div className="detail">{C.dataset} · {groupDigits(String(t.records))} rows <HashPrint hash={C.hashes.dataset} /></div></div></li>
         <li className="done"><div><div className="what">Calculations pinned</div><div className="detail">Current <HashPrint hash={C.hashes.current} /> Proposed <HashPrint hash={C.hashes.proposed} /></div></div></li>
         <li className="done"><div><div className="what">Compared on the isolated engine</div><div className="when">{C.sealedAt} · no network</div><div className="detail">Evidence <HashPrint hash={C.hashes.evidence} /></div></div></li>
         <li className="done"><div><div className="what">Sealed as case {C.number}</div><div className="when">{C.sealedAt}</div></div></li>

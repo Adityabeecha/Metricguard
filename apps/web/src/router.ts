@@ -168,7 +168,7 @@ export function sitePage(pathname: string): SitePage {
   const clean = pathname.replace(/\/+$/, '') || '/';
   if (clean === '/') return 'home';
   if (sharedCaseToken(clean)) return 'shared-case';
-  if (/^\/demo(\/mg-f3a3)?$/i.test(clean)) return 'demo';
+  if (/^\/demo(\/mg-(f3a3|8b79))?$/i.test(clean)) return 'demo';
   if (clean === '/signin' || clean === '/signup' || clean === '/privacy' || clean === '/terms' || clean === '/guide') {
     return clean.slice(1) as SitePage;
   }
