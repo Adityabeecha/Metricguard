@@ -96,6 +96,11 @@ export function digitStyleFor(unit: string | null | undefined): 'western' | 'ind
   return unit?.trim().toUpperCase() === 'INR' || unit?.trim() === '₹' ? 'indian' : 'western';
 }
 
+/** One date style across the app: "01 Nov 2026". */
+export function shortDate(value: string | number | Date): string {
+  return new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
 export function isZeroDecimal(value: string | null | undefined): boolean {
   return value != null && !/[1-9]/.test(value);
 }
@@ -112,7 +117,7 @@ function withUnit(value: string, unit: string, style: 'western' | 'indian' = 'we
 /** A value followed by its unit, as on the result page: "-1 distinct customer_id", "40%", "Unavailable". */
 export function valueWithUnit(value: string | null | undefined, unit: string): string {
   if (value == null) return 'Unavailable';
-  return unit === '%' ? `${groupDigits(value)}%` : withUnit(value, unit);
+  return unit === '%' ? `${groupDigits(value)}%` : withUnit(value, unit, digitStyleFor(unit));
 }
 
 /**

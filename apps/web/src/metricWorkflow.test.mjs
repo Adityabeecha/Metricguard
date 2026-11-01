@@ -58,7 +58,8 @@ test('history resolves names and uses Unknown member when no name is available',
 });
 
 test('metric differences preserve exact decimals, grouping and aggregate units', () => {
-  assert.equal(metricDifference({ delta_target_minus_baseline: '-3606367.61', currency: 'INR' }), '−3,606,367.61 INR');
+  assert.equal(metricDifference({ delta_target_minus_baseline: '-3606367.61', currency: 'INR' }), '−36,06,367.61 INR');
+  assert.equal(metricDifference({ delta_target_minus_baseline: '-3606367.61', currency: 'USD' }), '−3,606,367.61 USD');
   assert.equal(metricDifference({ delta_target_minus_baseline: '12', aggregate: 'count', currency: 'INR' }), '12 records');
   assert.equal(metricDifference({ delta_target_minus_baseline: '-0.125', aggregate: 'ratio', ratio: { unit: 'share' } }), '−12.5 pts');
 });

@@ -1,5 +1,7 @@
 // What "Replay & verify" compared, in plain words. Pure, so node tests can import it.
 
+import { groupDigits } from '../../resultSummary.ts';
+
 type Artifact = { sha256?: string; row_count?: number; delta_sum?: string };
 type ResultLike = {
   baseline_value: string | null; target_value: string | null; delta_target_minus_baseline: string | null; residual: string | null;
@@ -11,7 +13,7 @@ export type ReplayCheck = { label: string; saved: string; replayed: string; same
 const shown = (value: string | number | null | undefined) => value == null || value === '' ? '—' : String(value);
 
 /** One line per compared fact; identical exact strings count as the same, nothing is rounded. */
-export function replayChecks(saved: ResultLike, replayed: ResultLike): ReplayCheck[] {
+export function replayChecks(saved: ResultLike, replayed: ResultLike, style?: 'western' | 'indian'): ReplayCheck[] {
   const a = (saved.evidence_artifact || {}) as Artifact, b = (replayed.evidence_artifact || {}) as Artifact;
   const rows: Array<[string, string | number | null | undefined, string | number | null | undefined]> = [
     ['Current value', saved.baseline_value, replayed.baseline_value],
@@ -26,5 +28,7 @@ export function replayChecks(saved: ResultLike, replayed: ResultLike): ReplayChe
   }
   if (a.row_count != null || b.row_count != null) rows.push(['Records in the evidence', a.row_count, b.row_count]);
   if (a.sha256 || b.sha256) rows.push(['Evidence fingerprint (SHA-256)', a.sha256?.slice(0, 12), b.sha256?.slice(0, 12)]);
-  return rows.map(([label, x, y]) => ({ label, saved: shown(x), replayed: shown(y), same: shown(x) === shown(y) }));
+  // Sameness is judged on the exact strings; grouping digits is only for reading.
+  const display = (label: string, v: string | number | null | undefined) => style && !label.includes('fingerprint') ? groupDigits(shown(v), style) : shown(v);
+  return rows.map(([label, x, y]) => ({ label, saved: display(label, x), replayed: display(label, y), same: shown(x) === shown(y) }));
 }

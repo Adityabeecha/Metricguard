@@ -1,4 +1,4 @@
-import { resultUnit, resultDisplayValue, valueWithUnit } from '../resultSummary';
+import { resultUnit, resultDisplayValue, shortDate, valueWithUnit } from '../resultSummary';
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -1391,7 +1391,7 @@ export function ChangesView({
                     >
                       {revisions.map((rev) => (
                         <option key={rev.id} value={rev.id}>
-                          {formatRevisionLabel(rev.id, rev.source_revision)} · {new Date(rev.created_at).toLocaleDateString()}
+                          {formatRevisionLabel(rev.id, rev.source_revision)} · {shortDate(rev.created_at)}
                         </option>
                       ))}
                     </select>
@@ -1413,7 +1413,7 @@ export function ChangesView({
                     >
                       {revisions.map((rev) => (
                         <option key={rev.id} value={rev.id}>
-                          {formatRevisionLabel(rev.id, rev.source_revision)} · {new Date(rev.created_at).toLocaleDateString()}
+                          {formatRevisionLabel(rev.id, rev.source_revision)} · {shortDate(rev.created_at)}
                         </option>
                       ))}
                     </select>

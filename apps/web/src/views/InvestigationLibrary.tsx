@@ -5,7 +5,7 @@ import {
   buildLibraryItems, caseNumber, filterLibraryItems, sortLibraryItems, hasDefinedResult, KIND_LABEL, readDismissedRuns, runningRuns, STAMP, unexplainedRuns, writeDismissedRuns,
   type LibraryItem, type LibraryStatus,
 } from '../investigationLibrary';
-import { groupDigits, resultDisplayValue, resultUnit, valueWithUnit } from '../resultSummary';
+import { resultDisplayValue, resultUnit, valueWithUnit } from '../resultSummary';
 import { FirstRunGuide } from './FirstRun';
 import { ItemActions } from './ItemActions';
 
@@ -189,7 +189,7 @@ export function InvestigationLibrary({ data, workspaceId, onStart, onAddData, on
                       </div>
                     </td>
                     <td className="c-data">{item.datasetName}</td>
-                    <td className="change-cell c-change">{item.change == null ? '—' : valueWithUnit(groupDigits(item.change).replace(/^-/, '\u2212'), item.unit)}</td>
+                    <td className="change-cell c-change">{item.change == null ? '—' : valueWithUnit(item.change, item.unit).replace(/^-/, '\u2212')}</td>
                     <td className="c-status">
                       <span className={`stamp ${STAMP[item.status].tone}`}>{STAMP[item.status].label}</span>
                       {item.status === 'saved' && !item.hasConclusion && <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>No conclusion</div>}

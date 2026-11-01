@@ -346,8 +346,7 @@ function Concentration({ data, exclude, unit, percent, ratio, onPick }: { data: 
               column2: item.columns[1], value2: item.columns[1] ? item.values[1] ?? null : undefined, noMatch2: item.no_match?.[1],
               label: item.columns.map((_, i) => valueText(item.values[i], item.no_match?.[i])).join(' × '), totalText: changeText(item.change) })}>{label(item)}</button>
           : <b>{label(item)}</b>}
-        <p>{label(item)} holds {(item.difference_share * 100).toFixed(1)}% of the {measure}{item.record_share != null ? ` but only ${(item.record_share * 100).toFixed(1)}% of the records` : ''}.</p>
-        <span className="concentration-figures">{(item.difference_share * 100).toFixed(1)}% of the {measure} · {item.record_share != null ? `${(item.record_share * 100).toFixed(1)}% of records` : 'Record share unavailable'} · {changeText(item.change)}</span>
+        <span className="concentration-figures">{(item.difference_share * 100).toFixed(1)}% of the {measure} · {item.record_share != null ? `only ${(item.record_share * 100).toFixed(1)}% of records` : 'record share unavailable'} · {changeText(item.change)}</span>
       </li>)}
     </ul>
     {(data.capped || []).map(note => <small key={note} style={{ display: 'block' }}>{note}</small>)}

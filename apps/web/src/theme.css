@@ -25,19 +25,20 @@
   --rail-accent: #AFC4F7;
 
   --seal: #2557D6;
+  --seal-ink: #2557D6;
   --seal-strong: #1C45B0;
   --seal-tint: #EAF0FC;
   --seal-shadow: rgba(28, 69, 176, 0.25);
   --on-accent: #FFFFFF;
   --selection: #CFDCF7;
-  --kraft: #8A6A3F;
+  --kraft: #7E603A;
   --kraft-tint: #F0E6D6;
   --link: #2F4BA0;
   --link-strong: #233B80;
   --tint: #ECEAE3;
   --tint-strong: #E2DED3;
 
-  --ok: #2E7D4F;
+  --ok: #2A7348;
   --ok-tint: #E8F3EC;
   --ok-line: #B9DCC6;
   --warn: #9A5B0B;
@@ -81,6 +82,7 @@ body { background: var(--ground); color: var(--ink); font-family: var(--font-ui)
   --rail-accent: #8FAEF5;
 
   --seal: #3466E0;
+  --seal-ink: #8FADF5;
   --seal-strong: #4A78E6;
   --seal-tint: #1C2742;
   --seal-shadow: rgba(0, 0, 0, 0.4);

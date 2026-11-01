@@ -209,3 +209,8 @@ a.browser-frame.case-link:hover, a.browser-frame.case-link:focus-visible { borde
 .public-guide table { border-collapse: collapse; width: 100%; font-size: 14px; }
 .public-guide img { display: block; max-width: 100%; height: auto; margin: 16px 0; border: 1px solid var(--line-strong); border-radius: var(--radius); }
 .public-guide th, .public-guide td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+
+/* Phone: small text links still get a comfortable tap area. */
+@media (max-width: 759px) {
+  .public-footer a, .public-header-actions .public-signin, .home-how-link, .case-open-link { display: inline-flex; align-items: center; min-height: 32px; }
+}

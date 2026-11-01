@@ -1,5 +1,5 @@
 import { engineDownMessage } from '../hostedCopy';
-import { resultUnit } from '../resultSummary';
+import { digitStyleFor, resultUnit } from '../resultSummary';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, BookmarkCheck, Copy, Download, Link2, Pencil, Printer, RefreshCw } from 'lucide-react';
 import { CaseShareDialog } from './CaseShareDialog';
@@ -236,7 +236,7 @@ export function CaseReport({ data, investigationId, onBack, onEdit, onNotSaved, 
             <table className="ledger-table replay-checks">
               <caption className="sr-only">Saved case and replay checks</caption>
               <thead><tr><th>Checked</th><th>Saved case</th><th>Replay</th><th>Result</th></tr></thead>
-              <tbody>{replayChecks(detail.run.result, replay.result).map(check => (
+              <tbody>{replayChecks(detail.run.result, replay.result, digitStyleFor(unit)).map(check => (
                 <tr key={check.label}><td data-label="Checked">{check.label}</td><td className="n" data-label="Saved case">{check.saved}</td><td className="n" data-label="Replay">{check.replayed}</td>
                   <td data-label="Result">{check.same ? 'Same' : <strong>Differs</strong>}</td></tr>))}</tbody>
             </table>

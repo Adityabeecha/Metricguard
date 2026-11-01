@@ -30,6 +30,7 @@ import { useDialog } from '../useDialog';
 import { SampleDatasetButton } from './FirstRun';
 import { ItemActions } from './ItemActions';
 import { isSampleDataset } from '../sampleDataset';
+import { shortDate } from '../resultSummary';
 import { DEFAULT_COMPOUND_FILTERS, defaultFlatImport, uploadLimitText, previewRowLimitMessage, canConfirmUpload, loadLabelAfterFilePick, inheritedUnit, datasetUsageLabel, type UploadLimits, createUploadPreviewQueue, suggestUploadUnit, loadCompatibilityProblem, completeDatasetUpload, duplicateUploadMessage } from '../onboardingPolicy';
 
 interface DataSourcesViewProps {
@@ -783,6 +784,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                 <input
                   type="text"
                   placeholder="Filter sources by name or hash…"
+                  aria-label="Filter datasets by name or hash"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -817,11 +819,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
               {filteredSnapshots.map((snap) => {
                 const isSelected = snap.id === activeSnapshot?.id;
                 const formattedDate = snap.created_at
-                  ? new Date(snap.created_at).toLocaleDateString(undefined, {
-                      day: 'numeric',
-                      month: 'short',
-                      year: 'numeric',
-                    })
+                  ? shortDate(snap.created_at)
                   : 'Frozen';
                 const datasetLoads = snapshots.filter(item => snap.contract_hash ? item.contract_hash === snap.contract_hash : item.id === snap.id);
                 const datasetIds = new Set(datasetLoads.map(item => item.id));
@@ -852,7 +850,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                         <strong>{snap.row_count?.toLocaleString('en-US') || '0'}</strong> rows
                       </span>
                       <span className="meta-stat">{datasetLoads.length} load{datasetLoads.length === 1 ? '' : 's'}</span>
-                      {latestComparison && <span className="meta-stat">Last comparison {new Date(latestComparison).toLocaleDateString()}</span>}
+                      {latestComparison && <span className="meta-stat">Last compared {shortDate(latestComparison)}</span>}
                       <span className="meta-sep">·</span>
                       <span className="meta-stat">
                         <Clock size={12} /> {formattedDate}
@@ -922,11 +920,11 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
               {/* Stat Cards Strip */}
               <div className="summary-stat-grid">
                 <div className="stat-box">
-                  <span className="stat-label">TOTAL ROWS</span>
+                  <span className="stat-label">Total rows</span>
                   <strong className="stat-num">{activeSnapshot.row_count?.toLocaleString('en-US')}</strong>
                 </div>
                 <div className="stat-box">
-                  <span className="stat-label">{activeSummary?.kind === 'relational' ? 'KEYS (FACT · DIMENSION)' : 'ROW ID'}</span>
+                  <span className="stat-label">{activeSummary?.kind === 'relational' ? 'Keys (fact · dimension)' : 'Row ID'}</span>
                   <strong className="stat-num mono">{activeSummary?.keyLabel}</strong>
                 </div>
                 <div className="stat-box">
@@ -968,7 +966,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                   className={`section-tab-button ${detailTab === 'schema' ? 'active' : ''}`}
                   onClick={() => setDetailTab('schema')}
                 >
-                  Schema & Structure
+                  Columns
                 </button>
                 <button
                   type="button"
@@ -982,7 +980,7 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                   className={`section-tab-button ${detailTab === 'provenance' ? 'active' : ''}`}
                   onClick={() => setDetailTab('provenance')}
                 >
-                  Technical Provenance
+                  Technical details
                 </button>
               </div>
 
@@ -994,8 +992,8 @@ export function DataSourcesView({ data, refresh, openAdd, onCreatedReturn, onCom
                       <thead>
                         <tr>
                           <th>Column</th>
-                          <th>TYPE</th>
-                          <th>USED AS</th>
+                          <th>Type</th>
+                          <th>Used as</th>
                         </tr>
                       </thead>
                       <tbody>

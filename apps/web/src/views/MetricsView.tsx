@@ -1304,13 +1304,14 @@ export function MetricsView({
         </div>
       )}
 
-      {/* Search & Filter Toolbar */}
-      <div className="data-sources-toolbar">
+      {/* Search & Filter Toolbar: only once there is something to filter */}
+      {metrics.length > 0 && <div className="data-sources-toolbar">
         <div className="search-box">
           <Search size={16} className="search-icon" />
           <input
             type="text"
             placeholder="Filter metrics by name or ID…"
+            aria-label="Filter metrics by name or ID"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="search-input"
@@ -1348,7 +1349,7 @@ export function MetricsView({
             ))}
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* Metrics Inventory List */}
       <div className="metrics-inventory-section">
@@ -1423,9 +1424,10 @@ export function MetricsView({
         ) : (
           <div className="empty-card" style={{ padding: '36px 20px', textAlign: 'center', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px' }}>
             <Layers size={32} color="var(--link)" style={{ margin: '0 auto 12px' }} />
-            <h4 style={{ margin: '0 0 6px', fontSize: '16px', color: 'var(--ink)' }}>No declared metrics match filters</h4>
+            <h4 style={{ margin: '0 0 6px', fontSize: '16px', color: 'var(--ink)' }}>{metrics.length ? 'No metrics match these filters' : 'No metrics yet'}</h4>
             <p style={{ margin: '0 0 16px', color: 'var(--muted)', fontSize: '13px' }}>
-              Declare business metrics with explicit importance levels and assign query definitions below.
+              {metrics.length ? 'Clear the search or choose All to see every metric.'
+                : 'A metric names a business number, such as Revenue, and keeps its approved calculation. Create one here, or use Save as metric on a case.'}
             </p>
             <button
               type="button"
@@ -1442,13 +1444,14 @@ export function MetricsView({
       <div className="unassigned-section">
         <div className="unassigned-header">
           <h3>Saved calculations ({visibleCalculations.length})</h3>
-          <p>Calculations used by a saved case or metric. Show all to find other calculations.</p>
-          <button type="button" className="button secondary" aria-pressed={showAllCalculations} onClick={() => { setShowAllCalculations(v => !v); setCalculationPageIndex(0); setShowCalculations(true); }}>{showAllCalculations ? 'Used by cases or metrics' : `Show all (${definitions.length})`}</button>
+          <p>{showAllCalculations ? 'Every saved calculation' : 'Calculations used by a saved case or metric'} · {calculationGroups.imported.length} imported, {calculationGroups.fromComparisons.length} from guided comparisons.</p>
           {usageError && <p role="alert" className="disabled-reason">{usageError}</p>}
-          <p className="muted-text font-small">{calculationGroups.imported.length} imported · {calculationGroups.fromComparisons.length} saved from guided comparisons</p>
-          <button type="button" className="button secondary" aria-expanded={showCalculations} aria-controls="saved-calculations" onClick={() => setShowCalculations(v => !v)}>
-            {showCalculations ? 'Hide saved calculations' : 'Browse saved calculations'}
-          </button>
+          <div className="unassigned-actions">
+            <button type="button" className="button secondary small" aria-expanded={showCalculations} aria-controls="saved-calculations" onClick={() => setShowCalculations(v => !v)}>
+              {showCalculations ? 'Hide list' : 'Show list'}
+            </button>
+            <button type="button" className="button secondary small" aria-pressed={showAllCalculations} onClick={() => { setShowAllCalculations(v => !v); setCalculationPageIndex(0); setShowCalculations(true); }}>{showAllCalculations ? 'Only those in use' : `Include unused (${definitions.length} in all)`}</button>
+          </div>
         </div>
 
         {showCalculations && <div id="saved-calculations">

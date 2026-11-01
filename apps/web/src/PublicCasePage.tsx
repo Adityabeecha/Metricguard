@@ -4,6 +4,7 @@ import { type PublicCaseDetail } from './api';
 import { Logo } from './Logo';
 import { ThemeSwitch } from './ThemeSwitch';
 import { caseNumber } from './investigationLibrary';
+import { shortDate } from './resultSummary';
 import { publicCase, publicEvidenceClient } from './publicCaseApi';
 import { ResultReport } from './views/ResultReport';
 import { CasePrintCustody } from './views/evidence/CasePrintCustody';
@@ -32,7 +33,7 @@ export function PublicCasePage({ token }: { token: string }) {
     <a className="skip-link" href="#shared-case-content">Skip to case</a>
     <header className="shared-case-header"><a href="/" aria-label="MetricGuard home"><Logo size={28} /><strong>MetricGuard</strong></a><ThemeSwitch compact /></header>
     <main id="shared-case-content" className="view-container guided-page">
-      <p className="shared-case-notice">{detail?.expires_at ? `Read-only copy shared from MetricGuard \u00b7 link expires ${new Date(detail.expires_at).toLocaleDateString()}` : <>Shared read-only{detail ? ` by ${detail.workspace_name}` : ''}</>}</p>
+      <p className="shared-case-notice">{detail?.expires_at ? `Read-only copy shared from MetricGuard \u00b7 link expires ${shortDate(detail.expires_at)}` : <>Shared read-only{detail ? ` by ${detail.workspace_name}` : ''}</>}</p>
       {problem ? <div className="alert error" role="alert"><span>{problem}</span><button className="button secondary small" onClick={() => setAttempt(v => v + 1)}>Try again</button></div>
         : !detail ? <p role="status">Opening shared case…</p> : <>
           <div className="page-heading"><div><h1>{detail.title}</h1><p><span className="case-no">{caseNumber(detail.run.id)}</span> · Sealed {new Date(detail.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</p></div>

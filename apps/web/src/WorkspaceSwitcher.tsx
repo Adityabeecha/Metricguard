@@ -113,7 +113,6 @@ export function WorkspaceSwitcher({
         <div className="workspace-info">
           <div className="workspace-name-row">
             <strong>{currentWorkspaceName}</strong>
-            {isDefault && <span className="demo-chip">Default</span>}
           </div>
           <small>{isDefault ? 'Default local workspace' : 'Workspace'}</small>
         </div>

@@ -11,7 +11,7 @@
   padding: 2px 8px; border: 2px solid currentColor; border-radius: 3px; transform: rotate(-2deg);
   animation: mg-stamp-in 180ms var(--ease-out) both; white-space: nowrap;
 }
-.mg-stamp.sealed { color: var(--seal); }
+.mg-stamp.sealed { color: var(--seal-ink); }
 .mg-stamp.balanced, .mg-stamp.replayed { color: var(--ok); }
 .mg-stamp.differs { color: var(--ink); background: var(--danger-tint); }
 @keyframes mg-stamp-in { from { transform: rotate(-2deg) scale(1.15); opacity: 0; } to { transform: rotate(-2deg) scale(1); opacity: 1; } }

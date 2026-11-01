@@ -270,6 +270,7 @@ function WorkspaceApp() {
   const activeNavLabel =
     NAV_ITEMS.find((item) => item.id === navPage)?.label ||
     (route.page === 'settings' ? 'Settings' : 'Cases');
+  useEffect(() => { document.title = `${activeNavLabel} — MetricGuard`; }, [activeNavLabel]);
   const navCounts: Partial<Record<Page, number>> = data ? {
     investigations: (data.investigations || []).length,
     data: (data.snapshots || []).length,

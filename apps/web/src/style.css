@@ -245,7 +245,7 @@ textarea:focus,
 .workspace-info small {
   display: block;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--rail-muted);
   margin-top: 1px;
 }
 
@@ -3439,6 +3439,8 @@ td.weight {
   color: var(--muted);
   margin: 0;
 }
+
+.unassigned-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 
 .unassigned-card-grid {
   display: flex;

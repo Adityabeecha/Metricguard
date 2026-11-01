@@ -38,7 +38,7 @@ export function DemoCasePage() {
   const running = runningTotals(changes.map(c => c.delta));
   const groups = demoBreakdown(column, rows, C);
   const balanced = !/[1-9]/.test(t.residual);
-  const checks = replayChecks(demoReplayResult(rows, C), demoReplayResult(rows, C));
+  const checks = replayChecks(demoReplayResult(rows, C), demoReplayResult(rows, C), style);
   const excludedDescription = categoryDescription('excluded', {});
 
   return <article className="demo-case">
