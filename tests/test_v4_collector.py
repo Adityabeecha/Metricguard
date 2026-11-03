@@ -716,7 +716,9 @@ def test_failure_cleanup_on_mid_stream_network_error(tmp_workspace, pg_schema, r
 
     with pytest.raises(CollectorError) as exc_info:
         collector.collect(selection)
-    assert exc_info.value.code == 'EXTRACTION_FAILED'
+    # Database errors are explained (services/supervisor/warehouse_errors.py) with the database's own reason.
+    assert exc_info.value.code == 'WAREHOUSE_ERROR'
+    assert 'connection closed abruptly' in exc_info.value.message
 
     # Staging files must be completely removed
     assert len(list(staging_dir.glob('*'))) == 0
@@ -737,7 +739,7 @@ def test_failure_after_transaction_begins_nonexistent_table(tmp_workspace, retai
 
     with pytest.raises(CollectorError) as exc_info:
         collector.collect(selection)
-    assert exc_info.value.code == 'EXTRACTION_FAILED'
+    assert exc_info.value.code == 'TABLE_NOT_FOUND'
     assert len(list(staging_dir.glob('*'))) == 0
 
 

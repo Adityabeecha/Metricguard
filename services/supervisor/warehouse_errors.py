@@ -1,4 +1,5 @@
-"""Safe, actionable warehouse errors; never return provider exception text."""
+"""Safe, actionable warehouse errors. Known cases get plain advice; anything else adds the database's own
+first line (credentials masked, at most 200 characters) so it can be acted on."""
 
 def warehouse_error(error, status=None):
     text = str(error).lower()
@@ -15,4 +16,13 @@ def warehouse_error(error, status=None):
         return 'TABLE_NOT_FOUND', 'Table not found. Check the schema and table name.'
     if isinstance(error, (TimeoutError, OSError)) or any(x in text for x in ('timeout', 'timed out', 'connection refused', 'could not connect', 'could not translate host', 'network is unreachable', 'connection failed', 'connecterror')):
         return 'CONNECTION_FAILED', "Couldn't reach the database. It must accept connections from the internet."
-    return 'WAREHOUSE_ERROR', 'The database could not complete the request. Check the connection and table settings.'
+    return 'WAREHOUSE_ERROR', 'The database could not complete the request. Check the connection and table settings.' + _detail(error, state)
+
+
+def _detail(error, state) -> str:
+    """The database's own reason, short and with any credentials masked, so an unexpected refusal can be fixed."""
+    from services.supervisor.collector import redact_credentials
+    diag = getattr(error, 'diag', None)
+    reason = (getattr(diag, 'message_primary', None) or str(error) or type(error).__name__).strip().splitlines()[0]
+    reason = redact_credentials(reason)[:200]
+    return f' Database said: {reason}' + (f' (code {state})' if state else '') + '.'
